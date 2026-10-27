@@ -100,6 +100,13 @@ the server summary and a JSON projection with resource IDs and exact financial s
 Failures set native `isError: true` and return a typed safe error envelope. The durable
 journal saves all content parts so recovery preserves the same model-facing evidence.
 
+## Mock-mode latency profile (no timers, no request limits)
+
+`createMockRuntime` returns `{ model: reg.getModel(), streamFn: models.streamSimple.bind(models) }` (`provider-mock.ts:33`) — the RAW collection stream. `withLiveRequestLimits` has exactly ONE call site, `provider-live.ts:222`, so in `LLM_MODE=mock` there is no `AbortSignal.timeout` deadline, no `LLM_REQUEST_TIMEOUT_MS`, and no `maxRetries: 1`/`maxRetryDelayMs: 1500` transport retry: a mock turn can neither time out nor retry.
+`agent/providers/` contains no `setTimeout`, `setInterval`, `setImmediate`, `sleep`, `delay`, `queueMicrotask`, `backoff` or `new Promise` — the only `AbortSignal.timeout` in `agent/` is `request-options.ts:13`, and the only `tokensPerSecond` in the whole repository is the doc comment at `provider-mock.ts:20`; `fauxProvider({ api: 'banking-demo-mock' })` (`:25`) configures no token rate, so nothing in this node paces, throttles or sleeps.
+Every mock model call is one synchronous evaluation of `respond()` (`mock-responder.ts:23`) or `mockCompactionReply()` (`mock/compaction.ts:4`) plus Pi's own loop work; the queued factory re-queues itself before answering (`provider-mock.ts:29`), so calls never run dry and never wait on a queue.
+`withModelAudit` DOES wrap the mock `streamFn` when a journal exists (`banking-agent.ts:351`) and awaits `journal.recordModelProviderEvent` inside `onPayload`/`onResponse`/`onProviderStreamEvent` (`model-audit.ts:19-33`) — one serialized SQLite insert per hook event. Whether Pi's faux provider invokes those hooks and how many stream events it emits is NOT verifiable in this repository (`node_modules` is absent in worker worktrees); the unit spec `tests/unit/agent/providers/model-audit.test.ts` exercises `withModelAudit` only with a hand-written stream. Context-compaction calls bypass the audit wrapper and pass `{ enabled: false, maxRetries: 0, baseDelayMs: 0 }` (`agent/context-compaction/official.ts:61`).
+
 ## Live model and host policy
 
 1. Exact model id registered for the provider: use it unchanged.
@@ -136,6 +143,24 @@ Run pnpm test tests/unit/agent/providers and pnpm typecheck. Browser entry
 points remain tests/e2e/acceptance.e2e.ts (mock) and live-acceptance.e2e.ts (real API,
 requires local credentials). Both use isolated databases. Historical live reports
 refer to their recorded baseline, not automatically to the current Pi version.
+
+## Blocked-outcome narration (gateway block marker)
+
+`mock/narration.ts:12` (`raw.includes('__SECURITY_BLOCK__')`) is the ONLY occurrence of that literal in `agent/providers/` source.
+The marker is a DETECTION guard there, never emitted: `agent/providers/` contains no `BLOCK_REASON_PREFIX` and no `decisionKind` literal, and never imports the constant (`security/security-gateway.ts#BLOCK_REASON_PREFIX`).
+`narrate` reads only the FIRST content part (`contentToText(result.content.slice(0, 1))`, `mock/narration.ts:11`). All three blocked branches return canned text and never interpolate `raw`, so a marker-carrying result can never reach assistant prose; the `raw`-interpolating branches (`:31` isError, `:33` success lead) are unreachable once the marker is present.
+Branch order after `blocked`: (1) `/require_mfa|验证码|\bMFA\b|等待验证|需进行安全验证/i` → `messages.operationPrepared` = `已准备好{operation}。`; (2) `/deny|熔断|锁定/i` → `当前会话已触发安全熔断，高风险操作已被锁定（${label} 未执行）。请前往安全中心解除限制后再试。`; (3) otherwise `已准备好{operation}。`
+Every marker-carrying deny payload is `` `${BLOCK_REASON_PREFIX}${JSON.stringify({ decisionKind: 'deny', failure })}` `` and carries NO `actionId`: `security/security-gateway.ts#handleToolCall` serializes `failure: { code: 'CIRCUIT_OPEN', reason: 'circuit_open' }` for a denied call of a locked/breaker-tripped session and `failure: { code: 'SECURITY_DENIED', reason: 'denied' }` for a call whose owning plan is already cancelled. `security/security-gateway.ts#parseBlockReason` treats `actionId` as OPTIONAL, so such a payload still parses into a `deny` decision carrying its typed `failure` (`#parseFailure` keeps both codes/reasons because they are in `FAILURE_REASONS`). The marker payload that DOES carry an `actionId` is the parked-decision one built by `security/security-gateway.ts#serializeBlockReason` (`actionId` + `decisionKind`, plus `failure` only when supplied), never a deny. The deny path therefore matches branch 2 ONLY through the word `deny` inside the JSON payload — the failure codes/reasons are ASCII identifiers and the `熔断`/`锁定` words live only in the gateway's human-readable decision message, never in the payload — and narrates the 熔断/锁定 text; changing that `decisionKind` literal would silently re-route mock narration to branch 3.
+The gateway's two OTHER deny returns carry a PLAIN model-readable sentence instead of the marker (an unresolvable/ambiguous transfer recipient, and a `VALIDATION` refusal thrown by `gatewayCreatePendingAction`), so they are not marker payloads at all.
+The marker reaches `narrate` as the Pi tool result reason (`agent/banking-agent.ts:324`: `{ block: true, reason: auth.blockReason ?? auth.decision.message }`), i.e. it IS model-facing text in both mock and live mode; masking happens only in this mock narration and nowhere else in this node.
+`narrateConversationHistory` (`mock/history.ts:20-27`) quotes only matches whose `role === 'user'`, so it cannot re-quote a tool-result marker.
+`toolLabels` (`mock/narration.ts:65-76`) and `narrationLeads` (`:36-63`) have no `consume_virtual_card` entry, so a blocked card spend falls back to the raw English tool name in `{operation}` (branch 1/3) or to `操作已完成：` (success lead).
+
+## No fee model in this node
+
+`agent/providers/` models NO banking fee: no `fee` / `feeAmount` / `feeRule` / `REDEMPTION_FEE_RULE` / `SIMULATED_NONE` identifier, no 手续费/管理费/赎回费 copy, no fee field in any mock tool-call argument, and no fee sentence in `mock/narration.ts` — a `redeem_investment` result narrates as `理财赎回结果：` plus the tool's own first summary part, so any 费用口径 comes only from the server-authored tool summary and is passed through verbatim here.
+The only 费用 text in this node is subscription cost in `mock/messages.zh-CN.json:14` (`费用为 {amount}/月`, filled by `mock/discussion.ts`); the 费 characters in `mock/conversation-policy.ts:21` (花费), `mock/request-command-patterns.ts:15` and `mock/subscription-intents.ts:13` (续费) are unrelated spending/subscription words.
+`provider-live.ts:116` `cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }` is model token pricing metadata, not a banking fee.
 
 ## Mock intent and safety constraints
 

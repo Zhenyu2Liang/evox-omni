@@ -61,9 +61,8 @@ export async function journeyMultiCardFreeze(browser: Browser, baseUrl: string):
       throw new Error('A wrong code froze a card');
     }
     await assertApprovalDock(page, first.id, 'mfa');
-    if (await approvalHistory(page, first.id).getAttribute('data-status') !== 'awaiting_mfa') {
-      throw new Error('A failed code marked the historical approval as complete');
-    }
+    if ((await fetchPendingActions(baseUrl)).find(action => action.id === first.id)?.status !== 'awaiting_mfa') throw new Error('A failed code marked the operation as complete');
+    if (await approvalHistory(page, first.id).count()) throw new Error('The active operation is duplicated in history');
     await submitMfa(page, '123456');
     const second = await waitFor(async () => (await fetchPendingActions(baseUrl))
       .find(action => action.id !== first.id && action.toolName === 'freeze_card' && action.status === 'awaiting_mfa') || false,

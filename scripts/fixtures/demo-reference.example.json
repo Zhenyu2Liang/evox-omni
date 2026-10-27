@@ -1,0 +1,24 @@
+{
+  "purpose": "FICTIONAL_DEMO_REFERENCE",
+  "products": [
+    { "id": "prod_wenjiana", "code": "WJA001", "expectedName": "稳健理财A", "netValue": "1.0357", "netValueDate": "2026-09-25T00:00:00+08:00" },
+    { "id": "prod_wenjib", "code": "WJB002", "expectedName": "稳健理财B", "netValue": "0.9880", "netValueDate": "2026-09-25T00:00:00+08:00" },
+    { "id": "prod_jinrong", "code": "JR003", "expectedName": "进取混合C", "netValue": "1.1769", "netValueDate": "2026-09-25T00:00:00+08:00" },
+    { "id": "prod_huobi", "code": "MMF001", "expectedName": "货币基金", "netValue": "1.0000", "netValueDate": "2026-09-25T00:00:00+08:00" }
+  ],
+  "contacts": [
+    { "id": "contact_zhangwei", "userId": "user_liming", "expectedName": "张伟", "expectedDisplay": "139****0002", "phoneFull": "13900000002" },
+    { "id": "contact_wangfang", "userId": "user_liming", "expectedName": "王芳", "expectedDisplay": "137****0003", "phoneFull": "13700000003" },
+    { "id": "contact_mama", "userId": "user_liming", "expectedName": "妈妈", "expectedDisplay": "136****0004", "phoneFull": "13600000004" },
+    { "id": "contact_lihua", "userId": "user_liming", "expectedName": "李华", "expectedDisplay": "135****0005", "phoneFull": "13500000005" },
+    { "id": "contact_landlord", "userId": "user_liming", "expectedName": "房东", "expectedDisplay": "134****0006", "phoneFull": "13400000006" },
+    { "id": "contact_chenchen", "userId": "user_liming", "expectedName": "陈晨", "expectedDisplay": "133****0007", "phoneFull": "13300000007" },
+    { "id": "contact_wangqiang", "userId": "user_liming", "expectedName": "王强", "expectedDisplay": "132****0008", "phoneFull": "13200000008" },
+    { "id": "contact_partner", "userId": "user_liming", "expectedName": "爱人", "expectedDisplay": "131****0009", "phoneFull": "13100000009" }
+  ],
+  "cards": [
+    { "id": "card_credit", "userId": "user_liming", "expectedType": "CREDIT", "expectedDisplay": "****6688", "numberFull": "6222000000006688" },
+    { "id": "card_debit", "userId": "user_liming", "expectedType": "DEBIT", "expectedDisplay": "****8821", "numberFull": "6222000000008821" },
+    { "id": "card_virtual", "userId": "user_liming", "expectedType": "VIRTUAL", "expectedDisplay": "****7788", "numberFull": "6222000000007788" }
+  ]
+}

@@ -19,10 +19,13 @@
  * `explicitResume:true`, or `lifecycle.resumePlan` — see `planner/lifecycle.ts`).
  */
 import type { TaskNodeResult, TaskNodeSpec, TaskNodeStatus, TaskPlan, TaskPlanStatus } from '@/lib/contracts/task';
+import type { PendingActionStatus } from '@/lib/contracts/security';
 import { AppError } from '@/lib/errors';
 import { demoNow } from '@/lib/clock';
 import { newId } from '@/lib/ids';
 import { assertConditionResolvable, evaluateCondition, topologicalOrder, transitiveDependents } from './dag';
+import type { PlanFailure, PlanNodeResult } from './failure';
+import { mayDriveNode, mayResetNode, publicFailureText, toPlanFailure } from './failure';
 import { settleToolNode } from './node-outcome';
 
 /**
@@ -38,6 +41,13 @@ export interface PlanToolOutcome {
   error?: string;
   requiresConfirmation?: boolean;
   pendingActionId?: string;
+  /** Structured refusal facts (error code + renderable parameters); NEVER the raw payload. */
+  failure?: PlanFailure;
+  /**
+   * Persisted status of the `PendingAction` this result refers to. It distinguishes an action that
+   * is STILL DECIDABLE (`pending` / `awaiting_mfa`) from one already `locked` or settled.
+   */
+  actionStatus?: PendingActionStatus;
 }
 
 /** Identity of the node a tool call belongs to — threaded to the injected `runTool` port. */
@@ -73,7 +83,7 @@ export interface PlanDeps {
    */
   runTool(toolName: string, args: Record<string, unknown>, ctx: NodeExecutionContext): Promise<PlanToolOutcome>;
   /** Emitted on every node status change; the agent forwards it as `plan_update`. */
-  onNodeUpdate(node: TaskNodeResult): void | Promise<void>;
+  onNodeUpdate(node: PlanNodeResult): void | Promise<void>;
   /**
    * DB-atomic claim of the NODE executor slot before it runs. Returns true iff this
    * run won the claim. OPTIONAL: when absent the executor does not claim at all.
@@ -103,7 +113,7 @@ export interface PlanDeps {
   /** Persist the full plan snapshot (AgentTask/AgentTaskNode). */
   persistPlan?(plan: TaskPlan): Promise<void>;
   /** Persist one node result incrementally (`planId`, node). */
-  persistNode?(planId: string, node: TaskNodeResult): Promise<void>;
+  persistNode?(planId: string, node: PlanNodeResult): Promise<void>;
   /**
    * Load a persisted plan snapshot. Used by the durable entry points AND by
    * `persistPlanSnapshotGuarded` (the planner-side guard that refuses to
@@ -294,7 +304,7 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
   order.forEach((node, i) => positionOf.set(node.id, i));
 
   // Working copy of the results (input plan untouched). Keyed by node id.
-  const results = new Map<string, TaskNodeResult>();
+  const results = new Map<string, PlanNodeResult>();
   for (const r of plan.results) results.set(r.id, { ...r });
 
   let planStatus: TaskPlanStatus = 'running';
@@ -342,7 +352,7 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
    * start the next node. Node-level progress is still persisted incrementally
    * (`deps.persistNode`), so a live UI keeps per-node status.
    */
-  const setNode = async (result: TaskNodeResult): Promise<void> => {
+  const setNode = async (result: PlanNodeResult): Promise<void> => {
     results.set(result.id, { ...result });
     await deps.persistNode?.(plan.id, { ...result });
     await deps.onNodeUpdate({ ...result });
@@ -432,6 +442,23 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
     await pollDurableControls();
   };
 
+  /**
+   * Converge a SEALED node (locked / settled action) to `failed`, keeping every recorded fact
+   * (failure, pendingActionId, actionStatus, output) and minting no new pending action.
+   */
+  const sealNode = async (node: TaskNodeSpec): Promise<void> => {
+    const existing = results.get(node.id);
+    if (existing && isTerminalStatus(existing.status)) return;
+    await setNode({
+      ...(existing ?? { id: node.id, name: node.name }),
+      id: node.id,
+      name: node.name,
+      tool: existing?.tool ?? (node.kind === 'tool' ? node.tool : undefined),
+      status: 'failed',
+      endedAt: now(),
+    });
+  };
+
   /** Cancel the node currently in flight (or the next pending one). */
   const cancelNode = async (node: TaskNodeSpec): Promise<void> => {
     const existing = results.get(node.id);
@@ -447,7 +474,11 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
   };
 
   /** Execute a `kind:'tool'` node. */
-  const runToolNode = async (node: TaskNodeSpec): Promise<'settled' | 'parked' | 'stopped' | 'owned'> => {
+  const runToolNode = async (node: TaskNodeSpec): Promise<'settled' | 'parked' | 'stopped' | 'owned' | 'sealed'> => {
+    // SEALED: the recorded action is a settled refusal (locked, or no longer open). Re-driving it
+    // would mint a NEW pending action and re-prompt a decision that no longer exists, so this branch
+    // makes ZERO writes and ZERO `runTool` calls; the walk converges the node to `failed`.
+    if (!mayDriveNode(results.get(node.id))) return 'sealed';
     // Claim the node's executor slot BEFORE any write. A lost claim must produce
     // ZERO writes for this node (never clobber the owner's row); the DB CAS is the
     // ONLY claim — `status:'running'` is never used as a lock.
@@ -473,7 +504,8 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
       try {
         outcome = await deps.runTool(node.tool as string, node.args ?? {}, { taskId: plan.id, nodeId: node.id });
       } catch (e) {
-        outcome = { ok: false, error: AppError.from(e).message };
+        const failed = AppError.from(e);
+        outcome = { ok: false, error: publicFailureText(failed.message), failure: toPlanFailure(failed) };
       }
 
       if (stopRequested()) {
@@ -539,6 +571,9 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
             const node = byId.get(affected);
             if (!node) continue;
             if (results.get(affected)?.status === 'success') continue;
+            // A sealed refusal (locked / no-longer-open action) is settled: never reset it to
+            // pending, which would erase the recorded failure and re-drive the action.
+            if (!mayResetNode(results.get(affected))) continue;
             await setNode({
               id: affected,
               name: node.name,
@@ -596,7 +631,8 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
           truthy = evaluateCondition(node.condition, scope);
         } catch (error) {
           await setNode({ id: node.id, name: node.name, status: 'failed',
-            error: AppError.from(error).message, startedAt, endedAt: now() });
+            error: publicFailureText(AppError.from(error).message),
+            failure: toPlanFailure(AppError.from(error)), startedAt, endedAt: now() });
           index += 1;
           continue;
         }
@@ -626,6 +662,11 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
 
       // kind === 'tool'
       const outcome = await runToolNode(node);
+      if (outcome === 'sealed') {
+        await sealNode(node);
+        index += 1;
+        continue;
+      }
       if (outcome === 'stopped') {
         stopped = true;
         break;

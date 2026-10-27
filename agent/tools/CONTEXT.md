@@ -16,6 +16,7 @@ There are no shell, file, SQL, arbitrary HTTP, or credential-change tools.
 |---|---|
 | `index.ts` | Build owner-bound definitions; validate and dispatch `executeDirect`; apply trusted write context. |
 | `plan-parameters.ts` | Validate original direct-call and workflow parameters without implicit coercion. |
+| `money-schema.ts`, `decimal-schema.ts` | Exact parameter text: CNY money (2dp), investment shares (6dp) and net value per unit (4dp) canonical decimal schemas. |
 | `result.ts` | Convert typed results into native Pi success or `isError: true`; project public model data. |
 | `planning.ts` | Persist and execute a validated workflow through injected gateway and claim ports. |
 | `plan-compiler.ts` | Validate declared scope, node structure, output references, and dependencies. |
@@ -56,7 +57,7 @@ Creating a scheduled intent does not preauthorize a future financial write.
 Brand-new physical card creation and card deletion are manual-only on the Cards page and expose no
 agent capability; the Cards page has no 补办 action.
 `replace_card` is an ordinary agent capability for ANY owned `LOST` card — DEBIT, CREDIT or VIRTUAL.
-Its params are `{ cardId }` only, with no per-type gating: the replacement inherits the source type
+Its params carry the shared card selectors (`cardSelectorFields`, see below) with no per-type gating: the replacement inherits the source type
 and network (a CREDIT replacement inherits `creditLimitMinor`/`availableLimitMinor`; a VIRTUAL
 replacement keeps its linked settlement account and the month-continuous family allowance), the
 source card stays `LOST` and records `replacedByCardId`, and a repeat call on the same source returns
@@ -82,6 +83,39 @@ server-returned facts: consumption amount and merchant, the card's masked number
 Card reads and analysis (`get_cards`, `analyze_spending`, `get_transactions`,
 `get_dashboard_summary`) never debit.
 
+## Card target selectors
+
+`cardSelectorFields()` in `card.ts` defines one optional selector set shared by every card-target
+write: `set_card_limit`, `freeze_card`, `unfreeze_card`, `consume_virtual_card`, `report_lost_card`
+and `replace_card` (the gateway's `CARD_TARGET_TOOLS`). `get_cards` and `apply_virtual_card` carry no
+selector: one is a read, the other creates a new card.
+
+- `cardId` is an exact id from `get_cards` and is never interpreted as anything else. A tail or a
+  complete card number placed here is REFUSED (`invalid`), never re-looked-up as a selector, so a
+  misplaced tail cannot hit an arbitrary card.
+- `cardType` accepts `DEBIT`/`CREDIT`/`VIRTUAL` (case-insensitive) or 借记卡/储蓄卡/信用卡/虚拟卡.
+- `cardTail` accepts exactly four trailing digits, written as `6688`, `尾号6688`, `****6688` or `...6688`.
+- `cardNumber` accepts a complete 12–19 digit number (spaces or dashes allowed) and matches only by
+  exact equality with the server-only `Card.numberFull`, so a card with a NULL `numberFull` cannot be
+  selected this way.
+
+Supplied selectors combine: every one must hit the SAME owned card.
+`security/card-resolution.ts#resolveCardTarget` resolves them at park time into four statuses
+(`resolved`/`not_found`/`ambiguous`/`invalid`); a multi-candidate result must be clarified and lists
+masked candidates only. A resolved target is canonicalized to `cardId` (`canonicalizeCardArgs`
+deletes `cardType`/`cardTail`/`cardNumber`), so the confirmation summary and the SDK act on the same
+card. `cardTargetId(userId, args)` is the runner-side fallback: a canonical `cardId` passes through,
+selectors-only args go through the same resolver, and an unresolved target throws `VALIDATION` with
+the masked clarification. Model-facing descriptions must steer 尾号6688 to `cardTail` and 我的借记卡
+to `cardType`. See `docs/cn/identity-resolution.md`.
+A `clarify` refusal never opens a `PendingAction`: `security/security-gateway.ts:1628-1635` returns
+the plain Chinese sentence as `blockReason` (no `BLOCK_REASON_PREFIX` payload), so
+`agent/turns/events.ts:63-69` publishes a `status:'error'` tool event whose `summary` IS that verbatim
+clarification and whose `errorCode` is absent. The rendered error card is NOT that text:
+`lib/tool-feedback.ts:50-68` `publicToolError` allow-lists only exact business messages plus a few
+closed regexes, so `buildCardClarifyMessage`/`buildRecipientClarifyMessage` output falls through to the
+generic `chat.error.toolFailed`. Assert on the tool event's `status`/`summary`, never on card copy.
+
 `describe_turn` lives in `turn-intent.ts` and records model-declared conversational purpose.
 It is an internal control tool, not a banking capability or customer authorization.
 It has NO entry in `lib/contracts/tool-catalog.ts`, so it is absent from `TOOL_CATALOG`/`TOOL_NAMES`/`AGENT_TOOL_NAMES`
@@ -97,13 +131,72 @@ Other literal `'describe_turn'` couplings: `agent/turns/events.ts` drops its sta
 stream, `agent/durable/retry-policy.ts` gives it `read_only`/3 attempts, and `agent/durable/control-recovery.ts`
 replays its recorded model call. The stored intent shape is `ConversationIntent` in `lib/contracts/intent.ts`.
 
-### `redeem_investment` 赎回本金参数（全额 / 部分）
+### `redeem_investment` 赎回口径（`mode`：SHARES / AMOUNT / ALL）
 
-`redeemAmount` 是可选的本金部分（CNY 十进制字符串）：省略或等于持仓本金表示**全额赎回**（持仓结清、一次性到账）；填入严格小于本金的正数表示**部分赎回**（持仓保留、本金减少，仅按同一估值规则到账该部分的结算金额，剩余本金与市值留在持仓上）。它是普通金额参数——`plan-parameters.ts` 依据 TypeBox 模式校验字符串格式与显式类型后原样转发给 SDK，超额、非正或格式非法的取值由 SDK 以 `VALIDATION` 拒绝，参数层不重复判定金额域。成功摘要按 `InvestResult.partial` 与 `redeemedPrincipal` / `remainingPrincipal` 渲染全额或部分赎回措辞。
+`RedeemInvestmentParams` = `{ holdingId, mode, shares?, amount?, expectedShares?, expectedNetValue?, expectedNetValueDate?, expectedSettlementAmount? }`。`mode` **必填**，取值 `SHARES | AMOUNT | ALL`，没有默认口径：`SHARES` 必须给 `shares`、`AMOUNT` 必须给 `amount`（由 SDK 按最新净值折算份额）、`ALL` 全部赎回且不接受份额或金额。口径的判定点在工具层 `investment.ts#redemptionRequest()`，先于任何 SDK 调用：口径缺失或未知、混用（`SHARES`+`amount`、`AMOUNT`+`shares`、`ALL`+任一）都返回 `VALIDATION`，口径缺失时话术固定为 `赎回需要明确口径：请确认按「份额」还是按「金额」赎回`。因此「赎回 2000」这类只给金额、未说明口径的请求必须回到澄清，绝不会被读成本金并在其上再额外支付收益。
+
+`redeemAmount`（旧「赎回本金」口径）及其别名 `expectedRedemptionAmount` **不是**参数：`plan-parameters.ts` 把它们当未知参数拒绝，`redemptionRequest()` 另以同一澄清话术（detail `PRINCIPAL_MODE_RETIRED`）在 SDK 之前拒绝。`InvestResult.redeemedPrincipal` / `remainingPrincipal` 仍作为只读结果回退字段参与摘要渲染，它们不是请求参数。
+
+`shares` / `expectedShares` 与 `expectedNetValue` 使用 `decimal-schema.ts` 的 `SharesParameter`（≤6 位小数）与 `NetValueParameter`（≤4 位小数）：无符号纯十进制文本，拒绝负号、指数、货币符号和 JS number，多余小数位被拒（模式层给 `The call contains invalid tool parameters`，`canonical*` 给 `份额/净值最多允许 N 位小数`）。写库前一律经 `canonicalShareCount` / `canonicalNetValue`（内部 `decimalText()`）规范化，因为 SDK 的 `recordedShares()` / `productNetValue()` 要求 `nonNegativeDecimal(raw) === raw`：`'5050.000000'` → `'5050'`、`'0.9880'` → `'0.988'`。`amount` / `expectedSettlementAmount` 走 `money-schema.ts` 后规范成两位小数。
+
+`expectedPositionVersion`（整笔持仓版本）/ `expectedShares` / `expectedNetValue` / `expectedNetValueDate`（净值业务日，UTC epoch 毫秒整数）/ `expectedSettlementAmount` 是 `security/security-gateway.ts#redemptionSnapshot` 铸造的授权快照，由 `approvedSnapshot()` 规范化后原样转发，使 SDK 能在写事务内比对陈旧授权。执行身份不由模型提供：`runRedeemInvestment` 只把 `opts.idempotencyKey` 转发为 `idempotencyKey`，schema 里没有 `executionKey`。
+
+`redemptionSummary()` 只用服务端返回值渲染：赎回口径、赎回份额、成交净值（含 UTC+08:00 净值日期）、预计到账、费用口径（`SIMULATED_NONE` → `模拟环境不收取赎回费，赎回费 ¥0.00`）、剩余份额（0 时标注「持仓已结清」）、剩余成本、已实现收益、可选账户余额，末尾附 `收益为模拟估算，不承诺保本。`；缺失字段写「历史数据不足」，本地不用浮点重算任何金额。
+
+`get_investment_holdings` 的每条持仓渲染七项事实：持仓份额、最新净值与净值日期、持仓市值、剩余持仓成本、持仓收益、持仓收益率、累计收益。市值、收益、收益率取自 SDK（市值恒为 `shares × latestNetValue`，收益率只是把 SDK 的无量纲比率乘 100 的展示换算），记录无法支撑的项显式输出「历史数据不足」而不伪造数字；`valueBasis: 'MIGRATED_ESTIMATE'` 追加「（估算）」。
+
+持仓收益是**有符号**的展示值，`investment.ts` 只做格式化、绝不做非负门禁：`holding.profit` / `holding.cumulativeProfit` 走 `formatDecimalCNY`（`:222`、`:224`，亏损渲染 `-¥60.00`），`holding.profitRate` 走 `percentText()`（`:77-80` = `multiplyDecimal(ratio,'100')` + `formatDecimalCNY` 去掉 `¥` 再加 `%`，HALF_UP 两位，亏损渲染 `-1.20%`），`InvestResult.realizedProfit` 走 `formatCNY`（`:523`，同样保留符号）。这里绝不调用 `nonNegativeDecimal` / `rateRatioToPercent` / `valuationToMinor`（它们对负文本抛 `VALIDATION`），也没有 `Math.abs`、clamp 或把负值过滤成 0：`agent/` 全目录只有 `decimal-schema.ts:12` 的注释提到 `nonNegativeDecimal`（SDK 存储契约），`rateRatioToPercent` 只用于产品 `annualYieldRate`（`:123`、`:176`），`signedRateToPercent` / `valuationToMinor` 在 `agent/` 无调用。摘要里「合计持仓收益」是 `addDecimal` 累加、缺失值按 `'0'` 计入（`:239`），累加同样保留符号。这些字段在模型可见的 `data` 中原样透传（`result.ts#modelBankingData` 只脱敏手机号与执行身份字段），没有任何裁剪。行为由 `redeem-investment.test.ts:375-399` 固定（`持仓收益 -¥60.00`、`持仓收益率 -1.20%`、`累计收益 -¥60.00`）。浏览器侧另有一个展示出口 `components/banking/HoldingFacts.tsx:91`（`signedRateToPercent`，不额外舍入），因此同一比率在聊天摘要里是两位小数、在持仓卡里是全精度——两者都是 `×100` 的有符号展示换算，都不在财务链路上。
 
 ### `subscribe_investment` 申购聚合
 
-对已持有产品的重复申购由 SDK 聚合进现有 `HOLDING`：增加该持仓本金并重算市值，`InvestResult.addedToExisting = true`，不新建持仓。工具层无需改动——`subscribe_investment` 照常以 `{ productId, amount }` 转发给 `banking.investment.subscribeInvestment`；成功摘要仍按 `InvestResult.amount` 与可选 `newBalance` 渲染。金额始终为精确十进制字符串，计算使用整数最小单位或十进制算术。
+对已持有产品的重复申购由 SDK 聚合进现有 `HOLDING`：增加该持仓份额与本金并重算市值，`InvestResult.addedToExisting = true`，不新建持仓。工具层以 `{ productId, amount }`（金额规范成两位小数）转发给 `banking.investment.subscribeInvestment`，并把 `opts.idempotencyKey` 转发为执行身份。申购结果本身不带成交净值，`runSubscribeInvestment` 因此以一次只读的 `banking.investment.listHoldings()` 回读该持仓最近一笔 `purchases[].netValuePerUnit` / `netValueDate` 作为**展示**用成交净值；这次回读失败或被重放的旧记录没有该字段时，摘要写「历史数据不足」，绝不把已成交的申购判为失败或凭空补一个净值。摘要字段为已认购金额、持仓号、`申购份额`、`成交净值`（含净值日期）、`持仓总份额`、可选账户余额，末尾附 `收益为模拟估算，不承诺保本。`。金额始终为精确十进制字符串，计算使用整数最小单位或十进制算术。
+
+### 写入后的持仓卡（`data.holdings`）
+
+`subscribe_investment` 与 `redeem_investment` 在写事务提交后都调用 `investment.ts#currentHoldings()` 重读 `banking.investment.listHoldings(userId)`，再用 `withHoldings()` 把这份**当前**持仓以 `data.holdings` 附加在权威 `InvestResult` 之上（`amount`/`shares`/`realizedProfit` 等字段语义与取值不变，只是新增一个展示字段）。`agent/card-emitter.ts#writtenHoldings` 因此对这两个写工具投影 `receipt` + `investments`（`{ holdings }`）两张卡：回执仍是写入的权威结论，紧随其后的持仓卡与 `get_investment_holdings` 的形状完全相同，所以聊天里最新一张持仓卡永远是本次写入后的真实状态，绝不会停在写入前的旧快照。回读失败或不返回数组时 `data.holdings` 整体缺失，只投影回执卡——写入已提交，事实优先，绝不把成功写入变成失败调用，也不伪造空持仓；重放时重读的是「现在」的真实持仓。
+
+### 费用字段（`feeAmount` / `feeRule`）的投影边界
+
+SDK 的 `InvestResult` 与 `HoldingRedemption` 都声明 `feeAmount`（模拟环境恒为 `'0.00'`）与 `feeRule`（恒为 `'SIMULATED_NONE'`）。本目录没有任何按名字读取这两个字段的投影逻辑，只有两处是它们真正落地的地方：
+- `redemptionSummary()` 的 `feeLine()`（`investment.ts:497-504`，常量 `REDEMPTION_FEE_RULE` 由 `@/banking-sdk` 导出，`:25`）：`feeRule === REDEMPTION_FEE_RULE` 时渲染 `费用口径 SIMULATED_NONE（模拟环境不收取赎回费，赎回费 ¥0.00）`；字段缺失写「历史数据不足」，不凭空补 `0.00`。
+- `runRedeemInvestment()` / `runSubscribeInvestment()` 返回的 `data` 是 SDK 结果**原样**传递（`withHoldings()` `:297-302` 只追加 `holdings`），所以 `feeAmount` / `feeRule` 原样进入 `data`：模型 JSON（`result.ts:42-53` 的 `INTERNAL_FIELDS` 不剔除它们）、`ToolInvocation.resultJson`（`durable/journal.ts:175-184` 存 `data: event.result.details`）、`ExecutionReceipt.resultJson`/`responseJson`（`command-execution.ts:86-95`）、`PendingAction.resultJson`（`confirmation-recovery.ts:274-279`）与 `AuditEntry.toolResult`（`execution-audit.ts:24`、`confirmation/authorized-execution.ts:68`）都是整体序列化，没有专用费用字段。
+- 用户可见的回执卡**不含费用**：`business-card-payloads.ts#investmentPayload`（`:70-77`）只投影 `success`/`amount`/`newBalance`/`occurredAt`/`redemptionValuation`/`settlementRounding`，而 `BusinessReceipt`（`lib/contracts/agent.ts:11-13`）没有费用槽位。费用文案只出现在赎回摘要（`summary`，经 `ToolEventView.summary` 与 `financial-response.ts#renderWrite` 的 `write.summary` 展示）与确认快照字段里。
+- `subscribe_investment` 的摘要**没有**费用行：`feeLine()` 唯一调用点是 `redemptionSummary()`（`investment.ts:520`）。
+
+## `planning.ts` entry points
+
+| Export | Line | Kind / signature |
+|---|---|---|
+| `SUBMIT_PLAN_TOOL_NAME = 'submit_plan' as const satisfies ToolName` | `:105` | name constant |
+| `SubmitPlanParams` / `SubmitPlanArgs` | `:111` / `:131` | TypeBox `{ goal, nodes[] }` |
+| `createSubmitPlanTool(userId: string, deps: SubmitPlanDeps): AgentTool<typeof SubmitPlanParams>` | `:185` | factory for the `submit_plan` TOOL |
+| `preflightRequestedPlan(userId: string, args: Record<string, unknown>, request: string, intent?: ConversationIntent): Promise<TaskNodeSpec[]>` | `:215` | plain library function (throws, no `ToolExecutionResult`): `compileRequestedPlan` + `validatePlanParameters` + selector/recipient/holding canonicalization |
+| `runSubmitPlan(userId: string, args: Record<string, unknown>, deps: SubmitPlanDeps, source?: { runId: string; parentInvocationId: string }): Promise<ToolExecutionResult>` | `:240` | plain library function = the model-free runner behind `executeDirect('submit_plan')` and the `execute` of the tool |
+| `type PlanRunTool` / `interface SubmitPlanDeps` | `:68` / `:75` | injected ports: `sessionId`, gateway-routed `runTool`, `runtimeFence`, `invocationIdentity`, `userRequest`, `conversationIntent`, `onNodeUpdate`, `onPlanUpdate`, `signal`, `now` |
+
+`submit_plan` is the only planner-family model-visible capability and is META (`effect: 'workflow'`): it is not risk-gated itself, every money-moving node is gated through `deps.runTool`.
+`runSubmitPlan` order: preflight (`:261`) → `dag.validatePlan(nodes, knownTools)` with TWO args (`:265`) → mint the durable rows inside `prisma.$transaction` (`:281-283` `deps.runtimeFence` + `createTaskGraph`, ids adopted at `:286-288` so `plan.id === AgentTask.id`) → claim the plan's executor slot `claimTaskExecutionWithGeneration` (`:329`; a lost claim returns `{ ok:false, error:'计划已在执行中' }` and runs nothing) → `clearStaleNodeClaims` (`:344`) → `buildNodeClaimPorts` (`:353`) → `executor.runPlan` (`:357-386`) with `isRunOwner`, `controls: defaultPollControls(plan.id)`, `claimNode`/`releaseNode` and `createTaskPersistence` → `sweepCancelledPlan` (`:393`) → `releaseTaskExecution` in `finally` (`:395`).
+A `'running'` result after `runPlan` means the claim was taken over; the durable status/generation is re-read (`:404-412`) and this run's own node results are kept.
+
+## Registry (`index.ts`)
+
+`createToolRegistry(userId: string, opts?: CreateToolRegistryOptions): ToolRegistry` (`:237`) is the ONLY entry point — there is no module-level `TOOLS`/`toolCatalog` export.
+`CreateToolRegistryOptions` = `{ sessionId?, automaticWriteFence?, automaticWriteAudit?, operationIdentity?, submitPlan? }` (`:188-198`).
+`ToolRegistry` (`:171-185`) = `{ tools: Record<ToolName, AgentTool<any>>; list(): AgentTool<any>[]; get(name: ToolName): AgentTool<any>; executeDirect(name: ToolName, args: Record<string, unknown>, opts?: ToolRunOptions): Promise<ToolExecutionResult> }`.
+`list()` maps the re-exported `AGENT_TOOL_NAMES` (`:26`) onto `tools`; `get(name)` THROWS `AppError('SECURITY_DENIED')` for a non-catalog name and for `catalogEntry(name).agentEnabled === false`, while `executeDirect` returns that same refusal as a value (`:325-336`).
+`executeDirect` validates params first (`:348-349`), and for a write tool wraps the runner in `prepareBankingCommand` + `executeBankingCommand` (`:372-381`) so receipts/audit share the transaction.
+`submit_plan` is special in three places: dispatched through `runners.submit_plan` (`:312-317`, returns `{ ok:false, errorCode:'INTERNAL' }` without `opts.submitPlan`), `get('submit_plan')` without `opts.submitPlan` returns the throwing placeholder `createUnconfiguredSubmitPlanTool()` (`:208-218`), and the `:388-413` loop adds `prepareArguments` but does NOT replace its `execute` (`:397`) — its own `execute` calls `runSubmitPlan` directly.
+So a test that wants the real plan path must build the registry with `{ submitPlan: { sessionId, runTool } }` and then call `registry.executeDirect('submit_plan', args)`.
+
+## Pre-park latency contract
+
+No file in this directory schedules a wall-clock wait: zero `setTimeout`/`setInterval`/`new Promise`/sleep/delay/`AbortSignal.timeout`, zero timeout/TTL constants and zero retry/backoff or `while`/`for(;;)` loops.
+`planning.ts:96` declares `signal?: AbortSignal` only to forward `{ signal: deps.signal, now: deps.now }` into `executor.runPlan` (`:385`); it constructs no deadline.
+`createToolRegistry` (`index.ts:236-406`) awaits nothing at construction (two literal factory maps + one `for (const name of TOOL_NAMES)` rewrite). Its awaits (`:393` `automaticWriteFence`, `:395` `operationIdentity`) are per call.
+`validateBankingParameters`/`validateSchemaParameters` (`plan-parameters.ts:44-80`), `compileRequestedPlan` (`plan-compiler.ts:10-34`) and the `planner/dag.ts` checks are synchronous CPU only.
+`preflightRequestedPlan` (`planning.ts:215-238`) executes NO tool and opens no transaction: it compiles, validates parameters, then does at most one unbounded `listHoldings` read (only when a node uses `redeem_investment`) plus one `resolveBankingArgs` read per tool node INSIDE a `Promise.all`. N declared steps therefore cost O(1) sequential DB round trips (1 for a plain multi-write plan, 2 with a redemption, +1 `listContacts` for a transfer), never N.
+Every read on that path is unbounded (`lib/banking-selectors.ts:16,20,24,28,37`, `lib/db/repositories/investment.ts:41-47`, `lib/db/repositories/contact.ts:19-24` — no `take`); the bounded read is `get_transactions` (`transaction.ts:47` `limit: query.limit ?? 50`, schema max `MAX_TRANSACTION_READ_LIMIT = 200`).
+Unbounded GREEN reads are NOT on the pre-park path because they are model-driven tool executions: `analyze_spending` scans a 6-month window (`banking-sdk/transaction.ts:38` `TREND_MONTHS = 6`, `:72`) and `detect_anomaly` scans the whole history plus an unfiltered-by-take `auditLog.findMany` (`:102`, `:113`).
 
 ## Parameters and SDK errors
 
@@ -159,12 +252,30 @@ Plan-node and confirmed-action identities remain stable on replay. SDK fences ru
 transaction and roll back the effect if execution rights have expired, moved, or been cancelled.
 Idempotency prevents duplicate effects; it does not grant permission.
 
+## The per-node `runTool` port: declared here, implemented OUTSIDE
+
+`PlanRunTool` (`planning.ts:68-72`) and the executor's `TaskRunTool` (`agent/workflows/contracts.ts:12`) are the same signature `(toolName, args, {taskId, nodeId}) => Promise<PlanToolOutcome>`; the planner's `PlanToolOutcome` is `planner/executor.ts:37-51`.
+`planning.ts` only DECLARES it (`SubmitPlanDeps.runTool`, `:86`) and forwards it inside the claim context (`planning.ts:360-361`). All other plan drivers do the same (`agent/workflows/ports.ts:32-33`, `agent/workflows/action-continuation.ts:42-45`, `agent/confirmation/plan-continuation.ts:42-45`, `agent/scheduled-dispatcher.ts:117-119`).
+The production implementation is NOT in this directory: `agent/index.ts:308-325` `taskRunToolFor(sessionId)` resolves the owner from the SESSION row (throwing `SECURITY_DENIED` at `:313` when it cannot) and delegates to `agent/confirmation/gated-execution.ts:107-121` `executeGatedTool` → `:62-104` `executeGatedToolOnce`.
+That adapter returns `GatedToolOutcome` (`agent/confirmation/contracts.ts:43-51`), which has NO `failure` and NO `actionStatus` field — only `error` + `errorCode`. So on this path a node's typed `PlanFailure` is produced solely by the planner's own catch (`planner/executor.ts:504-509` `toPlanFailure`), never by the tool layer, and `settleToolNode` (`planner/node-outcome.ts:14-53`) drops `errorCode` entirely: a refused node persists `status:'failed'` + `error` text only (or `waiting_confirmation`/`waiting_verification` + `{pendingActionId}` when the gateway parked it).
+
+## What this directory does NOT own
+
+`agent/tools/` writes NO Prisma `PendingAction`, `AgentTask` or `AgentTaskNode` row directly: the only `prisma` import is `planning.ts:56`, used for `prisma.$transaction` (`:280`) around `createTaskGraph` plus the injected `runtimeFence`. Every other row write goes through injected ports (`claimTaskExecutionWithGeneration`, `releaseTaskExecution`, `clearStaleNodeClaims`, `buildNodeClaimPorts`, `createTaskPersistence`, `sweepCancelledPlan`).
+There is NO task-control tool in this directory and none in `lib/contracts/tool-catalog.ts`: no `cancel_task`, `pause_task`, `resume_task`, `retry_task`, no tool taking a `taskId`/`nodeId`/`actionId`.
+Plan control and post-parked-node resumption live outside, as plain library functions callable directly from a test:
+- `agent/workflows/controls.ts` `pauseTask` (`:18`), `resumeTask` (`:26`), `retryTask` (`:44`) and `agent/workflows/cancellation.ts` `sweepCancelledPlan` (`:47`), `cancelTask` (`:56`), surfaced by `agent/index.ts` and `POST /api/tasks/[id]`;
+- `agent/workflows/action-continuation.ts:24` `resumeTaskForAction` → `planner/lifecycle.ts:322` `resumePlan` → `planner/executor.ts:261` `runPlan`. There is NO separate topological continuation: resume == replay `runPlan`, so `submit_plan` is the only fresh-plan driver in this directory.
+A cancelled plan's parked actions are revoked only through `sweepCancelledPlan` → `security` gateway `cancelAction` (never a direct status write here).
+
 ## Known issues
 
 Declared-write enforcement stays REACTIVE and declaration-gated: `compileRequestedPlan` only runs when `submit_plan` is actually invoked (`planning.ts:261` via `preflightRequestedPlan`), and `requiresDeclaredPlan` (`../intent-context.ts:43`) is called only from `beforeToolCall` (`../banking-agent.ts:289`), which fires on a stray individual write. End-of-turn reconciliation exists only for a write the model DECLARED through `describe_turn` (`../write-continuation.ts:56-62`, live-only): a model that refuses in prose while declaring nothing is never corrected, and no `PendingAction`/panel appears. `card.ts` applies NO card-type gating: `ReplaceCardParams` is `{ cardId }`, and `report_lost_card`/`replace_card` accept DEBIT, CREDIT and VIRTUAL alike (`banking-sdk/card.ts` `replaceCard`).
 `planning.ts:265` calls `dag.validatePlan(nodes, knownTools)` with only two args, so output-contract validation is skipped there; the output-contract check runs in `plan-compiler.ts:16` (`BANKING_TOOL_OUTPUTS`).
 
 ## Verification
+
+The redemption summary's `费用口径` sentence is rendered only by `investment.ts#feeLine` from the result's `feeAmount`/`feeRule` (the simulation waives the fee, but the fields still render as `模拟环境不收取赎回费，赎回费 ¥0.00`); `redeem-investment.test.ts:300-305` pins that exact string through a `toBe` on the whole summary, so changing `feeLine` copy breaks a test. Only the `REDEMPTION_FEE_RULE` (`SIMULATED_NONE`) branch is asserted — the generic `费用口径 <rule>（赎回费 …）` branch and the missing-`feeAmount` `历史数据不足` fallback are untested. No `agent/tools/` capability accepts a fee as an input parameter or computes one.
 
 Use pure tests for schemas, typed error adapters, public data projection, and parameter boundaries.
 Use isolated database tests for ownership, exact balances, atomic receipts, independent MFA,

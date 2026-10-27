@@ -36,6 +36,42 @@ export interface BuildPlanInput {
   id?: string;
 }
 
+/** Redemption口径 a plan node must state explicitly — the planner never picks one for the caller. */
+const REDEEM_MODES: ReadonlySet<string> = new Set(['SHARES', 'AMOUNT', 'ALL']);
+
+/**
+ * Why a `redeem_investment` node cannot be executed as written, or `undefined` when its口径 is
+ * explicit and unambiguous (`docs/cn/investments.md`: 按份额 / 按金额 / 全额, never inferred).
+ *
+ * A node carrying only an `amount` or only a `shares` states no口径, so the executor would have to
+ * guess one — exactly what the contract forbids. The retired principal field `redeemAmount` and a
+ * mixed口径 are refused for the same reason.
+ */
+function redeemModeProblem(args: unknown): string | undefined {
+  const nodeArgs: Record<string, unknown> = args && typeof args === 'object' && !Array.isArray(args)
+    ? args as Record<string, unknown>
+    : {};
+  if (nodeArgs.redeemAmount !== undefined) {
+    return '的赎回需要显式口径 mode（SHARES/AMOUNT/ALL）：按份额用 shares，按金额用 amount，全额赎回不接受份额或金额';
+  }
+  const mode = nodeArgs.mode;
+  if (mode === undefined || mode === null || mode === '') {
+    return '的赎回缺少显式口径 mode（SHARES/AMOUNT/ALL）：仅给出金额或份额不足以确定赎回口径';
+  }
+  if (typeof mode !== 'string' || !REDEEM_MODES.has(mode)) {
+    return `的赎回口径 mode 必须是 SHARES/AMOUNT/ALL，实际为 '${String(mode)}'`;
+  }
+  const mixed = mode === 'SHARES'
+    ? nodeArgs.amount !== undefined
+    : mode === 'AMOUNT'
+      ? nodeArgs.shares !== undefined
+      : nodeArgs.shares !== undefined || nodeArgs.amount !== undefined;
+  if (mixed) {
+    return `的赎回口径 mode=${mode} 不可混用参数：SHARES 只接受 shares，AMOUNT 只接受 amount，ALL 不接受 shares/amount`;
+  }
+  return undefined;
+}
+
 /**
  * Validate a plan graph against the set of registered tool names.
  *
@@ -43,6 +79,8 @@ export interface BuildPlanInput {
  *  - duplicate node ids;
  *  - nodes with a missing/blank `id` or `name` (malformed);
  *  - unknown tools referenced by `kind: 'tool'` nodes (not in `knownTools`);
+ *  - a `redeem_investment` node whose口径 (`mode`: SHARES/AMOUNT/ALL) is missing, unknown, retired
+ *    (`redeemAmount`) or mixed with the other口径's parameter — the planner never guesses 口径;
  *  - malformed nodes (`tool` node without a tool, `condition` node without a condition);
  *  - dependencies pointing at non-existent node ids;
  *  - cycles in the dependency graph.
@@ -86,6 +124,10 @@ export function validatePlan(nodes: TaskNodeSpec[], knownTools: Set<string>, out
         problems.push(`tool node '${label}' is missing a 'tool'`);
       } else if (!knownTools.has(node.tool)) {
         problems.push(`tool node '${label}' references unknown tool '${node.tool}'`);
+      } else if (node.tool === 'redeem_investment') {
+        // 赎回口径只能由调用方显式给出（按份额 / 按金额 / 全额）：server 在这里挡住需要猜口径的节点。
+        const redeemProblem = redeemModeProblem(node.args);
+        if (redeemProblem) problems.push(`tool node '${label}' ${redeemProblem}`);
       }
     } else if (node.kind === 'condition') {
       if (!node.condition || typeof node.condition !== 'object') {

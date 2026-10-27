@@ -1,5 +1,6 @@
 import type { AgentRun } from '@/lib/db/prisma';
 import type { ResumeTurnInput } from '../turns/contracts';
+import { isTerminalActionStatus } from '../action-status';
 import { prisma } from '@/lib/db/client';
 import { AppError } from '@/lib/errors';
 import { safeParse } from '@/lib/json';
@@ -15,7 +16,7 @@ export async function verifiedAuthorizationInput(run: AgentRun, input: ResumeTur
   if (input.sessionId !== run.sessionId || !input.toolResult || typeof input.toolResult.ok !== 'boolean') throw new AppError('CONFLICT', 'The original authorization continuation is incomplete');
   if (!input.actionId) throw new AppError('SECURITY_DENIED', 'The original authorization action is required for restart recovery');
   const action = await prisma.pendingAction.findFirst({ where: { id: input.actionId, sessionId: run.sessionId, userId: run.userId } });
-  if (!action || !['executed', 'failed', 'cancelled'].includes(action.status)) throw new AppError('SECURITY_DENIED', 'The original authorization outcome is not terminal');
+  if (!action || !isTerminalActionStatus(action.status)) throw new AppError('SECURITY_DENIED', 'The original authorization outcome is not terminal');
   const toolName = input.resultToolName ?? input.toolName;
   if (toolName !== action.toolName) throw new AppError('CONFLICT', 'Authorization narration does not match the original bank tool');
   if ((input.taskId ?? null) !== action.taskId || (input.nodeId ?? null) !== action.nodeId) throw new AppError('CONFLICT', 'Authorization narration does not match the original workflow node');

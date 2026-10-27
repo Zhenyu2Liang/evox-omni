@@ -33,7 +33,7 @@ interface AttentionCopy {
 const COPY: Record<OutOfBandAttention, AttentionCopy> = {
   processing: {
     tone: 'info',
-    bannerClass: 'bg-blue-50 text-banking-accent',
+    bannerClass: 'bg-banking-neutral text-banking-interactive',
   },
   recoverable: {
     tone: 'warn',
@@ -116,8 +116,8 @@ export function ReconciliationCard(p: ReconciliationCardProps) {
       <div className="flex flex-col gap-3">
         <div className={`rounded-xl px-3 py-2 text-sm ${copy.bannerClass}`}>{t(`cards.reconciliation.${attention}.body`)}</div>
 
-        <p className="text-sm text-banking-navy/70">{t(`cards.reconciliation.${attention}.help`)}</p>
-        {developerMode && attention === 'reconciliation' && <Link href="/manual" className="text-sm text-banking-accent underline">{t('cards.manualReview')}</Link>}
+        <p className="text-sm text-banking-navy">{t(`cards.reconciliation.${attention}.help`)}</p>
+        {developerMode && attention === 'reconciliation' && <Link href="/manual" className="text-sm text-banking-interactive underline">{t('cards.manualReview')}</Link>}
 
         <dl className="flex flex-col gap-2">
           {action.fields.map((field, index) => (
@@ -125,13 +125,13 @@ export function ReconciliationCard(p: ReconciliationCardProps) {
               key={`${field.label}-${index}`}
               className="flex items-center justify-between gap-4 text-sm"
             >
-              <dt className="text-banking-navy/70">{localizeActionFieldLabel(field.label, t)}</dt>
+              <dt className="text-banking-navy">{localizeActionFieldLabel(field.label, t)}</dt>
               <dd className="text-right font-medium text-banking-navy">{localizeActionFieldValue(field, t)}</dd>
             </div>
           ))}
           {typeof action.amount === 'string' ? (
             <div className="flex items-center justify-between gap-4 border-t border-banking-navy/10 pt-2 text-sm">
-              <dt className="text-banking-navy/70">{t('cards.amount')}</dt>
+              <dt className="text-banking-navy">{t('cards.amount')}</dt>
               <dd className="font-semibold text-banking-deep">
                 <Money amount={action.amount} />
               </dd>

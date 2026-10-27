@@ -41,16 +41,19 @@ export interface ContactFixture {
   id: string;
   name: string;
   phone: string;
+  /** 完整虚构测试手机号（0000 号段），仅供服务端精确匹配，任何对外投影都不得输出。 */
+  phoneFull: string;
   bank: string;
   remark?: string;
 }
 
+// 虚构测试数据：0000 号段，非真实手机号/卡号
 /** The four demo contacts. `zhangwei` / `wangfang` are the transfer recipients in Tests 2 & 3. */
 export const CONTACTS: readonly ContactFixture[] = [
-  { id: 'contact_zhangwei', name: '张伟', phone: '139****0002', bank: '招商银行' },
-  { id: 'contact_wangfang', name: '王芳', phone: '137****0003', bank: '工商银行' },
-  { id: 'contact_mama', name: '妈妈', phone: '136****0004', bank: '建设银行', remark: '家人' },
-  { id: 'contact_lihua', name: '李华', phone: '135****0005', bank: '农业银行' },
+  { id: 'contact_zhangwei', name: '张伟', phone: '139****0002', phoneFull: '13900000002', bank: '招商银行' },
+  { id: 'contact_wangfang', name: '王芳', phone: '137****0003', phoneFull: '13700000003', bank: '工商银行' },
+  { id: 'contact_mama', name: '妈妈', phone: '136****0004', phoneFull: '13600000004', bank: '建设银行', remark: '家人' },
+  { id: 'contact_lihua', name: '李华', phone: '135****0005', phoneFull: '13500000005', bank: '农业银行' },
 ];
 
 /**
@@ -62,6 +65,7 @@ export const AMBIGUOUS_CONTACT: ContactFixture = {
   id: 'contact_wangfang_2',
   name: '王芳',
   phone: '133****9999',
+  phoneFull: '13300009999',
   bank: '中国银行',
 };
 
@@ -89,12 +93,17 @@ export interface CardFixture {
   type: 'DEBIT' | 'CREDIT' | 'VIRTUAL';
   network: string;
   numberMasked: string;
+  /** 完整虚构卡号（0000 号段），仅供服务端精确匹配，任何对外投影都不得输出。 */
+  numberFull: string;
   status: 'ACTIVE' | 'FROZEN' | 'LOST' | 'PENDING';
   creditLimit: string | null;
   availableLimit: string | null;
   monthlyLimit: string | null;
+  /** Settlement CHECKING account id recorded on this card (DEBIT/VIRTUAL); CREDIT cards are never bound. */
+  linkedAccountId?: string | null;
 }
 
+// 虚构测试数据：0000 号段，非真实手机号/卡号
 /** Credit card (¥18,000 limit) + a debit card. `card_credit` carries the 娱乐 card limit. */
 export const CARDS: readonly CardFixture[] = [
   {
@@ -103,6 +112,7 @@ export const CARDS: readonly CardFixture[] = [
     type: 'CREDIT',
     network: 'UnionPay',
     numberMasked: '****6688',
+    numberFull: '6222000000006688',
     status: 'ACTIVE',
     creditLimit: '18000.00',
     availableLimit: '18000.00',
@@ -114,10 +124,12 @@ export const CARDS: readonly CardFixture[] = [
     type: 'DEBIT',
     network: 'UnionPay',
     numberMasked: '****8821',
+    numberFull: '6222000000008821',
     status: 'ACTIVE',
     creditLimit: null,
     availableLimit: null,
     monthlyLimit: null,
+    linkedAccountId: 'acct_checking',
   },
 ];
 
@@ -193,14 +205,37 @@ export interface ProductFixture {
   termDays: number;
   minAmount: string;
   description?: string;
+  /**
+   * Published net value per unit (净值) — decimal text written with EXACTLY 4 fractional digits.
+   * The seeder canonicalizes it with `decimalText()` before storage, so trailing zeros are dropped
+   * (`'1.0000'` → `'1'`, `'0.9880'` → `'0.988'`) and the SDK's canonical-text guard accepts it.
+   */
+  latestNetValuePerUnit: string;
+  /** Epoch ms — business date (UTC+08:00) the published net value applies to. */
+  latestNetValueDate: number;
 }
 
-/** 4 products (matches `prisma/seed.ts`). `稳健理财A` (Test 9: 买 5000 → RED MFA) is R2 ¥1,000 min. */
+/**
+ * Business date of every fixture product's published net value (mirrors seed.ts's `sep(25)`), fixed to
+ * the demo clock's month so valuations are reproducible on any host.
+ */
+export const LATEST_NET_VALUE_DATE = businessDate(2026, 8, 25).getTime();
+
+/**
+ * 4 products (matches `prisma/seed.ts`). `稳健理财A` (Test 9: 买 5000 → RED MFA) is R2 ¥1,000 min.
+ *
+ * A holding is valued at `shares × net value`, so the fixture net values keep the amounts the specs
+ * already reason about EXACT:
+ *  - `稳健理财A` / `货币基金` price at `1.0000` (money-market style): shares equal the booked CNY
+ *    amount, so buying more adds exactly the paid amount (`5050` + `1000` → `6050`).
+ *  - `稳健理财B` prices BELOW 1 (`0.9880` → unrealized loss) and `进取混合C` ABOVE 1 (`1.1769` →
+ *    unrealized profit), keeping both valuation directions covered.
+ */
 export const PRODUCTS: readonly ProductFixture[] = [
-  { id: 'prod_wenjiana', code: 'WJA001', name: '稳健理财A', riskLevel: 'R2', annualYieldRate: '0.0325', termDays: 90, minAmount: '1000.00', description: '低风险稳健型' },
-  { id: 'prod_wenjib', code: 'WJB002', name: '稳健理财B', riskLevel: 'R2', annualYieldRate: '0.036', termDays: 180, minAmount: '5000.00', description: '低风险稳健型' },
-  { id: 'prod_jinrong', code: 'JR003', name: '进取混合C', riskLevel: 'R3', annualYieldRate: '0.051', termDays: 365, minAmount: '10000.00', description: '中风险混合型' },
-  { id: 'prod_huobi', code: 'MMF001', name: '货币基金', riskLevel: 'R1', annualYieldRate: '0.021', termDays: 30, minAmount: '100.00', description: '现金管理型' },
+  { id: 'prod_wenjiana', code: 'WJA001', name: '稳健理财A', riskLevel: 'R2', annualYieldRate: '0.0325', termDays: 90, minAmount: '1000.00', description: '低风险稳健型', latestNetValuePerUnit: '1.0000', latestNetValueDate: LATEST_NET_VALUE_DATE },
+  { id: 'prod_wenjib', code: 'WJB002', name: '稳健理财B', riskLevel: 'R2', annualYieldRate: '0.036', termDays: 180, minAmount: '5000.00', description: '低风险稳健型', latestNetValuePerUnit: '0.9880', latestNetValueDate: LATEST_NET_VALUE_DATE },
+  { id: 'prod_jinrong', code: 'JR003', name: '进取混合C', riskLevel: 'R3', annualYieldRate: '0.051', termDays: 365, minAmount: '10000.00', description: '中风险混合型', latestNetValuePerUnit: '1.1769', latestNetValueDate: LATEST_NET_VALUE_DATE },
+  { id: 'prod_huobi', code: 'MMF001', name: '货币基金', riskLevel: 'R1', annualYieldRate: '0.021', termDays: 30, minAmount: '100.00', description: '现金管理型', latestNetValuePerUnit: '1.0000', latestNetValueDate: LATEST_NET_VALUE_DATE },
 ];
 
 export interface SubscriptionFixture {
@@ -219,8 +254,12 @@ export interface HoldingFixture {
   id: string;
   userId: string;
   productId: string;
+  /** Booked cash still in the position — the REMAINING cost basis, CNY decimal text. */
   amount: string;
+  /** Unrounded market value, CNY decimal text — EXACTLY `shares × product.latestNetValuePerUnit`. */
   marketValue: string;
+  /** Held SHARES, decimal text with at most 6 fractional digits (the「净值 + 份额」quantity). */
+  shares: string;
   /** Epoch ms. */
   boughtAt: number;
   status: 'HOLDING' | 'REDEEMED';
@@ -379,10 +418,15 @@ export function buildSubscriptions(now: Date = new Date(demoNow())): Subscriptio
   ];
 }
 
-/** The single seeded investment holding (稳健理财A, bought last month). */
+/** The single seeded investment holding (稳健理财A, bought last month).
+ *
+ * Booked as 「净值 + 份额」: `shares ('5050.000000') × 稳健理财A net value ('1.0000')` is EXACTLY the
+ * market value `'5050'`, against the unchanged `'5000.00'` remaining cost → a holding in profit (+50).
+ * `realizedProfitMinor` stays at the schema default 0 (never redeemed).
+ */
 export function buildHoldings(now: Date = new Date(demoNow())): HoldingFixture[] {
   return [
-    { id: 'holding_wenjiana', userId: DEMO_USER_ID, productId: 'prod_wenjiana', amount: '5000.00', marketValue: '5050', boughtAt: lastMonth(now, 10, 10, 0).getTime(), status: 'HOLDING' },
+    { id: 'holding_wenjiana', userId: DEMO_USER_ID, productId: 'prod_wenjiana', amount: '5000.00', marketValue: '5050', shares: '5050.000000', boughtAt: lastMonth(now, 10, 10, 0).getTime(), status: 'HOLDING' },
   ];
 }
 
@@ -448,6 +492,7 @@ export async function seedDemoData(options: Options = {}): Promise<void> {
       userId: DEMO_USER_ID,
       name: c.name,
       phone: c.phone,
+      phoneFull: c.phoneFull,
       bank: c.bank,
       remark: c.remark ?? null,
     })),
@@ -489,11 +534,16 @@ export async function seedDemoData(options: Options = {}): Promise<void> {
   });
   await prisma.investmentProduct.createMany({ data: PRODUCTS.map(({ minAmount, ...product }) => ({
     ...product, minAmountMinor: moneyToCents(minAmount),
+    // Canonical TEXT: the SDK rejects a non-canonical net value, so `'1.0000'` is stored as `'1'`.
+    latestNetValuePerUnit: decimalText(product.latestNetValuePerUnit), latestNetValueDate: new Date(product.latestNetValueDate),
   })) });
 
   await prisma.investmentHolding.createMany({
     data: buildHoldings(now).map(({ amount, marketValue, ...holding }) => ({
-      ...holding, principalAmountMinor: moneyToCents(amount), estimatedMarketValue: decimalText(marketValue), boughtAt: new Date(holding.boughtAt),
+      // `shares`/`status` ride along in `...holding`; `realizedProfitMinor` keeps its default 0.
+      // Both money-like columns are canonicalized (`'5050.000000'` → `'5050'`): the SDK rejects a
+      // non-canonical decimal, and then the holding would read back as 历史数据不足.
+      ...holding, principalAmountMinor: moneyToCents(amount), estimatedMarketValue: decimalText(marketValue), shares: decimalText(holding.shares), boughtAt: new Date(holding.boughtAt),
     })),
   });
 

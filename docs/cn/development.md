@@ -17,6 +17,7 @@
 
 版本声明见 [package.json](../../package.json)。
 依赖变更需要更新 `pnpm-lock.yaml`。
+只提交 `pnpm-lock.yaml`，不引入 npm 或 Yarn 的锁文件。
 
 依次执行以下命令：
 
@@ -259,7 +260,7 @@ ESLint、Vitest 和 Playwright 用于代码检查与验收。
 | 依赖 | 固定版本 |
 | --- | --- |
 | Pi Core、Pi AI、Pi Coding Agent | `1.2.0` |
-| Next.js、环境加载器及 Next.js ESLint 插件 | `16.4.0` |
+| Next.js、环境加载器及 Next.js ESLint 插件 | `16.4.3` |
 | React、React DOM | `19.3.0` |
 | Prisma CLI、运行时及 SQLite 适配器 | `7.10.0` |
 | TypeScript 编译器 | `7.0.2` |
@@ -381,6 +382,19 @@ Prisma 读取 `prisma/schema.prisma`。
 业务代码通过客户端查询和写入数据库。
 这个命令不创建表，也不写入业务数据。
 
+离线环境中，Prisma CLI 会检查更新，命令可能长时间无输出。
+执行 Prisma CLI 前，先设置以下环境变量：
+
+```sh
+CHECKPOINT_DISABLE=1 PRISMA_HIDE_UPDATE_MESSAGE=1 CI=1 pnpm db:generate
+```
+
+PowerShell 逐项设置后执行：
+
+```powershell
+$env:CHECKPOINT_DISABLE = '1'; $env:PRISMA_HIDE_UPDATE_MESSAGE = '1'; $env:CI = '1'; pnpm db:generate
+```
+
 Prisma CLI 读取 [prisma.config.ts](../../prisma.config.ts)。
 该文件声明 schema、数据库地址和种子命令。
 schema 只声明 SQLite 类型，地址由配置文件提供。
@@ -398,6 +412,7 @@ SQLite 客户端使用连接级队列隔离并发请求。
 
 `pnpm db:push` 执行 [db-push.ts](../../scripts/db-push.ts)。
 脚本加载环境配置，再调用 `prisma db push`。
+脚本同时固定 schema 引擎日志级别，无需手工设置，见 [prisma-cli-env.ts](../../lib/prisma-cli-env.ts)。
 数据库地址来自 `DATABASE_URL`。
 默认 SQLite 数据库为 `prisma/dev.db`。
 
@@ -433,7 +448,7 @@ Prisma 7 的 `db push` 不再自动生成客户端。
 业务记录重建后，旧对话可能仍指向原操作。
 从初始状态重新体验时，使用 `db:reset`。
 
-首次建立空库时，按“首次启动”执行这 3 个命令。
+首次建立空库时，按“首次启动”依次执行 `db:generate`、`db:push` 和 `db:seed`。
 日常启动只需 `pnpm dev`，无需重新填充数据。
 修改 schema 后，同步表结构并更新客户端。
 
@@ -503,20 +518,37 @@ DATABASE_URL=file:./dev.db pnpm dev
 
 #### 备份默认数据库
 
-停止所有数据库连接后，可用 SQLite 命令行创建快照。
-以下示例需要 `sqlite3` 命令。
-备份文件保存在仓库内的 `backups/`。
+停止所有数据库连接后，用备份脚本创建快照：
 
 ```sh
-mkdir -p backups
-task_backup_file="backups/dev-$(date +%Y%m%d-%H%M%S).db"
-sqlite3 prisma/dev.db ".backup '$task_backup_file'"
+node scripts/db-backup.mjs
 ```
 
-SQLite 备份命令会包含已提交的预写日志（WAL）数据。
+脚本把快照写入 `logs/db-backups/`。
+文件名包含时间、随机标识和源数据库文件名。
+执行后，脚本打印快照路径和源库路径。
+快照目录不存在时自动创建，命令可以重复执行。
+同一秒生成的快照各自保留，不覆盖旧快照。
+源库不存在时，脚本提示先执行 `pnpm db:push`，并以非 0 状态退出。
+快照保存在 `logs/` 下，已被 `.gitignore` 忽略，不提交。
+快照使用 `node:sqlite`，配置加载依赖已安装的 `@next/env`。
+同名 `.json` 文件记录源库、快照路径与恢复说明。
+
+脚本使用 SQLite 在线备份，快照包含已提交的预写日志（WAL）数据。
 只复制主数据库文件可能遗漏 WAL 中的提交。
-备份命令成功后，再执行重置。
-自定义数据库需要将示例中的源路径换成实际路径。
+
+备份与份额回填共用 `scripts/database-file.mjs`。
+配置加载与 Prisma 命令一致，会读取 `.env.local`。
+显式导出的 `DATABASE_URL` 优先，不打印凭据。
+未设置时，脚本使用 `file:./dev.db`，即 `prisma/dev.db`。
+备份自定义库时，先导出与启动应用相同的地址：
+
+```sh
+DATABASE_URL=file:./other.db node scripts/db-backup.mjs
+```
+
+相对 `file:` 路径以 `prisma/` 为基准。
+备份成功后，再执行重置。
 
 #### 只清空聊天记录
 
@@ -534,6 +566,126 @@ SQLite 备份命令会包含已提交的预写日志（WAL）数据。
 
 修改金额字段前，先读[金融数值](financial-values.md)。
 字段名称、单位和精度也约束种子数据及测试数据。
+
+### 数据库备份与净值份额升级
+
+理财持仓按“净值 + 份额”记账后，旧库需要补齐 `shares`。
+以下步骤按顺序执行，顺序不能交换。
+
+先备份数据库，命令与快照目录见[备份默认数据库](#备份默认数据库)：
+
+```sh
+node scripts/db-backup.mjs
+```
+
+再同步表结构：
+
+```sh
+pnpm db:push
+```
+
+同步新增净值和份额字段，不派生份额。
+`db push` 不生成客户端，代码改动后仍需执行 `pnpm db:generate`。
+
+产品净值或完整号码缺失时，先准备显式的模拟数据清单。
+示例位于 `scripts/fixtures/demo-reference.example.json`。
+该文件提供虚构的演示值，不是从脱敏号码恢复的数据。
+复制示例到 `logs/`，逐条核对记录、归属与预期展示值。
+未知或已变更的记录不得直接套用示例。
+
+```sh
+pnpm exec tsx scripts/demo-reference-backfill.ts --plan=logs/reference.json --dry-run
+pnpm exec tsx scripts/demo-reference-backfill.ts --plan=logs/reference.json --apply
+```
+
+默认只预演，`--apply` 才写入。
+清单只补空值，不覆盖已有净值或完整号码。
+归属、名称、产品代码或展示值不匹配时整批回滚。
+未列入清单的用户记录保持原值，账户余额与流水不变。
+
+旧持仓按最新净值派生份额：
+
+```sh
+node scripts/investment-share-backfill.mjs
+```
+
+默认是只读试运行，不写入数据库。
+试运行打印表格，列为 `holding`、`product`、`old market value`、`net value`、`shares`、`new market value`、`drift` 与 `outcome`。
+逐行的 `outcome` 为 `derived`、`derived (cost basis)` 或 `skipped: <原因>`。
+`derived (cost basis)` 表示 `estimatedMarketValue` 为空，市值回退为剩余持仓成本。
+跳过原因只有 2 种：`no-net-value` 表示产品无净值或无匹配产品，`net-value-not-positive` 表示净值为 0。
+存在跳过行时退出码为 `2`，表示升级尚未完成。
+退出码 `0` 表示本次没有未解决行，`1` 表示执行失败。
+表格之后打印汇总行，例如：
+
+```text
+[backfill] migrated: 2 (dry run)
+[backfill] skipped (历史数据不足): 1
+[backfill] total economic-value drift: 0.0000003265 CNY
+[backfill] Re-run with --apply to persist the derived shares.
+```
+
+核对结果后写入：
+
+```sh
+node scripts/investment-share-backfill.mjs --apply
+```
+
+脚本只接受 `--apply` 1 个参数，其他参数报错。
+
+派生口径为 `shares = FLOOR(市值 ÷ 净值, 6 位小数)`，市值取持仓的 `estimatedMarketValue`。
+`estimatedMarketValue` 为空时，市值回退为剩余持仓成本。
+`--apply` 在单个事务内写入 `shares`、`estimatedMarketValue` 和 `shares_estimated = 1`。
+写入的市值是 `shares × 净值` 的精确乘积，与份额保持自洽。
+漂移守卫：任一笔经济价值变化达到 `0.01 元` 时，脚本整轮不写入，并以非 0 状态退出。
+净值为负时，脚本同样中止并保持零写入。
+
+派生的份额是估算，不是申购记录。
+读取侧因此报 `valueBasis: 'MIGRATED_ESTIMATE'`，页面、卡片和微信标注“估算”。
+试运行和 `--apply` 都会说明这一标记。
+净值、份额与收益口径见[理财净值、份额与收益口径](investments.md)。
+
+产品没有净值时不伪造份额。
+这类持仓保持原样，汇总中计为 `历史数据不足`。
+
+脚本只处理 `status = 'HOLDING'` 且 `shares` 为空的持仓。
+`REDEEMED` 持仓和已有份额的持仓不被修改。
+重复执行不会再次派生，已迁移数量为 `0`。
+汇总包含已迁移数量、跳过数量和总经济价值漂移。
+
+需要回滚时，按以下步骤恢复：
+
+1. 停止所有数据库连接。
+2. 核对快照旁 `.json` 中的 `source`，确认恢复目标。
+3. 保存或删除该目标的 `-wal` 与 `-shm` 旁文件。
+4. 用快照覆盖目标数据库。
+5. 恢复匹配的代码版本并执行 `pnpm db:generate`。
+
+删除 `-wal` 与 `-shm` 的原因：避免重放旧预写日志。
+POSIX shell 与 PowerShell 两种写法等价，只执行其一。
+
+POSIX shell：
+
+```sh
+rm -f prisma/dev.db-wal prisma/dev.db-shm
+cp 'logs/db-backups/<时间戳>-dev.db' prisma/dev.db
+pnpm db:generate
+```
+
+PowerShell：
+
+```powershell
+Remove-Item -Force -ErrorAction SilentlyContinue prisma/dev.db-wal, prisma/dev.db-shm
+Copy-Item 'logs/db-backups/<时间戳>-dev.db' prisma/dev.db
+pnpm db:generate
+```
+
+恢复后按需执行 `pnpm db:seed`，或直接启动应用。
+
+### 卡片结算账户补绑定
+
+需要补齐未绑定结算账户的卡片时，按[卡片管理](card-management.md#数据升级与回滚)执行。
+备份、同步、补绑定和回滚命令在该专题。
 
 ## 页面入口
 
@@ -715,6 +867,9 @@ Vitest 使用 [tests/setup.ts](../../tests/setup.ts)建立 `prisma/test.db`。
 数据库测试共享这个文件，并重置模拟数据。
 [vitest.config.ts](../../vitest.config.ts)关闭了测试文件并行。
 不得同时运行多个使用数据库的 Vitest 进程。
+驱动真实对话轮的用例，把 [tests/helpers/timeouts.ts](../../tests/helpers/timeouts.ts) 的 `CHAT_DRIVEN_TEST_TIMEOUT_MS` 作为 `it(...)` 的第 3 个参数。
+用命令行初始化冷库的用例传 `COLD_DB_PROVISION_TEST_TIMEOUT_MS`。
+两者是共享常量，不得写成裸数字，也不得在用例里另建副本。
 
 定向测试命令如下：
 

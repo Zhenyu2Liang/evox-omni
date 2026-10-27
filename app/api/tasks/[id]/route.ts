@@ -8,8 +8,16 @@
  *  - GET: reads the persisted plan through the sanctioned repository read path
  *    (`@/lib/db/repositories/task`) and maps it to the `AppTaskPlan` (a `TaskPlan` whose `results`
  *    ADDITIVELY carry each node's `pendingActionId`, so the UI can restore the confirm/MFA entry).
+ *    Every node parked on a human decision additionally carries `pendingActionStatus` — the parked
+ *    `PendingAction`'s CURRENT persisted status, loaded advisory-only via `_lib/task-pending-actions`
+ *    — so a client can tell an OPEN decision (`pending`/`awaiting_mfa`) from a TERMINAL `locked` one.
+ *    `locked` can NEVER be completed (the MFA attempt limit was exhausted and the action was parked
+ *    terminally); the user must start a NEW request rather than be prompted for another code.
  *    Enforces ownership: a plan belonging to another session/user gets `403 SECURITY_DENIED`.
- *    Success: `200 { ok: true, data: AppTaskPlan }`; unknown id → `404 NOT_FOUND`.
+ *    READ-ONLY: reading never reopens, retries, recovers or executes anything and never writes
+ *    `PendingAction.status`; a missing action row simply omits `pendingActionStatus`.
+ *    Success: `200 { ok: true, data: TaskPlanWithDecisionState }` (additive widening of `AppTaskPlan`);
+ *    unknown id → `404 NOT_FOUND`.
  *  - POST: body `{ action }` (validated with `taskControlSchema`). Delegates to the RUNNING executor
  *    through `@/agent` (via `_lib/agent-bridge`), which performs the real execution control:
  *    `pause` stops before the next node; `cancel` stops and cancels the remaining nodes; `retry`
@@ -25,6 +33,10 @@ import type { TaskPlan } from '@/lib/contracts/task';
 import { resolveTaskControl } from '../../_lib/agent-bridge';
 import { errorResponse, jsonResponse, parseBody } from '../../_lib/http';
 import { requireIdentity } from '../../_lib/session';
+import {
+  withPendingActionStatuses,
+  type TaskPlanWithDecisionState,
+} from '../../_lib/task-pending-actions';
 import type { IdRouteContext } from '../../_lib/types';
 import { toTaskPlan, type AppTaskPlan } from '../../_lib/task-plans';
 
@@ -49,7 +61,8 @@ export async function GET(req: NextRequest, ctx: IdRouteContext): Promise<Respon
       throw new AppError('SECURITY_DENIED', '无权查看该任务。');
     }
 
-    return jsonResponse<AppTaskPlan>(toTaskPlan(task));
+    // Additive, advisory decision state: one batched read of the plan's parked actions (no write).
+    return jsonResponse<TaskPlanWithDecisionState>(await withPendingActionStatuses(toTaskPlan(task)));
   } catch (e) {
     return errorResponse(e);
   }
@@ -80,4 +93,4 @@ export async function POST(req: NextRequest, ctx: IdRouteContext): Promise<Respo
   }
 }
 
-export type { TaskControlBody, TaskPlan, AppTaskPlan };
+export type { TaskControlBody, TaskPlan, AppTaskPlan, TaskPlanWithDecisionState };

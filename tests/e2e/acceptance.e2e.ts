@@ -30,7 +30,14 @@ import { journeySharedDemo } from './shared-demo.e2e-helper';
 import { journeyToolLifecycle } from './tool-lifecycle.e2e-helper';
 import { journeyDeveloperMode } from './developer-mode.e2e-helper';
 import { journeyMultiCardFreeze } from './card-freeze.e2e-helper';
+import { journeyChatLayout } from './chat-layout.e2e-helper';
+import { journeyAssistantHelp } from './assistant-help.e2e-helper';
+import { journeyOmniBrand } from './omni-brand.e2e-helper';
+import { journeyCharcoalSecurity } from './charcoal-security.e2e-helper';
 import { journeyBankingPages } from './banking-pages.e2e-helper';
+import { journeyResultPriority } from './result-priority.e2e-helper';
+import { journeyTheme } from './theme.e2e-helper';
+import { journeyReadability } from './readability.e2e-helper';
 import { journeyCardManagement } from './card-management.e2e-helper';
 import { journeyNaturalConversation, journeyDialogueRegressions } from './conversation.e2e-helper';
 import { journeyOperationHistory } from './activity.e2e-helper';
@@ -668,15 +675,15 @@ async function enableDeveloperReset(page: Page): Promise<void> {
   const toggle = page.locator('[data-developer-toggle]:visible');
   await waitForElementHydration(page, '[data-developer-toggle]');
   if (await toggle.getAttribute('aria-checked') !== 'true') await toggle.click();
-  await page.locator('[data-developer-breaker-reset]').waitFor({ state: 'visible' });
+  await page.locator(SELECTORS.developerResetButton).waitFor({ state: 'visible' });
 }
 
 /**
  * Click the single developer maintenance button after hydration; no banking code is submitted.
  */
 async function clickBreakerReset(page: Page): Promise<void> {
-  const button = page.locator('[data-developer-breaker-reset]');
-  await waitForElementHydration(page, '[data-developer-breaker-reset]');
+  const button = page.locator(SELECTORS.developerResetButton);
+  await waitForElementHydration(page, SELECTORS.developerResetButton);
   await button.click();
 }
 
@@ -703,7 +710,7 @@ async function journeyCircuitBreakerLock(browser: Browser, baseUrl: string): Pro
 
       // Reset the owner counter through the explicit developer maintenance surface.
       await page.goto(`${baseUrl}/security`, { waitUntil: 'domcontentloaded' });
-      if (await page.locator('[data-developer-breaker-reset]').count()) throw new Error('Normal mode exposes breaker maintenance');
+      if (await page.locator(SELECTORS.developerResetButton).count()) throw new Error('Normal mode exposes breaker maintenance');
       const denied = await page.request.post(`${baseUrl}/api/developer/security/reset`);
       if (denied.status() !== 403) throw new Error('Normal mode can invoke developer maintenance');
       await enableDeveloperReset(page);
@@ -755,8 +762,18 @@ async function journeyCircuitBreakerLock(browser: Browser, baseUrl: string): Pro
         .first()
         .waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
 
-      // Developer maintenance is a single button; it must not require a banking credential.
-      if (await page.locator(SELECTORS.breakerCodeInput).count()) throw new Error('Developer reset still requests a verification code');
+      // Developer maintenance is a single button; it must not require a banking credential. The
+      // runtime unlock panel renders its own code entry in BOTH modes while the developer button
+      // never does, so the credential check is SCOPED to the developer control's surface and the
+      // unlock panel is asserted separately instead of being silently ignored.
+      if ((await page.locator(SELECTORS.developerResetButton).count()) === 0) throw new Error('Developer mode did not render the developer reset control');
+      if (await page.locator(SELECTORS.developerResetCodeInput).count()) throw new Error('Developer reset still requests a verification code');
+      const unlockPanel = page.locator(SELECTORS.unlockPanel);
+      if ((await unlockPanel.count()) === 0) throw new Error('The security center did not render the unlock panel');
+      await unlockPanel.first().waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
+      if (!(await page.locator(SELECTORS.unlockCodeInput).count())) {
+        throw new Error('The unlock panel did not render its verification-code entry');
+      }
       await clickBreakerReset(page);
       await waitForStatusText(page, t('security.reset.success', { count: 0, max: 3 }));
       await page
@@ -780,6 +797,13 @@ interface Journey {
 }
 
 const JOURNEYS: readonly Journey[] = [
+  { name: 'typography-and-dark-contrast', run: journeyReadability },
+  { name: 'theme-appearance-and-persistence', run: journeyTheme },
+  { name: 'current-assets-and-compact-results', run: journeyResultPriority },
+  { name: 'charcoal-and-security-state', run: journeyCharcoalSecurity },
+  { name: 'omni-brand-and-responsive-pages', run: journeyOmniBrand },
+  { name: 'assistant-help-first-visit-and-reopening', run: journeyAssistantHelp },
+  { name: 'chat-layout-and-date-separators', run: journeyChatLayout },
   { name: 'chat-history-pagination-and-scroll', run: journeyChatHistory },
   { name: 'signed-amount-memory-and-subscription-analysis', run: journeyDialogueRegressions },
   { name: 'operation-history-and-developer-audit', run: journeyOperationHistory },

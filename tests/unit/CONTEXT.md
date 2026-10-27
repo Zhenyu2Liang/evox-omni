@@ -12,6 +12,16 @@
 
 目录名称不表示所有测试都无需数据库。
 
+根部三个 `weixin-*.test.ts` 不连库、不调模型：
+`weixin-presentation.test.ts` 断言卡片/事件渲染，`weixin-channel.test.ts` 断言 bridge 的受信边界、命令流、去重与 `locked` 对外文案；
+`weixin-lock-presentation.test.ts` 专测「终止锁定」的上屏边界：`locked` 结果的四段全文（次数用完 / 熔断 / 解锁后仍锁 / 缺 `code`+`failure` 兜底）、`继续验证：/验证 <id>` 只属 `awaiting_mfa`、`security_event{kind:'locked'}` 撤销 gate 且不可复活、其他 `kind` 静默、`emptyNotice:false`、内部诊断不外泄、`label()` 未知值兜底、锁定卡去重。
+覆盖清单与缺口见 [../CONTEXT.md](../CONTEXT.md) 的「微信通道覆盖」。
+三个文件的假对象工厂可直接复用：`weixin-presentation.test.ts#setup()`（第 87 行）返回 `{ state: emptyState(), bank }`，`bank` 由 8 个 `vi.fn()` 字面量实现 `BankingChannel`，渲染函数直接吃手写 `ChatCard`/`AgentStreamEvent` 字面量；
+`weixin-channel.test.ts#fixture()`（第 16 行）另建 `WeixinBridge(state, bank, sender, save)` 与 `message(text, id)` 消息工厂，`sender` 只需 `send(to, text, clientId, contextToken)`，`save` 为空 `vi.fn()`，无 `WeixinStore` 替身（store 用例用真实临时目录）。
+`weixin-lock-presentation.test.ts#fakeChannel(outcome)` 把同一个 `ActionResult` 塞进 `settle`，配 `message(text, id)`、`lastReply(sender)` 与 `lockedText(reason)` 模板；
+参数化用例按 `outcome` 各建一个 channel，避免投递去重干扰。
+回复断言惯用 `sender.send.mock.calls.at(-1)?.[1]` 取文本后 `toContain`/`not.toContain`；锁定终态整句则用 `toBe` 与四段模板全等比较。
+
 本目录没有脚本化模型驱动生产 `runTurn` 的用例。
 `agent/run-turn-failure.test.ts` 替换 `createBankingAgent` 工厂，`write-continuation*.test.ts` 用假运行时且不碰数据库。
 需要「`scriptedProvider` → 生产 `runTurn` → SQLite 断言」骨架时用 `tests/integration/write-continuation.test.ts`，说明见 [../integration/CONTEXT.md](../integration/CONTEXT.md)。
@@ -37,6 +47,102 @@
 这些用例是纯文本断言：不连库、不调模型、不联网。
 它们证明服务端渲染的措辞与目录事实一致，不证明真实模型不再生成同类散文（那以 live 验收为准），也不覆盖网关授权与执行路径。
 测试夹具只做分句、否定辖域与标记词表分类，不复刻产品逻辑。
+
+## 卡片展示（CardTile）不在本目录
+
+本目录没有用例导入 `components/banking/CardTile`；`renderToStaticMarkup` 覆盖的是聊天卡、审批/MFA 卡、解锁面板与投资持仓。
+渲染环境（`environment: 'node'`、无 jsdom/`@testing-library`、`.tsx` 不被收集）与 i18n 约定见 [../CONTEXT.md](../CONTEXT.md) 的「组件渲染测试（React SSR，无 DOM 环境）」。
+本目录导入 `components/banking/*` 的用例有三处：`planner/tool-diagnostics.test.ts:9` 的 `AgentTaskTimeline`、`planner/investment-purchase-display.test.ts:5` 的 `InvestmentProductTile`、`planner/decimal-format.test.ts:6` 的 `HoldingFacts`（同一用例还渲染 `components/ui/DecimalMoney`）。
+`components/banking/card-account-display.ts` 的四个纯函数、`CardTile`、`AssetSummaryCard`、`RecentTransactions`、`SubscriptionTile` 与 `components/chat/cards/CardsCard.tsx` 都没有单元用例。
+`CardTile` 自身不输出任何 `data-*`：`data-card-id`/`data-card-list`/`data-card-consume`/`data-card-delete` 由 `app/cards/CardManager.tsx:191` 的包裹层发出。
+展示文案真值在 `lib/i18n/messages/business.zh-CN.json:47-69`（类型 `debit`/`credit`/`virtual`，状态 `active`/`frozen`/`lost`/`pending`，`limit`/`available`/`monthlyLimit`、`replaced`、`linkedAccount`、`accountBalance`、`usableBalance`、`linkedAccountMissing`、`linkedAccountUntrusted`、`cardUnavailable`、`cardFrozenNotice`、`cardLostNotice`）。
+单元层只断言 DTO 与脱敏：`banking-sdk/card-linked-account.test.ts`、`banking-sdk/card-consumption.test.ts`、`lib/mask.test.ts`（`****8821`/`************8821`）。
+卡片 DOM 断言（`CARD_LABEL`、`readCardTileRows`、`assertLinkedAccountTileLabels`）只在 `tests/e2e`，见 [../e2e/CONTEXT.md](../e2e/CONTEXT.md)。
+`weixin-presentation.test.ts:23` 的 `type:'cards'` 用例只断言微信文本含 `¥87.66`，不是 React 渲染。
+
+## 持仓收益率与亏损的断言落点
+
+`components/banking/HoldingFacts.tsx` 是持仓净值/份额/收益率的唯一渲染源：`profitRate` 经 `signedRateToPercent` 拼成 `${…}%`，`profit`/`cumulativeProfit` 走 `DecimalMoney(..., signed:true)`，`marketValue`/`realizedProfit` 不带 `signed`。
+符号转换入口 `lib/decimal.ts#signedRateToPercent` 只用于持仓收益率；金额、份额、净值与 `annualYieldRate` 仍走 `nonNegativeDecimal`/`rateRatioToPercent` 的非负闸门。
+同一亏损事实因此分三层钉住（符号转换 → 组件渲染 → SDK 比率）：
+
+- `financial-values.test.ts:64-84`：`signedRateToPercent` 保留符号与全部精度（`'-0.0123'`→`'-1.23'`、`'-0.0001'`→`'-0.01'`、`'-1'`→`'-100'`、`'-0.029726666666666667'`→`'-2.9726666666666667'`），正值与 `rateRatioToPercent` 结果全等（`:76`），非字符串入参抛错（`:77`）；同用例反向固定金额/年化闸门：`nonNegativeDecimal('-0.0123')`、`nonNegativeDecimal('-1')`、`rateRatioToPercent('-0.032575')` 抛 `{code:'VALIDATION'}`（`:79`/`:80`/`:83`）。
+- `financial-values.test.ts:96-97`：`formatDecimalCNY('-0.000001')` 为 `'-¥0.00'`，负值舍到分仍保留符号。
+- `planner/decimal-format.test.ts:37-41`：`DecimalMoney({signed:true})` 只在严格为正时前置 `+`（`'+¥118.91'` 与 `'-¥118.91'`）。
+- `planner/decimal-format.test.ts:44-96`：本目录唯一的亏损持仓渲染用例。`holdingView(profitRate)` 造 4199.864825 份 × 净值 0.9407 → 市值 3950.80、剩余成本 4000.00、`profit`/`cumulativeProfit` 为 `'-49.20'`；经 `renderToStaticMarkup` 走真实 `HoldingFacts`（`layout` 取 `card`/`tile`），断言 `'-0.0123'` 不抛错且渲染 `-1.23%`（`:77-78`）、全精度 `-2.9726666666666667%`、`tile` 布局同为 `-1.23%` 且同一亏损金额 `-¥49.20`（`:86-91`）、正/零收益率仍是 `3.2575%`/`0%`（`:81-84`）、无收益率时整段不出 `%`（`:94`）。
+- `planner/financial-display.test.ts:48-53`：`DecimalMoney({signed:true})` 对 `-0.0000000001` 渲染 `'-¥0.00'`（正值 `'+¥0.00'`），符号不被舍入吃掉。
+- `banking-sdk/net-value.test.ts:153-161`：`profitRateOf` 产出带符号比率（`'-23.45'/1000.00`→`'-0.02345'`、`'-1.00'/3.00'`→`'-0.333333333333333333'`），零成本返回 `undefined`；净值/份额的非法入参拒绝见 [banking-sdk/CONTEXT.md](banking-sdk/CONTEXT.md)。
+- `banking-sdk/net-value-redemption.test.ts:379`/`:386`/`:418`：`HoldingView.profit` 的负字面量（`'-0.000000928'`、`'-192.3076932'`、`'-0.0000002173'`），`compareDecimal(..., '0')` 判负在 `:380`/`:395`/`:419`。
+- `banking-sdk/net-value-redemption.test.ts:394`/`:400`：亏损全额赎回的 `InvestResult.realizedProfit === '-192.31'` 与库内 `realizedProfitMinor === -19_231n`，是全仓唯一的负已实现收益断言。
+- `banking-sdk/share-estimate-basis.test.ts:70-71`：`profit`/`cumulativeProfit` 等于 `subtractDecimal(marketValue, '5000.00')`，数值上为负（≈ −3765.475463078），以派生表达式而非负字面量断言。
+
+缺口（当前事实，非待修项）：
+
+- 没有组件级用例把负 `annualYieldRate` 喂给 `InvestmentProductTile`/`InvestmentsCard`：`rateRatioToPercent` 的负值只在 `financial-values.test.ts:83` 以抛错覆盖，仓储层拒绝在 `banking-sdk/investment-precision.test.ts:257-274` 只用 `rejects.toBeDefined()`，不校验错误码。
+- `/investments` 页的收益率行没有外部校验：`../e2e/live-investment.e2e-helper.ts:424-433` 的 `labels` 不含 `持仓收益率`，所以 `tile` 布局的收益率行只由 `planner/decimal-format.test.ts:88` 断言。
+- 默认数据都是盈利仓位：`../helpers/fixtures.ts:429` 成本 5000.00 / 市值 5050（+50），`prisma/seed.ts:378-379` 的 `holding_wenjiana`/`holding_huobi` 高于成本；唯一亏损仓位是 `prisma/seed.ts:380` 的 `holding_wenjib`（剩余成本 10000.00 / 市值 9880.00，−¥120.00），而 e2e 只核对 `稳健理财A`。
+- 其余持仓展示用例只喂正值：`planner/chat-read-results.test.ts:73-86`、`planner/financial-display.test.ts:35-46`、`planner/investment-purchase-display.test.ts`。
+- `HoldingView` 上没有任何为负的 `cumulativeProfit`/`realizedProfit` 断言：负已实现收益只在 `InvestResult` 层（`banking-sdk/net-value-redemption.test.ts:394`）。
+- `amount` 为 0 时 `HoldingView.profitRate` 为 `undefined` 只有函数级覆盖（`banking-sdk/net-value.test.ts:160-161`）；`banking-sdk/investment.ts:197` 无条件赋值该键，`'profitRate' in view` 恒为真，不可断言键缺失。
+- 亏损持仓的两个渲染入口都经 `HoldingFacts`：`InvestmentsCard`/`InvestmentProductTile` 里的 `rateRatioToPercent` 只作用于 `annualYieldRate`。
+
+## 终止锁定与内部诊断的上屏边界
+
+`@/lib/public-text`（`isInternalDiagnostic`/`safePublicText`/`securityNotice`）是唯一把内部诊断转成公开文本的漏斗。
+锁定终态文案一律由 typed `code`/`reason`/`attemptsLeft` 决定，渲染层从不读服务端 `message`。
+按层覆盖：
+
+| 文件 | 覆盖（行锚点） | 纯度 |
+| --- | --- | --- |
+| `lib/public-text.test.ts` | `HOSTILE_INPUTS` 判为内部诊断（28-35）、不回显原文（37-47）、白名单业务错仍可本地化（49-60）；`securityNotice` 的 `MFA_FAILED`/`MFA_LOCKED`/`CIRCUIT_OPEN`/`security_event{kind:'locked'}`（64-92） | 纯：无 DB、无 HTTP、不产生真实锁定 |
+| `security/mfa-failure-contract.test.ts` | 真实网关 `authorizeAction` 三连错 → `status:'locked'`、`PendingAction`/`MfaChallenge` 落 locked、重试正码仍 `CIRCUIT_OPEN`；`message`/`failure.reason` 不含 marker（101-157） | 真实 SQLite 网关路径，非 HTTP |
+| `agent/turn-security-event.test.ts` | 真实 `securityGateway.handleToolCall`（`tests/helpers/faux-agent.ts:125`）：`security_event` 恰好一条、`kind:'locked'`、typed `code`/`reason`、`message` 为 `undefined`（50-82）；`publicToolSummary` = `chat.error.securityLocked`（84-99） | 真实 SQLite（`useFreshDatabase`），不调真实模型 |
+| `agent/providers/provider-mock.test.ts` | marker 只作输入 `BLOCK_PREFIX`（47、315、330）；被拦的 YELLOW/RED 回 `operationPrepared` 且从不声称已执行（314-342） | 纯：无 DB、无 HTTP |
+| `planner/locked-card-rendering.test.ts` | `MfaCard` locked：`data-mfa-locked` + `chat.error.actionLocked` + `cards.terminal.locked` + `pages.security.unlockDescription` + `href="/security"`，无 `<input>`/`<button>`/`/验证`/`继续验证`（85-107）；`awaiting_mfa` 保留入口（109-118）；`ApprovalRecord` locked（120-132）；`security_event` 敌意 `message` 折叠为 typed 通知（134-155）；`settleAction` 缺码默认 `MFA_LOCKED`、已有 code 优先，`publicToolSummary` 与 `ToolEventList` 同源（157-194）；`MessageBubble` 敌意 system 文本回落 `chat.error.securityDenied`（196-210） | 纯：`renderToStaticMarkup`，无 DB、无 HTTP |
+| `security/unlock-panel-render.test.ts` | `app/security/UnlockPanel.tsx` 的 `data-unlock-*`（135-139）、`data-unlock-impact`（182）、`lockedDescription`/`actionLocked`/`unlockDescription` 与「重新发起操作」半边（84-98）、唯一 `aria-label={t('security.reset.codeLabel')}` 输入 + 提交 + `role="status"`（100-119）、无 marker/无 `MFA_CODE`（121-138）、解锁态仍渲染面板（140-157）；只切断面形态，解锁语义正文归 `unlock-panel-notice.test.ts` | 纯：`vi.mock('next/navigation')`，无 DB、无 HTTP |
+| `security/unlock-panel-notice.test.ts` | `security.reset.*` 四段解锁语义：`lockReason` 按权威失败次数插值且 `{count}`/`{max}` 无残留、`lockedActionState`、`reinitiate` 的整句字面量 `REINITIATE`、`recovery`（60-73、85-96）；解锁态仍出 `reinitiate`/`recovery`/`lockedActionState` 且无锁定原因（128-138）；`data-unlock-reinitiate` 挂在承载整句的 `<p>` 上、两种熔断状态都在（75-83、98-126）；无 marker/无 `MFA_CODE`（140-156） | 纯：`vi.mock('next/navigation')`，无 DB、无 HTTP |
+| `security/developer-reset-panel-hook.test.ts` | `app/security/ResetBreakerButton.tsx` 在开发者模式下渲染 `data-developer-breaker-reset-panel`，包裹按钮钩子 `data-developer-breaker-reset` 与 `security.reset.developerOnly` 文案（43-57）；非开发者模式整块渲染空串（59-65） | 纯：真实 `DeveloperModeProvider` + `LocaleProvider`，无 DB、无 HTTP |
+| `weixin-lock-presentation.test.ts` | 四段锁定全文与 `lockedText(reason)` 全等（95-127、154-162）、`awaiting_mfa` 的唯一续接入口与剩余次数（129-152）、`security_event{kind:'locked'}` 撤销 gate 且不可复活（170-184）、其他 kind 静默（186-191）、`emptyNotice:false`（193-198）、敌意 payload 不上屏（200-210、214-249）、`label()` 兜底（251-265）、锁定卡去重（268-288） | 纯：假 `BankingChannel` + `emptyState()` |
+| `planner/tool-feedback.test.ts` | `debugDetail` 可留内部纠错原文，公开 `summary`/`publicToolSummary` 只出目录文案；guard 原文与 `internal-node-*` 只在 developer 模式出现 | 纯 |
+| `planner/tool-diagnostics.test.ts` | locked `MfaCard`/`ConfirmationCard` 出 `cards.terminal.locked` 且无按钮（60-70）；私有 `statusMessage` 只在 developer 模式出现（72-86） | 纯 |
+| `lib/activity-presentation.test.ts` | 业务活动只渲染封闭业务字段，隐藏 id、`toolName`、`toolResult`、`userRequest`、`sessionId` | 纯 |
+
+同一锁定事实分三层钉住：网关（`mfa-failure-contract.test.ts`）、事件投影（`turn-security-event.test.ts`）、渲染（`locked-card-rendering.test.ts`、`weixin-lock-presentation.test.ts`、`unlock-panel-render.test.ts`、`unlock-panel-notice.test.ts`）。
+`agent/providers/provider-mock.test.ts` 头部的「STAGING COPY / 临时 runner config」注释是迁移残留：文件已在最终位置，按普通用例运行，不需要任何临时配置。
+生产投影 `agent/turns/events.ts:92-96` 与测试侧 `tests/helpers/scenario.ts:304-308` 发出同一组 typed 字段，两者都不带 `message`。
+`turn-security-event.test.ts` 因此证明「真实网关 + 测试侧投影」，不是生产 `agent/turns/events.ts` 本身。
+传输层仍原样转发服务端文案：`planner/action-contract.test.ts:162-170` 用桩造 `message:'Verification locked'` 断言 `error` + `action_settled` 透传；渲染层不读该文本，两者不冲突。
+`planner/action-attention-state.test.ts:117-134` 断言同一 actionId 的 `error` + `action_settled{locked}` 关闭 MFA 弹窗并保留 `error`/`errorCode`。
+
+文案全在目录里：解锁语义四段 `security.reset.lockReason`（`{count}`/`{max}` 插值）、`security.reset.lockedActionState`、`security.reset.reinitiate`（整句「解锁后需重新发起并重新确认，原操作不会自动执行。」）、`security.reset.recovery`，真值以 `lib/i18n/messages/business.zh-CN.json` 为准。
+`security/unlock-panel-notice.test.ts:60-73` 按目录真值逐条断言这四段，并用字面量 `REINITIATE` 夹住 `reinitiate` 的整句（`:70`、`:82`、`:132`）；`data-unlock-reinitiate` 挂在承载该整句的 `<p>` 上、两种熔断状态都存在（`:75-83`、`:98-126`）。
+`unlock-panel-render.test.ts` 只切断面形态：`data-unlock-*`、单一验证码输入、`role="status"`、不外泄内部诊断；`pages.security.unlockDescription` 与 `chat.error.actionLocked` 的「重新发起操作」半边仍由它断言（`:84-98`）。本目录没有任何用例驱动 `POST /api/security/reset`（路由见 `app/security-workflow-http.test.ts`）：两个解锁面板用例都只做静态渲染。
+解锁面板在两种熔断状态下都渲染常驻 `role="status"` live region（`unlock-panel-render.test.ts:117` ↔ `app/security/UnlockPanel.tsx:213`），因此在 `/security` 上做页面级 `[role="status"]` 扫描会连带面板文本（对照 `tests/e2e/helpers.ts:1197`）。
+
+## 恢复、租约与任务控制的覆盖
+
+本目录没有任何用例改写 `AgentRun.leaseExpiresAt`、`AgentSession.runLeaseExpiresAt`、`recoveryAttempts`、`nextRecoveryAt`，也没有 `vi.useFakeTimers`（唯一持有者 `planner/action-contract.test.ts`）。
+租约过期与进程重启的真实时间取值改写位于 `../integration/`（`agent-durability.test.ts`、`model-checkpoint-boundaries.test.ts`、`confirmation-lease-contention.test.ts`、`process-restart.test.ts`）。
+
+| 文件 | 覆盖 | 数据库 |
+| --- | --- | --- |
+| `agent/recovery-worker.test.ts` | 恢复宿主 worker 的 tick、停机、忙租约 `CONFLICT`、终态冲突、异常脱敏、批大小与 CLI 参数 | 纯：`vi.mock('@/agent/durable/service')`、`vi.mock('@/lib/db/repositories/agentRun')`，注入 `{ discover, recover, inspect? }` ports |
+| `agent/durable-reply-repair.test.ts` | 已完成的纠错回复崩溃后按持久化阶段重放、不再耗模型请求、记为 `phase:'fallback'` | 纯：mock `@/lib/db/client` + 假 `BankingAgentRuntime` + `encodeCheckpoint` |
+| `agent/durable-advice-context.test.ts` | 可信建议在某次授权恢复后仍生效；换用户消息后复活即 `CONFLICT` | 纯（同上骨架） |
+| `agent/write-continuation-durable.test.ts` | 持久化续接的 `calls.length === 0` 分支与前台上限一致 | 纯（同上骨架） |
+| `agent/write-continuation.test.ts` | `declaredWriteTools`/`hasWriteEvidence`/`pendingDeclaredWrites` 与一次性续接预算 | 纯 |
+| `agent/task-control.test.ts` | `submit_plan` 持久化、`getTaskPlan`/`pauseTask`/`resumeTask`/`cancelTask`/`retryTask` 所有权，以及 `pending` 任务的 pause→resume→cancel | 真实 SQLite（`resetDatabase`） |
+| `agent/task-cancel-revokes.test.ts` | 取消撤销已停靠 `PendingAction`、取消/确认竞态至多一次副作用、取消不伪造回滚 | 真实 SQLite（`resetDatabase`） |
+| `planner/executor-execution-right.test.ts` | `AgentTask.executionToken` 被接管后，四个异步栅栏拒绝旧持有者 | 真实 SQLite（`useFreshDatabase`） |
+| `planner/executor-claim-scope.test.ts` | 节点执行按 `(taskId, nodeId)` 的数据库 CAS 去重，非进程内 Map | 真实 SQLite（`useFreshDatabase`） |
+| `planner/lifecycle.test.ts` | 计划 pause、cancel+补偿、retry、门控节点 resume | 纯（内存 ports） |
+| `planner/task-node-error-contract.test.ts` | `updateTaskNode` 的 `P2025` → `NOT_FOUND` + `detail` | 纯（mock prisma client） |
+| `lib/pendingAction.claim.test.ts` | `claimPendingAction` 恰好一次 `pending → confirmed`、作用域与状态更新 | 真实 SQLite（`resetDatabase`） |
+
+计划级接管用 `executor-execution-right.test.ts` 的 `takeover()` 旋转 `executionToken`；它不是 agent-run 租约接管。
+`planner/lifecycle.test.ts#resumePlan(plan, { nodeId, outcome }, deps, { now })` 是唯一的纯门控节点 resume 用例，不触库。
+`@/agent/task-control` 层面（注入 `runTool` 的 `resumeTask`/`retryTask`）对 `waiting_confirmation` 任务没有直接用例：`agent/task-control.test.ts` 的 resume 针对 `pending` 任务，`agent/task-cancel-revokes.test.ts` 只经 `confirmAction` → `resumeTaskForAction` 间接恢复停靠节点。
+`agent/**/*.test.ts` 另有 20 个同置套件（含 `durable/service`、`durable/recovery`、`durable/retry-policy`、`durable/control-recovery`），由根 `vitest.config.ts` 的 `agent/**` include 收集，不在本目录。
 
 ## 执行与修改
 

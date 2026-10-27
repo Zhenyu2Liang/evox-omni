@@ -7,7 +7,7 @@ const timestamp = z.number().int().min(-8_640_000_000_000_000).max(8_640_000_000
 const decimal = z.string().regex(/^-?\d+(?:\.\d+)?$/);
 const money = z.string().regex(/^-?\d+\.\d{2}$/);
 const tier = z.enum(['GREEN', 'YELLOW', 'RED']);
-const errorCode = z.enum(['VALIDATION', 'NOT_FOUND', 'INSUFFICIENT_FUNDS', 'LIMIT_EXCEEDED', 'SECURITY_DENIED', 'MFA_FAILED', 'CIRCUIT_OPEN', 'CONFLICT', 'TOOL_FAILED', 'INTERNAL']);
+const errorCode = z.enum(['VALIDATION', 'NOT_FOUND', 'INSUFFICIENT_FUNDS', 'LIMIT_EXCEEDED', 'SECURITY_DENIED', 'MFA_FAILED', 'MFA_LOCKED', 'CIRCUIT_OPEN', 'CONFLICT', 'TOOL_FAILED', 'INTERNAL']);
 const actionStatus = z.enum(['pending', 'awaiting_mfa', 'confirmed', 'executed', 'failed', 'cancelled', 'locked', 'needs_reconciliation']);
 const action = z.object({
   actionId: id.optional(), title: z.string(), toolName: id, tier,
@@ -18,7 +18,8 @@ const action = z.object({
 const toolEvent = z.object({
   toolCallId: id, toolName: id, messageId: id.optional(), actionId: id.optional(), tier: tier.optional(),
   status: z.enum(['started', 'updated', 'success', 'error', 'blocked', 'cancelled', 'needs_reconciliation']),
-  label: z.string().optional(), summary: z.string().optional(), errorCode: errorCode.optional(), debugDetail: z.string().optional(),
+  label: z.string().optional(), summary: z.string().optional(), errorCode: errorCode.optional(),
+  errorParams: z.record(z.string(), z.union([z.string(), z.number()])).optional(), debugDetail: z.string().optional(),
   debugArguments: z.unknown().optional(),
 });
 const plan = z.object({
@@ -76,7 +77,7 @@ const card = z.discriminatedUnion('type', [
   z.object({ type: z.literal('error'), message: z.string(), code: errorCode.optional() }),
 ]);
 const message = z.object({ id, role: z.enum(['user', 'assistant', 'system', 'tool']), content: z.string(), timestamp,
-  retryRequest: z.string().optional(), cards: z.array(card).optional(), toolEvents: z.array(toolEvent).optional() }).superRefine((value, context) => {
+  financialSummary: z.string().optional(), retryRequest: z.string().optional(), cards: z.array(card).optional(), toolEvents: z.array(toolEvent).optional() }).superRefine((value, context) => {
   if (value.role === 'tool' && (value.content !== '' || value.toolEvents?.length !== 1 ||
       value.toolEvents[0].messageId !== value.id)) {
     context.addIssue({ code: 'custom', message: 'A tool row must identify exactly one call and contain no prose.' });
@@ -97,7 +98,9 @@ const event = z.discriminatedUnion('type', [
   z.object({ type: z.literal('confirmation_required'), actionId: id, action }),
   z.object({ type: z.literal('mfa_required'), actionId: id, action: action.optional(), hint: z.string().optional() }),
   z.object({ type: z.literal('action_settled'), actionId: id, status: actionStatus, message: z.string().optional() }),
-  z.object({ type: z.literal('security_event'), kind: id, message: z.string() }),
+  z.object({ type: z.literal('security_event'), kind: id, code: z.string().optional(), reason: z.string().optional(),
+    actionId: id.optional(), attemptsLeft: z.number().int().nonnegative().optional(),
+    maxAttempts: z.number().int().nonnegative().optional(), message: z.string().optional() }),
   z.object({ type: z.literal('error'), message: z.string(), code: errorCode.optional() }),
   z.object({ type: z.literal('done') }),
 ]);

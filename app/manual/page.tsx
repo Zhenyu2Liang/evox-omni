@@ -28,7 +28,7 @@ function ReviewForm({ title, handoff = false, onSubmit, busy, mayRetry, mayResum
     <label className="block text-sm font-medium">{label}
       <textarea aria-label={t('tasks.manual.formLabel', { label, title })} value={text} onChange={(e) => setText(e.target.value)}
         maxLength={handoff ? 1000 : 2000} rows={3}
-        className="mt-2 w-full rounded-xl border border-gray-300 p-3 font-normal" placeholder={t('tasks.manual.placeholder')} />
+        className="bank-input mt-2 w-full rounded-xl border border-gray-300 p-3 font-normal" placeholder={t('tasks.manual.placeholder')} />
     </label>
     <div className="flex flex-wrap gap-2">
       <Button loading={busy} disabled={!mayStop || text.trim().length < 5} onClick={() => void onSubmit(text, 'stop')}>
@@ -47,7 +47,7 @@ export default function ManualPage() {
   const { enabled, pending, setEnabled } = useDeveloperMode();
   if (enabled) return <ManualReviewInboxPage />;
   return <main className="mx-auto w-full min-w-0 max-w-6xl p-4 sm:p-6 lg:p-8">
-    <section className="rounded-2xl border border-slate-200 bg-white p-6">
+    <section className="rounded-2xl border border-banking-border bg-banking-surface p-6">
       <h1 className="text-xl font-semibold text-banking-deep">{t('tasks.manual.title')}</h1>
       <p className="mt-3 text-sm text-banking-navy">{t('tasks.manual.developerRequired')}</p>
       <button type="button" disabled={pending} onClick={() => setEnabled(true)} className="mt-5 min-h-11 rounded-xl bg-banking-accent px-4 text-sm font-semibold text-white disabled:opacity-60">{t('app.enableDeveloperMode')}</button>
@@ -102,11 +102,11 @@ function ManualReviewInboxPage() {
       <h1 className="text-2xl font-semibold tracking-tight text-banking-deep">{t('tasks.manual.title')}</h1>
       <p className="mt-1 text-sm text-banking-navy">{t('tasks.manual.description', { operator: inbox?.operatorName ?? t('tasks.manual.checkingSession') })}</p>
     </header>
-    <div className="flex flex-wrap gap-4 text-sm"><Link href="/agent" className="text-banking-accent underline">{t('tasks.manual.returnToAssistant')}</Link>
-      <Link href="/audit" className="text-banking-accent underline">{t('tasks.manual.viewAudit')}</Link>
+    <div className="flex flex-wrap gap-4 text-sm"><Link href="/agent" className="text-banking-interactive underline">{t('tasks.manual.returnToAssistant')}</Link>
+      <Link href="/audit" className="text-banking-interactive underline">{t('tasks.manual.viewAudit')}</Link>
       <Button variant="ghost" disabled={busy} onClick={() => void act(async () => { await load(); })}>{t('tasks.approvals.refresh')}</Button></div>
-    {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-red-700">{isMessageKey(error) ? t(error) : error}</p>}
-    {notice && <p role="status" className="rounded-xl bg-blue-50 p-3 text-banking-accent">{t(notice)}</p>}
+    {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-banking-danger">{isMessageKey(error) ? t(error) : error}</p>}
+    {notice && <p role="status" className="rounded-xl bg-banking-neutral p-3 text-banking-interactive">{t(notice)}</p>}
     {!inbox && !error && <p>{t('tasks.approvals.loading')}</p>}
     {inbox && inbox.candidates.length === 0 && inbox.reviews.length === 0 && <p>{t('tasks.manual.empty')}</p>}
     {inbox?.reviews.map((review) => <section key={review.id} data-review-id={review.id}>
@@ -121,7 +121,7 @@ function ManualReviewInboxPage() {
             mayResume={review.mayResume} mayStop={review.mayStop}
             onSubmit={(text, resolution) => resolve(review, text, resolution)} /> : <>
             <p className="text-sm">{t('tasks.manual.notes', { notes: review.notes ?? '' })}</p>
-            <p className="text-xs text-gray-500">{t('tasks.manual.resolvedAt', { time: review.resolvedAt ? new Date(review.resolvedAt).toLocaleString(locale) : '' })}</p>
+            <p className="text-banking-caption text-banking-navy">{t('tasks.manual.resolvedAt', { time: review.resolvedAt ? new Date(review.resolvedAt).toLocaleString(locale) : '' })}</p>
             <p className="text-sm">{t(review.resolution === 'retry' ? 'tasks.manual.retryResolution'
               : review.resolution === 'resume' ? 'tasks.manual.resumeResolution' : 'tasks.manual.stopResolution')}</p>
             {review.resolution === 'retry' && review.mayRetry && <Button disabled={busy} variant="secondary"

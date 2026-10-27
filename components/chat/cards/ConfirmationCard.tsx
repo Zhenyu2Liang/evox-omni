@@ -109,9 +109,9 @@ export function ConfirmationCard(p: ConfirmationCardProps) {
       <ActionDetails action={action} />
 
       {terminalView?.explanation ? (
-        <p className="mt-3 text-sm text-banking-navy/70">{terminal === 'needs_reconciliation' ? t('cards.terminal.reconciliationExplanation') : terminalView.explanation}</p>
+        <p className="mt-3 text-sm text-banking-navy">{terminal === 'needs_reconciliation' ? t('cards.terminal.reconciliationExplanation') : terminalView.explanation}</p>
       ) : null}
-      {developerMode && reason ? <details className="mt-3 text-xs text-banking-navy">
+      {developerMode && reason ? <details className="mt-3 text-banking-caption text-banking-navy">
         <summary>{t('chat.diagnostics.detail')}</summary>
         <pre className="mt-1 whitespace-pre-wrap break-words">{String(sanitizeToolArguments(reason))}</pre>
       </details> : null}

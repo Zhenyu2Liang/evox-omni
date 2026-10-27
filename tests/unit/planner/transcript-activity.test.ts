@@ -16,6 +16,22 @@ const message: ChatMessage = { id: 'message-1', role: 'assistant', content: '', 
   toolEvents: [{ toolCallId: 'call-1', toolName: 'list_subscriptions', status: 'started' }] };
 
 describe('authoritative historical activity', () => {
+  it('enriches an old investment receipt without duplicating it or changing the saved record', () => {
+    const receipt = { kind: 'investmentRedemption' as const, success: true, amount: '103.57', newBalance: '24683.57', occurredAt: 100 };
+    const old: ChatMessage = { ...message, cards: [{ type: 'receipt', data: receipt }],
+      toolEvents: [{ toolCallId: 'call-1', toolName: 'redeem_investment', status: 'started' }] };
+    const data = { success: true, amount: receipt.amount, newBalance: receipt.newBalance, occurredAt: 100,
+      productName: '稳健理财A', remainingShares: '3934.334266' };
+    const evidence = { ...action, toolName: 'redeem_investment', resultJson: JSON.stringify({ ok: true, data }) };
+    const view = projectTranscriptActivity([old], new Map([['message-1', 'run-1']]),
+      [{ ...invocation, toolName: 'redeem_investment' }], [evidence]);
+    const receipts = view[0].cards?.filter(card => card.type === 'receipt');
+    expect(receipts).toHaveLength(1);
+    expect(receipts?.[0]).toMatchObject({ data: { ...receipt, productName: '稳健理财A', remainingShares: '3934.334266' } });
+    expect(old.cards?.[0]).toEqual({ type: 'receipt', data: receipt });
+    expect(projectTranscriptActivity(view, new Map([['message-1', 'run-1']]), [{ ...invocation, toolName: 'redeem_investment' }], [evidence])[0].cards?.filter(card => card.type === 'receipt')).toHaveLength(1);
+  });
+
   it('restores a completed authorization from its exact invocation without changing the archive', () => {
     const projected = projectTranscriptActivity([message], new Map([['message-1', 'run-1']]), [invocation], [action]);
     expect(projected[0].toolEvents?.[0]).toMatchObject({ actionId: 'action-1', status: 'success', summary: 'Six active subscriptions' });

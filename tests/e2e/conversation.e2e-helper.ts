@@ -5,6 +5,39 @@ import regressions from '../fixtures/dialogue-regressions.zh-CN.json';
 import advisory from '../fixtures/advisory-policy.zh-CN.json';
 import incomplete from '../fixtures/incomplete-reply.zh-CN.json';
 import { assertLatestHistory, renderedHistory } from './history-assertions.e2e-helper';
+import { moneyToCents } from '../../lib/money';
+import { withDb } from './live-virtual-card.e2e-helper';
+
+/** Topic isolation must still allow an explicitly resumed request to reach a fresh human gate. */
+export async function journeyExplicitDraftResume(browser: Browser, baseUrl: string): Promise<string> {
+  return withPage(browser, async page => {
+    await gotoAgent(page, baseUrl);
+    const balance = (await fetchDashboardSummary(baseUrl)).checkingBalance;
+    const ledger = await fetchLedger(baseUrl);
+    await completedReply(page, prompts.draftTransfer);
+    const chat = await completedReply(page, prompts.smallTalk);
+    if (chat.includes(prompts.recipient) || (await fetchPendingActions(baseUrl)).length) {
+      throw new Error('Small talk revived the unsubmitted draft');
+    }
+    await submitChat(page, '请继续刚才给张伟的转账，金额明确为201.37元，从默认活期账户付款，请现在发起并等待我确认。');
+    await waitForConfirmCard(page, 90_000);
+    const actionId = await page.locator(SELECTORS.approvalRequest).getAttribute('data-action-id');
+    if (!actionId) throw new Error('The explicitly resumed request has no fresh authorization');
+    const row = await withDb(db => db.pendingAction.findUniqueOrThrow({ where: { id: actionId } }));
+    const args = JSON.parse(row.argsJson);
+    if (row.toolName !== 'transfer_money' || args.contactId !== 'contact_zhangwei' || moneyToCents(args.amount) !== 20137n) {
+      throw new Error('Explicit resumption changed its recipient or amount');
+    }
+    if ((await fetchDashboardSummary(baseUrl)).checkingBalance !== balance) throw new Error('Resumption paid before confirmation');
+    await captureScreenshot(page, 'explicit-draft-resumption-confirmation');
+    await clickConfirm(page);
+    await waitFor(async () => moneyToCents((await fetchDashboardSummary(baseUrl)).checkingBalance) === moneyToCents(balance) - 20137n,
+      { timeoutMs: 120_000, description: 'Explicitly resumed transfer commits once after confirmation' });
+    const change = diffLedger(ledger.transactions, (await fetchLedger(baseUrl)).transactions);
+    if (change.added.length !== 1 || change.removed.length) throw new Error('Explicit resumption produced duplicate or missing ledger entries');
+    return `A suspended draft stayed inactive during small talk; explicit resumption created ${actionId} for Zhang Wei / 201.37, with one confirmed debit.`;
+  }, { label: 'explicit-draft-resumption' });
+}
 import { SELECTORS, assistantTexts, captureScreenshot, diffLedger, fetchCards, fetchDashboardSummary,
   fetchLedger, fetchPendingActions, getJson, gotoAgent, submitChat, waitFor, waitForComposerHydration,
   clickConfirm, waitForConfirmCard, withPage } from './helpers';
@@ -198,6 +231,9 @@ export async function journeyNaturalConversation(browser: Browser, baseUrl: stri
       if (prompts.abandonedDraftPhrases.some(phrase => reply.includes(phrase))) {
         throw new Error(`An ordinary answer solicits parameters for an abandoned draft: ${reply}`);
       }
+      if ([prompts.smallTalk, prompts.scheduleQuestion].includes(request) && reply.includes(prompts.recipient)) {
+        throw new Error(`An unrelated topic still mentions the old draft recipient: ${reply}`);
+      }
       if (await page.getByRole('button', { name: t('cards.confirm'), exact: true }).count() ||
         await page.locator(SELECTORS.mfaInput).count() ||
         await page.getByText(t('cards.plan.title'), { exact: true }).count() !== planCount ||
@@ -206,7 +242,9 @@ export async function journeyNaturalConversation(browser: Browser, baseUrl: stri
       }
     }
     const funding = answers[0];
-    if (![prompts.checkingAccount, prompts.defaultAccount, prompts.explicitAccount].every(word => funding.includes(word))) {
+    // Equivalent Chinese account-choice wording must not turn a correct live answer into a failure.
+    const explicitChoice = funding.includes(prompts.explicitAccount) || /选定|选择|选用/.test(funding);
+    if (![prompts.checkingAccount, prompts.defaultAccount].every(word => funding.includes(word)) || !explicitChoice) {
       throw new Error(`The funding explanation omits the checking default or explicit account choice: ${funding}`);
     }
     if (!answers[2].includes(prompts.scheduledTask) ||

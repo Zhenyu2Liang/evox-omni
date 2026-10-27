@@ -8,14 +8,14 @@
  * is derived from the analysed month.
  *
  * Composes `@/components` (read-only sibling): charts `SpendingPie`/`SpendingBar`/`SpendingTrend`/
- * `MiniSparkline`, `ui/Table` (ledger), `banking/AnomalyBanner` (flagged spends), `ui/Card`/`ui/Money`/
+ * `ui/Table` (ledger), `banking/AnomalyBanner` (flagged spends), `ui/Card`/`ui/Money`/
  * `ui/EmptyState`. Money is rendered by `ui/Money`; props stay JSON-serializable (epoch ms).
  */
 import { getConfig } from '@/lib/config';
 import { formatDateTime, monthRange } from '@/lib/date';
 import { banking } from '@/banking-sdk';
 import type { AnomalyItem, SpendingAnalysis, TransactionView } from '@/banking-sdk';
-import { AnomalyBanner, Card, EmptyState, MiniSparkline, Money, SpendingBar, SpendingPie, SpendingTrend, Table } from '@/components';
+import { AnomalyBanner, Card, EmptyState, Money, SpendingBar, SpendingPie, SpendingTrend, Table } from '@/components';
 import type { TableColumn } from '@/components';
 import { compareDecimal } from '@/lib/decimal';
 import { formatCNY } from '@/lib/money';
@@ -62,32 +62,32 @@ export default async function BillsPage({ searchParams }: BillsPageProps) {
     <main className="mx-auto flex w-full min-w-0 max-w-6xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-banking-deep">{t('pages.bills.title')}</h1>
+          <h1 className="bank-page-heading text-2xl font-semibold tracking-tight text-banking-deep">{t('pages.bills.title')}</h1>
           <p className="mt-1 text-sm text-banking-navy">
             {t('pages.bills.summary', { month: analysis.month, transactions: transactions.length, anomalies: anomalies.length, total: formatCNY(analysis.total) })}
           </p>
         </div>
         <form className="flex items-center gap-2" method="get">
           <label htmlFor="month" className="text-sm text-banking-navy">{t('pages.bills.selectMonth')}</label>
-          <input id="month" type="month" name="month" defaultValue={analysis.month} className="rounded-lg border border-banking-light px-2 py-1 text-sm text-banking-navy" />
-          <button type="submit" className="rounded-lg bg-banking-accent px-3 py-1 text-sm text-white">{t('pages.bills.view')}</button>
+          <input id="month" type="month" name="month" defaultValue={analysis.month} className="bank-input rounded-lg border border-banking-accent/15 bg-banking-surface px-2 py-1 text-sm text-banking-navy" />
+          <button type="submit" className="rounded-lg bg-banking-accent px-3 py-1 text-sm text-white hover:bg-banking-accent/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-banking-accent">{t('pages.bills.view')}</button>
         </form>
       </header>
 
       <section className="grid gap-4 sm:grid-cols-3">
         <Card title={t('pages.bills.bookedSpending')}>
           <Money amount={analysis.total} className="text-2xl font-semibold text-banking-deep" />
-          <p className="mt-1 text-xs text-banking-navy">
+          <p className="mt-1 text-banking-caption text-banking-navy">
             {t('pages.bills.monthComparison', { change: `${compareDecimal(analysis.momChangePct, '0') > 0 ? '+' : ''}${analysis.momChangePct}`, total: formatCNY(analysis.prevTotal) })}
           </p>
         </Card>
         <Card title={t('pages.bills.largestTransaction')}>
           <Money amount={analysis.largest?.amount ?? '0.00'} signed className="text-2xl font-semibold text-banking-deep" />
-          <p className="mt-1 text-xs text-banking-navy">{analysis.largest?.merchant ?? t('pages.bills.noSpending')}</p>
+          <p className="mt-1 text-banking-caption text-banking-navy">{analysis.largest?.merchant ?? t('pages.bills.noSpending')}</p>
         </Card>
         <Card title={t('pages.bills.topMerchant')}>
           <Money amount={analysis.topMerchant?.amount ?? '0.00'} className="text-2xl font-semibold text-banking-deep" />
-          <p className="mt-1 text-xs text-banking-navy">{analysis.topMerchant?.merchant ?? t('pages.bills.noSpending')}</p>
+          <p className="mt-1 text-banking-caption text-banking-navy">{analysis.topMerchant?.merchant ?? t('pages.bills.noSpending')}</p>
         </Card>
       </section>
 
@@ -96,7 +96,6 @@ export default async function BillsPage({ searchParams }: BillsPageProps) {
         <Card title={t('pages.bills.categoryAmounts')}><SpendingBar data={analysis.byCategory} height={240} /></Card>
         <Card title={t('pages.bills.sixMonthTrend')} className="lg:col-span-2">
           <SpendingTrend data={analysis.monthlyTrend} height={220} />
-          <MiniSparkline data={analysis.monthlyTrend.map((point) => point.amount)} height={40} className="mt-2" />
         </Card>
       </section>
 

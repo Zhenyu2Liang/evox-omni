@@ -27,7 +27,7 @@
 
 供应商请求和响应另有服务端审计记录。
 记录关联实际模型请求，包含请求正文与流结束证据。
-旧截图没有保存 `[DONE]` 证据，尚不能确定真正根因。
+记录缺失时，页面只提示传输未完成，不推断根因。
 
 聊天表单在客户端事件处理就绪前保持禁用。
 页面恢复查询最多等待 5 秒，覆盖请求和 JSON 解码。
@@ -122,7 +122,7 @@ JSON 封套须能完整解析，并符合协议结构。
 正常使用持续保存完整对话和原始模型消息。
 显示分页和模型上下文压缩不删除归档记录。
 聊天页首次显示最近 20 条消息。
-用户可点击“加载更早的消息”，每次读取前 20 条。
+用户可点击“加载更早记录”，每次读取前 20 条。
 消息按原顺序显示，加载后保留当前阅读位置。
 每次工具调用占 1 条独立记录。
 记录包含业务名称、状态和该调用的结果卡片。
@@ -165,7 +165,7 @@ JSON 封套须能完整解析，并符合协议结构。
 | `get_transactions` | 商户、分类、时间和有符号金额。 |
 | `search_contact` | 匹配的联系人、脱敏手机号和银行。 |
 | `analyze_spending` | 消费合计、分类、趋势和商户。 |
-| `detect_anomaly` | 异常消费和可执行的处理入口。 |
+| `detect_anomaly` | 可疑交易、风险等级和原因，以及标记、明细和冻结卡片的入口。 |
 | `get_dashboard_summary` | 资产概览和查询时间。 |
 | `get_cards` | 卡片状态、脱敏卡号和额度。 |
 | `set_card_limit`、`freeze_card`、`unfreeze_card` | 更新后的卡片信息。 |
@@ -173,12 +173,33 @@ JSON 封套须能完整解析，并符合协议结构。
 | `list_subscriptions` | 订阅价格、周期、扣费日期和提醒。 |
 | `cancel_subscription`、`set_subscription_reminder` | 更新后的订阅状态和提醒。 |
 | `list_investments`、`compare_investments` | 产品、风险、收益率、期限和起购金额。 |
-| `get_investment_holdings` | 持仓状态、本金及已提供的估值。 |
-| `subscribe_investment`、`redeem_investment` | 金额、操作后余额、时间和结算凭证。 |
-| `reserve_budget` | 预算名称、金额、用途和截止时间。 |
-| `list_scheduled_tasks`、`create_scheduled_task` | 名称、计划时间、状态和确认要求。 |
+| `get_investment_holdings` | 持仓份额、最新净值与净值日期、市值、剩余持仓成本、持仓收益、持仓收益率、累计收益、已实现收益和状态；市值按份额乘最新净值推导，无份额或无净值时保留有效历史估值并标注“待核对”，缺少历史估值才回退成本，此时不展示持仓收益、持仓收益率和累计收益。 |
+| `subscribe_investment`、`redeem_investment` | 结算回执（金额、操作后余额、记录时间和结算凭证）以及提交后重读的持仓卡片。 |
+| `reserve_budget` | 预算名称、金额、状态、用途和截止时间；卡片注明该记录不扣款、不冻结余额。 |
+| `list_scheduled_tasks`、`create_scheduled_task` | 名称、类型、计划时间、状态和确认要求。 |
 | `transfer_money` | 收款人、转账金额和操作后余额。 |
 | `submit_plan` | 工作流步骤、状态和控制入口。 |
+
+理财写入的持仓卡片来自写入提交后的重读。
+`agent/tools/investment.ts#withHoldings` 只在写入提交后重新读取该用户的持仓。
+`agent/card-emitter.ts#toCards` 把重读结果作为同一次调用的持仓卡片排在结算回执之后，与 `get_investment_holdings` 使用同一份持仓数据。
+重读结果不可用时只展示结算回执：写入已经提交，不补造空持仓列表，也不追加错误卡片。
+写前的持仓快照永远不会成为写入后的最新持仓卡片。
+重读结果为空时展示没有持仓的空状态。
+份额、净值、净值日期、市值、剩余持仓成本、持仓收益、持仓收益率、累计收益和已实现收益只由 `components/banking/HoldingFacts.tsx` 渲染，`card` 和 `tile` 只切换布局。
+缺失的事实显示“历史数据不足”，不用 0 补齐；无份额或无净值时保留有效历史估值并标注“待核对”，缺少历史估值才回退成本，此时不展示持仓收益、持仓收益率和累计收益。
+合计只对状态为持有的持仓求和；任一笔持仓缺少市值或持仓收益时，不展示对应的合计。
+收益口径说明只对全部按净值模型计值的持仓展示。
+净值口径、份额与收益规则见[理财净值、份额与收益口径](investments.md)。
+
+卡片只展示脱敏卡号和卡片事实。
+`linkedAccountStatus` 为 `LINKED` 时展示关联账户名称、脱敏号码、账户余额和可用余额。
+`MISSING`、`UNTRUSTED` 时不展示任何余额字段，只给出绑定异常的说明。
+`NOT_APPLICABLE` 时不展示关联账户，保留信用额度和可用额度。
+`usable` 为假时展示不可用说明；`FROZEN`、`LOST` 仍展示真实账户余额。
+同一账户的多张虚拟卡共享该账户余额，资产合计只计一次。
+掩码和尾号只用于缩小候选，不作为身份；身份只匹配完整号码或已持有的精确标识。
+绑定、共享余额与身份判定规则见[卡片管理](card-management.md)和[身份判定](identity-resolution.md)。
 
 需要确认或验证时，在输入区上方展示请求面板。
 实际执行完成后，再展示对应结果卡片。
@@ -246,7 +267,11 @@ JSON 封套须能完整解析，并符合协议结构。
 已有结果卡片时，不重复展开成功摘要。
 未知工具使用通用业务名称，不显示原始工具名。
 确认请求保留收款人、金额和风险等级。
-锁定是授权操作的终态，页面不再显示验证输入。
+锁定是授权操作的终态，页面不再显示验证输入，也不再为该操作展示确认或验证面板。
+顶层 `CIRCUIT_OPEN` 按 `failure.reason` 区分：`mfa_attempts_exhausted` 渲染 `chat.error.actionLocked`，`circuit_open` 和 `mfa_session_locked` 渲染 `chat.error.securityLocked`。
+人工复核期间的确认、验证和取消只渲染 `chat.error.manualReviewHold`，不使用“业务状态已变化”的提示。
+剩余次数只由 `lib/public-text.ts#securityNotice` 渲染，`securityNoticeParams` 的 `attemptsLeft ?? 0` 是唯一默认值，负值原样显示。
+`__SECURITY_BLOCK__` 载荷、JSON 片段和栈帧等内部标记永不进入公开文案；`lib/internal-text.ts#isInternalDiagnostic` 是唯一判定，`lib/public-text.ts` 是唯一出口。
 延迟的确认或验证事件不能重新打开已结束操作。
 回复事件、消息内容和卡片数据先校验，再展示。
 无法读取的格式显示错误提示，不直接传入卡片组件。

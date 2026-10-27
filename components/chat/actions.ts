@@ -29,7 +29,7 @@
  */
 import type { AgentStreamEvent, ChatTurnRequest, ChatTurnResponse } from '@/lib/contracts/agent';
 import type { RiskLevel } from '@/lib/contracts/risk';
-import type { PendingActionStatus, PendingActionSummary } from '@/lib/contracts/security';
+import type { PendingActionStatus, PendingActionSummary, SecurityFailureReason } from '@/lib/contracts/security';
 import type { TaskPlan } from '@/lib/contracts/task';
 import { isCatalogToolName } from '@/lib/contracts/tool-catalog';
 import { createRequestId, RequestIdUnavailableError } from './request-id';
@@ -60,6 +60,48 @@ export const DEFAULT_ENDPOINTS: ChatEndpoints = {
   actions: '/api/actions',
   history: '/api/chat/history',
 };
+
+/** Server-owned security-failure reasons (`lib/contracts/security`). */
+const SECURITY_FAILURE_REASONS: readonly SecurityFailureReason[] = [
+  'mfa_code_invalid', 'mfa_attempts_exhausted', 'mfa_session_locked', 'circuit_open',
+  'manual_review_hold', 'denied',
+];
+
+/** A non-negative integer attempt count, else `undefined`. */
+function asCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+/** The TYPED refusal facts an action response may carry — never its message text. */
+interface SecurityFacts {
+  code?: string;
+  reason?: SecurityFailureReason;
+  attemptsLeft?: number;
+  maxAttempts?: number;
+}
+
+/**
+ * Read the optional structured refusal facts of an action response (top-level `code` / `attemptsLeft`
+ * / `maxAttempts` and the nested `failure`). Unrecognised values are dropped instead of failing the
+ * whole response, and no free-form text is retained: these facts alone drive the public notice.
+ */
+function securityFacts(record: Record<string, unknown>): SecurityFacts {
+  const raw = record.failure;
+  const failure = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : undefined;
+  const code = typeof record.code === 'string' && record.code.trim() !== '' ? record.code
+    : typeof failure?.code === 'string' && failure.code.trim() !== '' ? failure.code : undefined;
+  const reason = typeof failure?.reason === 'string' &&
+    (SECURITY_FAILURE_REASONS as readonly string[]).includes(failure.reason)
+    ? failure.reason as SecurityFailureReason : undefined;
+  const attemptsLeft = asCount(record.attemptsLeft) ?? asCount(failure?.attemptsLeft);
+  const maxAttempts = asCount(record.maxAttempts) ?? asCount(failure?.maxAttempts);
+  return {
+    ...(code !== undefined ? { code } : {}),
+    ...(reason !== undefined ? { reason } : {}),
+    ...(attemptsLeft !== undefined ? { attemptsLeft } : {}),
+    ...(maxAttempts !== undefined ? { maxAttempts } : {}),
+  };
+}
 
 /** Generic, user-facing failure text used when no safer message is available. */
 const GENERIC_ERROR = '请求失败，请稍后重试';
@@ -220,7 +262,7 @@ function unwrapEnvelope(json: unknown): { data?: unknown; errorMessage?: string;
       if (!error || typeof error !== 'object' || Array.isArray(error)) return { errorMessage: GENERIC_ERROR };
       const detail = error as Record<string, unknown>;
       const code = typeof detail.code === 'string' && ['VALIDATION', 'NOT_FOUND', 'INSUFFICIENT_FUNDS', 'LIMIT_EXCEEDED',
-        'SECURITY_DENIED', 'MFA_FAILED', 'CIRCUIT_OPEN', 'CONFLICT', 'TOOL_FAILED', 'INTERNAL'].includes(detail.code) ? detail.code as ErrorCode : undefined;
+        'SECURITY_DENIED', 'MFA_FAILED', 'MFA_LOCKED', 'CIRCUIT_OPEN', 'CONFLICT', 'TOOL_FAILED', 'INTERNAL'].includes(detail.code) ? detail.code as ErrorCode : undefined;
       return { errorMessage: code && typeof detail.message === 'string' && detail.message.trim()
         ? detail.message : GENERIC_ERROR, ...(code ? { errorCode: code } : {}) };
     }
@@ -598,6 +640,21 @@ async function postAction(url: string, body: Record<string, unknown>): Promise<C
     const hasErrorEvent = events.some((event) => event.type === 'error');
     if (domainOk === false && !hasErrorEvent) {
       events.push({ type: 'error', message });
+    }
+
+    // A terminal security refusal is reported by TYPED facts only. `action_settled` cannot carry them,
+    // so ONE structured `security_event` is synthesised from the response's `failure` / `code` /
+    // `attemptsLeft` / `maxAttempts`; `./agent-stream-reducer` renders it through `@/lib/public-text`.
+    // No message text is ever put on the event, and a refusal the server already reported for this
+    // action (same kind, or same code) is never duplicated.
+    const security = securityFacts(record);
+    const refusable = status === 'locked' || status === 'failed';
+    if (refusable && (security.code !== undefined || security.reason !== undefined)) {
+      const kind = status === 'locked' ? 'locked' : 'denied';
+      const reported = events.some(event => event.type === 'security_event' &&
+        event.actionId === actionId &&
+        (event.kind === kind || (security.code !== undefined && event.code === security.code)));
+      if (!reported) events.push({ type: 'security_event', kind, actionId, ...security });
     }
 
     // Accepted authorization dismisses the request while its historical record tracks execution.

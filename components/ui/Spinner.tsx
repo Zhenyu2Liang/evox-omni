@@ -24,7 +24,7 @@ export function Spinner({ size = 'md', className }: SpinnerProps) {
       role="status"
       aria-label={t('ui.loading')}
       className={cn(
-        'inline-block animate-spin rounded-full border-2 border-banking-accent border-t-transparent',
+        'inline-block animate-spin rounded-full border-2 border-banking-interactive border-t-transparent',
         SIZE_CLASS[size],
         className,
       )}

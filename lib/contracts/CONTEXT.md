@@ -2,6 +2,15 @@
 
 ## 意图
 
+`ChatMessage.financialSummary` 是可选的服务端展示摘要。
+消息 `content` 仍保留完整原文。
+理财回执增加可选的产品名称、剩余及赎回份额、成交净值和赎回费。
+这些字段由工具结果校验后投影，不从模型文字提取。
+
+`ChatCard` 的 `cards` 分支可携带 `issuanceActionId`。
+该字段只标识发卡凭证，不承载完整卡号。
+普通卡片结果不设置该字段。
+
 本目录只放类型、能力目录与纯归一化函数，不访问数据库、不做权限判定。
 业务执行、安全网关与界面投影由调用层实现。
 
@@ -53,7 +62,9 @@ interface ToolCatalogEntry {
 ## 命令归一化（`command.ts`）
 
 - `BankingCommand.toolName`（8 行）类型为 `ToolName | ManualCardCommandName` —— 手工卡片命令不属于目录工具。
-- `MONETARY_FIELDS`（13 行）：`amount`、`creditLimit`、`monthlyLimit`、`expectedRedemptionAmount`、`redeemAmount`。
+- `MONETARY_FIELDS`（13 行）：`amount`、`creditLimit`、`monthlyLimit`、`expectedSettlementAmount`。
+- `DECIMAL_FIELDS`（14 行）：`shares`、`expectedShares`、`expectedNetValue`，按十进制文本归一化。
+- `redeem_investment`（55 行）描述为按份额或按金额赎回自有持仓，口径字段是 `mode`；`redeemAmount` 与 `expectedRedemptionAmount` 不在字段集合内。
 - `canonicalCommandArgs`（16–22 行）去掉 `idempotencyKey`、递归归一化嵌套对象、把金额字段转十进制字符串。
 - `prepareBankingCommand`（24–28 行）用 `requestDigest({ version:1, userId, toolName, args })` 生成 digest。
 
@@ -72,7 +83,8 @@ interface ToolCatalogEntry {
 ## 安全与风险类型
 
 `risk.ts`：`RiskLevel = 'GREEN' | 'YELLOW' | 'RED'`；`PermissionTier` 为其别名；`TransferPolicy`。
-`security.ts`：`SecurityDecisionKind`、`SecurityEvaluation`、`PendingActionStatus`（含终态 `needs_reconciliation` 与 `locked`）、`PendingAction`、`SecurityDecision`。
+`security.ts`：`SecurityDecisionKind`（`'allow' | 'require_confirmation' | 'require_mfa' | 'deny'`，5 行）、`SecurityEvaluation`（7–17 行）、`PendingActionStatus`（19–35 行，含终态 `locked` 与 `needs_reconciliation`）、`PendingAction`（48–63 行）、`SecurityDecision`（65–71 行，`{kind, tier, evaluation, pendingActionId?, message}`）。
+安全网关的人类授权结果类型 `AuthorizationResult` 不在此目录：定义于 `security/security-gateway.ts:102`（`{ok, status, actionId, tier, requiresMfa, mfaResult?, code?: ErrorCode, message, action?}`）。
 `runtime.ts`：`ReplaySafety`、`ToolReplayPolicy`、`ToolInvocationStatus`、`RetryDecision`、`VerifiedInvocationReceipt`、`WORKFLOW_EXECUTION_LEASE_MS`。
 `agent.ts`：`ChatCard`、`ToolEventView`、`AgentStreamEvent`、`BusinessReceipt`。
 

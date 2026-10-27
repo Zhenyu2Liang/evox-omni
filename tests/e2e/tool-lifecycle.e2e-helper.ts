@@ -1,8 +1,9 @@
 import type { Browser } from 'playwright-core';
+import type { ChatHistoryPage } from '../../lib/contracts/chat-history';
 import { createTranslator } from '../../lib/i18n/shared';
 import { assertLatestHistory, loadHistoryUntil, renderedHistory } from './history-assertions.e2e-helper';
 import { approvalHistory, assertApprovalDock, assertApprovalDockFitsViewport, assertApprovalExecuted, assertChatBubbleAlignment, assertReadOnlyApprovalHistory } from './approval-ux.e2e-helper';
-import { SELECTORS, assistantTexts, captureScreenshot, clickConfirm, gotoAgent, submitChat, waitFor,
+import { SELECTORS, assistantTexts, captureScreenshot, clickConfirm, getJson, gotoAgent, submitChat, waitFor,
   waitForComposerHydration, waitForConfirmCard, withPage } from './helpers';
 
 /** Exercise authorization, later turns and reload against the real event transport and DOM. */
@@ -15,11 +16,11 @@ export async function journeyToolLifecycle(browser: Browser, baseUrl: string): P
     const actionId = await page.locator(SELECTORS.approvalRequest).getAttribute('data-action-id');
     if (!actionId) throw new Error('The subscription approval has no persisted identity');
     await assertApprovalDock(page, actionId, 'confirmation');
-    const blocked = page.locator('[data-message-role="tool"] [data-tool-status="blocked"][data-tool-call-id]');
-    await blocked.first().waitFor();
-    const callId = await blocked.last().getAttribute('data-tool-call-id');
+    const recorded = await getJson<ChatHistoryPage>(`${baseUrl}/api/chat/history`);
+    const savedOwner = recorded.messages.find(message => message.role === 'tool' && message.toolEvents?.some(event => event.actionId === actionId));
+    const callId = savedOwner?.toolEvents?.find(event => event.actionId === actionId)?.toolCallId;
     if (!callId) throw new Error('The gated subscription read has no call identity');
-    const messageId = await blocked.last().evaluate(element => element.closest('[data-message-role="tool"]')?.getAttribute('data-message-id'));
+    const messageId = savedOwner?.id;
     if (!messageId) throw new Error('The gated subscription read has no owning tool message');
     const owner = page.locator(`[data-message-role="tool"][data-message-id="${messageId}"]`);
     const activity = owner.locator(`[data-tool-call-id="${callId}"]`);
@@ -35,7 +36,7 @@ export async function journeyToolLifecycle(browser: Browser, baseUrl: string): P
     await waitForComposerHydration(page);
     await waitForConfirmCard(page);
     await assertApprovalDock(page, actionId, 'confirmation');
-    await loadHistoryUntil(page, async () => await activity.count() > 0);
+    if (await activity.count()) throw new Error('The current permission request is duplicated in transcript activity');
     await clickConfirm(page);
     await waitFor(async () => (await activity.getAttribute('data-tool-status')) === 'success', {
       description: 'The original gated tool becomes successful in its historical message',

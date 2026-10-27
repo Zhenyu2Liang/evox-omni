@@ -14,12 +14,12 @@ export default async function OverviewPage() {
     <main className="mx-auto flex w-full min-w-0 max-w-6xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-banking-deep">{t('pages.overview.title')}</h1>
+          <h1 className="bank-page-heading text-2xl font-semibold tracking-tight text-banking-deep">{t('pages.overview.title')}</h1>
           <p className="mt-1 text-sm text-banking-navy">
             {t('pages.overview.summary', { month: summary.month, count: summary.recentTransactions.length })}
           </p>
         </div>
-        <Link href="/agent" className="rounded-xl bg-banking-accent px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-banking-accent/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-banking-accent">
+        <Link href="/agent" className="rounded-xl bg-banking-accent px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-banking-accent-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-banking-accent">
           {t('pages.overview.askAssistant')}
         </Link>
       </header>

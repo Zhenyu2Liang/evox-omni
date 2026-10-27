@@ -43,6 +43,7 @@
     "Create a scheduled intent.": "chat.policy.create_scheduled_task",
     "Purchase an investment product.": "chat.policy.subscribe_investment",
     "Redeem an owned investment holding.": "chat.policy.redeem_investment",
+    "Redeem an owned investment holding by shares or by amount.": "chat.policy.redeem_investment",
     "Report an owned card lost. A lost card is permanent and cannot be revived.": "chat.policy.report_lost_card",
     "Replace an owned lost card with a new card after confirmation and strong verification.": "chat.policy.replace_card",
     "Unfreeze an owned card.": "chat.policy.unfreeze_card",
@@ -78,7 +79,13 @@
     "入账账户": "chat.field.receivingAccount",
     "执行时间（北京时间）": "chat.field.executionTime",
     "任务类型": "chat.field.taskType",
-    "任务内容": "chat.field.taskContent"
+    "任务内容": "chat.field.taskContent",
+    "赎回份额": "chat.field.redemptionShares",
+    "成交净值": "chat.field.netValue",
+    "净值日期": "chat.field.netValueDate",
+    "预计到账金额": "chat.field.settlementAmount",
+    "费用口径": "chat.field.feeRule",
+    "赎回口径": "chat.field.redemptionMode"
   },
   "tools": {
     "manual_add_card": "pages.cards.add",
@@ -117,7 +124,12 @@
     "保存卡片及月限额配置；Demo 不提供刷卡支付": "chat.value.cardDemoScope",
     "仅保存任务记录，不承诺到期执行": "chat.value.taskDemoScope",
     "开启": "chat.value.enabled",
-    "关闭": "chat.value.disabled"
+    "关闭": "chat.value.disabled",
+    "按份额赎回": "chat.value.redemptionByShares",
+    "按金额赎回": "chat.value.redemptionByAmount",
+    "全部赎回": "chat.value.redemptionAll",
+    "未公布": "chat.value.notPublished",
+    "净值、份额或到账金额变化时停止执行，需重新确认": "chat.value.valuationChange"
   },
   "riskValues": {
     "🟢 绿色": "chat.risk.GREEN",

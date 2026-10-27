@@ -8,12 +8,13 @@ import { formatDateTime } from '@/lib/date';
 import { moneyToCents, normalizeMoney } from '@/lib/money';
 import { useI18n } from '@/lib/i18n/LocaleProvider';
 import type { MessageKey } from '@/lib/i18n/shared';
+import { cardCanConsume, cardSupportsConsumption } from '@/components/banking/card-account-display';
 
 interface Envelope<T> { ok: boolean; data?: T; error?: { code: string; message?: string } }
 interface Notice { key: MessageKey; error: boolean; detail?: string }
 
 const AMOUNT_PATTERN = /^\d+(?:\.\d{1,2})?$/;
-const inputClass = 'mt-1 w-full rounded-xl border border-banking-navy/20 bg-white px-3 py-2.5 text-sm outline-hidden focus:border-banking-accent focus:ring-2 focus:ring-banking-accent/10';
+const inputClass = 'bank-input mt-1 w-full rounded-xl border border-banking-navy/20 bg-banking-surface px-3 py-2.5 text-base sm:text-sm outline-hidden focus:border-banking-accent focus:ring-2 focus:ring-banking-accent/10';
 
 /** Map a spend failure code to its localized message key. */
 function failureKey(code: string | undefined): MessageKey {
@@ -26,6 +27,9 @@ function failureKey(code: string | undefined): MessageKey {
 /**
  * Per-card simulated spend: a native modal that shows the card's spending headroom and its existing
  * consumption records, then charges the bound account through `POST /api/cards/[id]/consume`.
+ *
+ * A card that cannot spend (`usable === false`, or a `MISSING`/`UNTRUSTED` settlement account) still
+ * renders the projection's balances — unavailable is not the same as empty — but submits nothing.
  *
  * A retry of the same spend attempt reuses its `executionKey`, so a lost response replays the same
  * persisted consumption instead of charging twice; a fresh (successful) spend gets a new key. The
@@ -84,7 +88,7 @@ export default function CardConsumeDialog({ card, onClose, onConsumed }: {
   }
 
   async function consume(input: { amount: string; category: string; merchant: string }) {
-    if (busyRef.current) return;
+    if (busyRef.current || !cardCanConsume(card)) return;
     busyRef.current = true;
     setBusy(true);
     setNotice(null);
@@ -124,7 +128,7 @@ export default function CardConsumeDialog({ card, onClose, onConsumed }: {
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busyRef.current) return;
+    if (busyRef.current || blocked) return;
     const fields = new FormData(event.currentTarget);
     const amountText = String(fields.get('amount') ?? '').trim();
     const category = String(fields.get('category') ?? '').trim();
@@ -139,14 +143,24 @@ export default function CardConsumeDialog({ card, onClose, onConsumed }: {
     void consume({ amount: normalizeMoney(amountText), category, merchant });
   }
 
-  const hasSummary = card.linkedAccountNumber !== undefined || card.accountAvailableBalance !== undefined
-    || card.monthlyLimit !== undefined || card.payableAmount !== undefined;
+  const linked = card.linkedAccountStatus === 'LINKED';
+  const blocked = !cardCanConsume(card);
+  // Read every value straight from the projection: an absent balance is never rendered as 0.
+  const linkedName = card.linkedAccountName?.trim() ? card.linkedAccountName : undefined;
+  const hasSummary = linked || card.monthlyLimit !== undefined;
+
+  /** Why this card cannot spend right now, in display order. */
+  const unavailable: MessageKey[] = [];
+  if (!cardSupportsConsumption(card)) unavailable.push('pages.cards.creditConsumeUnsupported');
+  if (!card.usable) unavailable.push(card.status === 'FROZEN' ? 'business.cards.cardFrozenNotice' : card.status === 'LOST' ? 'business.cards.cardLostNotice' : 'business.cards.cardUnavailable');
+  if (card.linkedAccountStatus === 'MISSING') unavailable.push('business.cards.linkedAccountMissing');
+  if (card.linkedAccountStatus === 'UNTRUSTED') unavailable.push('business.cards.linkedAccountUntrusted');
 
   return (
     <dialog ref={dialog} data-card-consume-dialog data-card-consume-card-id={card.id} aria-labelledby="card-consume-title" onCancel={event => {
       event.preventDefault();
       if (!busyRef.current) onClose();
-    }} className="m-auto max-h-[calc(100dvh_-_2rem)] w-[calc(100%_-_2rem)] max-w-lg overflow-y-auto rounded-2xl border border-banking-navy/10 bg-white p-5 text-banking-deep shadow-xl backdrop:bg-banking-deep/40 sm:p-6">
+    }} className="m-auto max-h-[calc(100dvh_-_2rem)] w-[calc(100%_-_2rem)] max-w-lg overflow-y-auto rounded-2xl border border-banking-navy/10 bg-banking-surface p-5 text-banking-deep shadow-xl backdrop:bg-banking-ink/40 sm:p-6">
       <div className="flex items-start justify-between gap-3">
         <h2 id="card-consume-title" className="text-lg font-semibold">{t('pages.cards.consumeTitle')}</h2>
         <Button variant="ghost" size="sm" disabled={busy} onClick={onClose}>{t('pages.cards.close')}</Button>
@@ -154,26 +168,28 @@ export default function CardConsumeDialog({ card, onClose, onConsumed }: {
 
       <div className="mt-4"><CardTile card={card} /></div>
 
+      {unavailable.length ? <div role="status" className="mt-3 space-y-1 rounded-xl border border-banking-danger/20 bg-red-50 p-3 text-sm text-banking-danger">{unavailable.map(key => <p key={key}>{t(key)}</p>)}</div> : null}
+
       {hasSummary ? <dl data-card-consume-summary className="mt-3 space-y-2 rounded-xl bg-banking-light/60 p-4 text-sm">
-        {card.linkedAccountNumber !== undefined ? <div className="flex justify-between gap-3"><dt>{t('business.cards.linkedAccount')}</dt><dd className="font-mono">{card.linkedAccountNumber}</dd></div> : null}
-        {card.accountAvailableBalance !== undefined ? <div className="flex justify-between gap-3"><dt>{t('business.cards.accountAvailable')}</dt><dd><Money amount={card.accountAvailableBalance} /></dd></div> : null}
+        {linked && (linkedName !== undefined || card.linkedAccountNumber !== undefined) ? <div className="flex justify-between gap-3"><dt>{t('business.cards.linkedAccount')}</dt><dd className="flex min-w-0 items-baseline justify-end gap-2 text-right">{linkedName !== undefined ? <span className="font-semibold text-banking-deep">{linkedName}</span> : null}{card.linkedAccountNumber !== undefined ? <span className="font-mono">{card.linkedAccountNumber}</span> : null}</dd></div> : null}
+        {linked && card.accountAvailableBalance !== undefined ? <div className="flex justify-between gap-3"><dt>{t('business.cards.accountBalance')}</dt><dd><Money amount={card.accountAvailableBalance} /></dd></div> : null}
+        {linked && card.payableAmount !== undefined ? <div className="flex justify-between gap-3"><dt>{t('business.cards.usableBalance')}</dt><dd><Money amount={card.payableAmount} /></dd></div> : null}
         {card.monthlyLimit !== undefined ? <div className="flex justify-between gap-3"><dt>{t('business.cards.monthlyLimit')}</dt><dd><Money amount={card.monthlyLimit} /></dd></div> : null}
-        {card.payableAmount !== undefined ? <div className="flex justify-between gap-3"><dt>{t('business.cards.payableAmount')}</dt><dd><Money amount={card.payableAmount} /></dd></div> : null}
       </dl> : null}
 
       {validationFailed || notice ? <p role={validationFailed || notice?.error ? 'alert' : 'status'} className={`mt-3 rounded-xl border p-3 text-sm ${validationFailed || notice?.error ? 'border-banking-danger/20 bg-red-50 text-banking-danger' : 'border-banking-success/20 bg-green-50 text-banking-success'}`}>{validationFailed ? t('pages.cards.validation') : notice!.detail ?? t(notice!.key)}</p> : null}
 
       <section data-card-consumptions className="mt-4">
         <h3 className="font-semibold text-banking-deep">{t('pages.cards.consumptions')}</h3>
-        {recordsLoaded ? (consumptions.length === 0 ? <p data-card-consumptions-empty className="mt-2 text-sm text-banking-navy/70">{t('pages.cards.consumptionsEmpty')}</p> : <ul className="mt-2 space-y-2">{consumptions.map(record => <li key={record.id} data-card-consumption={record.id} className="flex flex-wrap items-center justify-between gap-2 border-t border-banking-light pt-2 text-sm"><div className="min-w-0"><div className="truncate text-banking-deep">{record.merchant}</div><div className="text-xs text-banking-navy/60">{formatDateTime(record.occurredAt)} · {record.category}</div></div><Money amount={record.amount} /></li>)}</ul>) : null}
+        {recordsLoaded ? (consumptions.length === 0 ? <p data-card-consumptions-empty className="mt-2 text-sm text-banking-navy">{t('pages.cards.consumptionsEmpty')}</p> : <ul className="mt-2 space-y-2">{consumptions.map(record => <li key={record.id} data-card-consumption={record.id} className="flex flex-wrap items-center justify-between gap-2 border-t border-banking-light pt-2 text-sm"><div className="min-w-0"><div className="truncate text-banking-deep">{record.merchant}</div><div className="text-banking-caption text-banking-navy">{formatDateTime(record.occurredAt)} · {record.category}</div></div><Money amount={record.amount} /></li>)}</ul>) : null}
       </section>
 
       <form onSubmit={submit} data-card-consume-form className="mt-5">
-        <fieldset disabled={busy} className="space-y-4 disabled:opacity-60">
+        <fieldset disabled={busy || blocked} className="space-y-4 disabled:opacity-60">
           <label className="block text-sm">{t('pages.cards.consumeAmount')}<input name="amount" type="text" inputMode="decimal" required maxLength={24} className={inputClass} /></label>
           <label className="block text-sm">{t('pages.cards.consumeCategory')}<input name="category" type="text" maxLength={32} className={inputClass} /></label>
           <label className="block text-sm">{t('pages.cards.consumeMerchant')}<input name="merchant" type="text" maxLength={64} className={inputClass} /></label>
-          <Button type="submit" loading={busy} className="w-full">{t('pages.cards.consumeSubmit')}</Button>
+          <Button type="submit" loading={busy} disabled={blocked} className="w-full">{t('pages.cards.consumeSubmit')}</Button>
         </fieldset>
       </form>
     </dialog>

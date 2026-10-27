@@ -4,6 +4,8 @@
 入口为 `audit.listOperationHistory({ userId, sessionId })`。
 `ActivityRecord` 只包含允许公开的业务字段。
 `ActivityHistory.tsx` 展示名称、时间、状态与验证结果。
+记录使用带分隔线的紧凑列表，时间与验证结果并排排列，窄屏允许换行。
+压缩留白不减少记录条目，也不隐藏原始记录时间或验证结果。
 
 这是事件历史，不是当前待确认列表。
 旧状态表示该事件发生时的状态。

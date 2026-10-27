@@ -32,6 +32,7 @@ export function decimalText(input: string): DecimalAmount {
   return value.isZero() ? '0' : value.toFixed();
 }
 
+/** The nonnegative gate for booked money, shares and net values — a negative here is a real fault. */
 export function nonNegativeDecimal(input: string): DecimalAmount {
   const text = decimalText(input);
   if (new FinancialDecimal(text).isNegative()) throw new AppError('VALIDATION', 'Financial value must be nonnegative.');
@@ -57,9 +58,23 @@ export function divideDecimal(left: string, right: string): DecimalAmount {
   return decimalText(new FinancialDecimal(decimalText(left)).dividedBy(denominator).toFixed());
 }
 
-/** Convert the dimensionless annual yield ratio only at the display boundary. */
+/**
+ * Signed ratio → percent text, display only.
+ *
+ * A holding's 持仓收益率 (`HoldingView.profitRate`) is signed — a position worth less than its cost
+ * reports a negative ratio — and it is rendered in the browser. Sending it through the nonnegative
+ * gate below therefore threw `Financial value must be nonnegative.` during render and took down the
+ * whole client tree. This conversion scales by 100 with exact decimal arithmetic and never clamps,
+ * abs-es or rounds, so a loss keeps its sign (`'-0.0123'` → `'-1.23'`); a nonnegative ratio yields
+ * exactly the text `rateRatioToPercent` produced before.
+ */
+export function signedRateToPercent(ratio: string): DecimalAmount {
+  return multiplyDecimal(ratio, '100');
+}
+
+/** Convert the dimensionless annual yield ratio only at the display boundary; it is never negative. */
 export function rateRatioToPercent(ratio: string): DecimalAmount {
-  return multiplyDecimal(nonNegativeDecimal(ratio), '100');
+  return signedRateToPercent(nonNegativeDecimal(ratio));
 }
 
 /** Demo CNY settlement policy: round HALF_UP once, then enforce the booked-money range. */
@@ -73,6 +88,15 @@ export function formatDecimalCNY(input: string): string {
   const value = new FinancialDecimal(decimalText(input));
   const [integer, fraction] = value.abs().toFixed(2, Decimal.ROUND_HALF_UP).split('.');
   return `${value.isNegative() ? '-' : ''}¥${integer.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}.${fraction}`;
+}
+
+/**
+ * Presentation text of an exact decimal with exactly `digits` fraction digits (no currency symbol).
+ * Display only: 份额 (6 位) and 净值 (4 位) are stored at that precision, so padding never invents a
+ * digit — the value itself is never re-computed here.
+ */
+export function formatDecimalFixed(input: string, digits: number): DecimalAmount {
+  return new FinancialDecimal(decimalText(input)).toFixed(digits, Decimal.ROUND_HALF_UP);
 }
 
 interface DecimalParts { coefficient: bigint; scale: number; }

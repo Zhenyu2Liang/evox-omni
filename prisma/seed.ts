@@ -35,6 +35,7 @@ import nextEnv from '@next/env';
 import { DEFAULT_DEMO_USER_ID } from '../lib/constants';
 import { centsToMoney, assertMinorUnits } from '../lib/money';
 import { businessDate } from '../lib/date';
+import { decimalText } from '../lib/decimal';
 
 // Resolve the same application configuration as deployment before Prisma loads default dotenv values.
 nextEnv.loadEnvConfig(process.cwd(), false, { info: () => undefined,
@@ -285,6 +286,7 @@ const ACCOUNTS = [
   { id: ACCT_SAVINGS, userId: USER_ID, type: 'SAVINGS', name: '储蓄账户', number: '****3309', balanceMinor: SAVINGS_BALANCE_CENTS, currency: 'CNY' },
 ];
 
+// 虚构测试数据：0000 号段，非真实手机号/卡号
 const CARDS = [
   {
     id: CARD_CREDIT,
@@ -292,6 +294,7 @@ const CARDS = [
     type: 'CREDIT',
     network: 'UnionPay',
     numberMasked: '****6688',
+    numberFull: '6222000000006688',
     status: 'ACTIVE',
     creditLimitMinor: 1_800_000n,
     availableLimitMinor: 1_800_000n,
@@ -303,10 +306,12 @@ const CARDS = [
     type: 'DEBIT',
     network: 'UnionPay',
     numberMasked: '****8821',
+    numberFull: '6222000000008821',
     status: 'ACTIVE',
     creditLimitMinor: null,
     availableLimitMinor: null,
     monthlyLimitMinor: null,
+    linkedAccountId: ACCT_CHECKING,
   },
   {
     id: CARD_VIRTUAL,
@@ -314,6 +319,7 @@ const CARDS = [
     type: 'VIRTUAL',
     network: 'UnionPay',
     numberMasked: '****7788',
+    numberFull: '6222000000007788',
     status: 'ACTIVE',
     creditLimitMinor: null,
     availableLimitMinor: null,
@@ -329,15 +335,16 @@ const CARD_LIMITS = [
   { id: 'limit_credit_shopping', cardId: CARD_CREDIT, category: '购物', amountMinor: 450_080n },
 ];
 
+// 虚构测试数据：0000 号段，非真实手机号/卡号
 const CONTACTS = [
-  { id: 'contact_zhangwei', userId: USER_ID, name: '张伟', phone: '139****0002', bank: '招商银行', remark: null },
-  { id: 'contact_wangfang', userId: USER_ID, name: '王芳', phone: '137****0003', bank: '工商银行', remark: null },
-  { id: 'contact_mama', userId: USER_ID, name: '妈妈', phone: '136****0004', bank: '建设银行', remark: '家人' },
-  { id: 'contact_lihua', userId: USER_ID, name: '李华', phone: '135****0005', bank: '农业银行', remark: null },
-  { id: 'contact_landlord', userId: USER_ID, name: '房东', phone: '134****0006', bank: '建设银行', remark: '每月房租' },
-  { id: 'contact_chenchen', userId: USER_ID, name: '陈晨', phone: '133****0007', bank: '招商银行', remark: '同事，聚餐AA' },
-  { id: 'contact_wangqiang', userId: USER_ID, name: '王强', phone: '132****0008', bank: '工商银行', remark: '朋友' },
-  { id: 'contact_partner', userId: USER_ID, name: '爱人', phone: '131****0009', bank: '中国银行', remark: '生日10月20日' },
+  { id: 'contact_zhangwei', userId: USER_ID, name: '张伟', phone: '139****0002', phoneFull: '13900000002', bank: '招商银行', remark: null },
+  { id: 'contact_wangfang', userId: USER_ID, name: '王芳', phone: '137****0003', phoneFull: '13700000003', bank: '工商银行', remark: null },
+  { id: 'contact_mama', userId: USER_ID, name: '妈妈', phone: '136****0004', phoneFull: '13600000004', bank: '建设银行', remark: '家人' },
+  { id: 'contact_lihua', userId: USER_ID, name: '李华', phone: '135****0005', phoneFull: '13500000005', bank: '农业银行', remark: null },
+  { id: 'contact_landlord', userId: USER_ID, name: '房东', phone: '134****0006', phoneFull: '13400000006', bank: '建设银行', remark: '每月房租' },
+  { id: 'contact_chenchen', userId: USER_ID, name: '陈晨', phone: '133****0007', phoneFull: '13300000007', bank: '招商银行', remark: '同事，聚餐AA' },
+  { id: 'contact_wangqiang', userId: USER_ID, name: '王强', phone: '132****0008', phoneFull: '13200000008', bank: '工商银行', remark: '朋友' },
+  { id: 'contact_partner', userId: USER_ID, name: '爱人', phone: '131****0009', phoneFull: '13100000009', bank: '中国银行', remark: '生日10月20日' },
 ];
 
 /** Monthly subscription fees (cents) — mirror the seeded 订阅 ledger rows; charged again in October. */
@@ -351,17 +358,26 @@ const SUBSCRIPTIONS = [
 ];
 
 const PRODUCTS = [
-  { id: 'prod_wenjiana', code: 'WJA001', name: '稳健理财A', riskLevel: 'R2', annualYieldRate: '0.0325', termDays: 90, minAmountMinor: 100_000n, description: '低风险稳健型' },
-  { id: 'prod_wenjib', code: 'WJB002', name: '稳健理财B', riskLevel: 'R2', annualYieldRate: '0.036', termDays: 180, minAmountMinor: 500_000n, description: '低风险稳健型' },
-  { id: 'prod_jinrong', code: 'JR003', name: '进取混合C', riskLevel: 'R3', annualYieldRate: '0.051', termDays: 365, minAmountMinor: 1_000_000n, description: '中风险混合型' },
-  { id: 'prod_huobi', code: 'MMF001', name: '货币基金', riskLevel: 'R1', annualYieldRate: '0.021', termDays: 30, minAmountMinor: 10_000n, description: '现金管理型' },
+  { id: 'prod_wenjiana', code: 'WJA001', name: '稳健理财A', riskLevel: 'R2', annualYieldRate: '0.0325', termDays: 90, minAmountMinor: 100_000n, description: '低风险稳健型', latestNetValuePerUnit: decimalText('1.0357'), latestNetValueDate: sep(25) },
+  { id: 'prod_wenjib', code: 'WJB002', name: '稳健理财B', riskLevel: 'R2', annualYieldRate: '0.036', termDays: 180, minAmountMinor: 500_000n, description: '低风险稳健型', latestNetValuePerUnit: decimalText('0.9880'), latestNetValueDate: sep(25) },
+  { id: 'prod_jinrong', code: 'JR003', name: '进取混合C', riskLevel: 'R3', annualYieldRate: '0.051', termDays: 365, minAmountMinor: 1_000_000n, description: '中风险混合型', latestNetValuePerUnit: decimalText('1.1769'), latestNetValueDate: sep(25) },
+  { id: 'prod_huobi', code: 'MMF001', name: '货币基金', riskLevel: 'R1', annualYieldRate: '0.021', termDays: 30, minAmountMinor: 10_000n, description: '现金管理型', latestNetValuePerUnit: decimalText('1.0000'), latestNetValueDate: sep(25) },
 ];
 
-/** Holding: ¥5,000.00 principal at ¥5,178.36 market value → ¥178.36 unrealised profit (> 0). */
+/**
+ * Holdings book 「净值 + 份额」: `shares × product.latestNetValuePerUnit` IS `estimatedMarketValue`
+ * (the exact, unrounded product). `shares` is FLOOR(市值 ÷ 净值, 6 位小数), so the estimate drifts by
+ * less than ¥0.0001 from the previous fixture valuation. `principalAmountMinor` is the REMAINING cost
+ * (¥5,000.00 / ¥8,000.50 / ¥10,000.00 — unchanged), therefore:
+ *   稳健理财A 4999.864825 × 1.0357 = 5178.3599992525 → +¥178.36  (above cost)
+ *   货币基金  8032.760000 × 1.0000 = 8032.76          → +¥32.26  (above cost, R1 flat)
+ *   稳健理财B 10000.000000 × 0.9880 = 9880.00         → −¥120.00 (below cost)
+ * `realizedProfitMinor` keeps its schema default 0: no seeded holding has ever been redeemed.
+ */
 const HOLDINGS = [
-  { id: 'holding_wenjiana', userId: USER_ID, productId: 'prod_wenjiana', principalAmountMinor: 500_000n, estimatedMarketValue: '5178.36', boughtAt: aug(10, 10, 0), status: 'HOLDING' },
-  { id: 'holding_huobi', userId: USER_ID, productId: 'prod_huobi', principalAmountMinor: 800_050n, estimatedMarketValue: '8032.76', boughtAt: aug(18, 10, 30), status: 'HOLDING' },
-  { id: 'holding_wenjib', userId: USER_ID, productId: 'prod_wenjib', principalAmountMinor: 1_000_000n, estimatedMarketValue: '10128.95', boughtAt: aug(2, 14, 0), status: 'HOLDING' },
+  { id: 'holding_wenjiana', userId: USER_ID, productId: 'prod_wenjiana', principalAmountMinor: 500_000n, shares: decimalText('4999.864825'), estimatedMarketValue: '5178.3599992525', boughtAt: aug(10, 10, 0), status: 'HOLDING' },
+  { id: 'holding_huobi', userId: USER_ID, productId: 'prod_huobi', principalAmountMinor: 800_050n, shares: decimalText('8032.760000'), estimatedMarketValue: '8032.76', boughtAt: aug(18, 10, 30), status: 'HOLDING' },
+  { id: 'holding_wenjib', userId: USER_ID, productId: 'prod_wenjib', principalAmountMinor: 1_000_000n, shares: decimalText('10000.000000'), estimatedMarketValue: '9880.00', boughtAt: aug(2, 14, 0), status: 'HOLDING' },
 ];
 
 const BUDGETS = [

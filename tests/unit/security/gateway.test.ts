@@ -215,15 +215,16 @@ describe('security-gateway · block reason round-trip (pure)', () => {
     // Valid JSON but not an object.
     expect(securityGateway.parseBlockReason(`${prefix}null`)).toBeNull();
     expect(securityGateway.parseBlockReason(`${prefix}"a string"`)).toBeNull();
-    // Missing / empty actionId.
+    // `actionId` is OPTIONAL: a `deny` refusal has no action, so an omitted actionId is VALID.
     expect(
       securityGateway.parseBlockReason(`${prefix}${JSON.stringify({ decisionKind: 'require_mfa' })}`),
-    ).toBeNull();
+    ).toEqual({ decisionKind: 'require_mfa' });
+    // An EMPTY actionId is treated as absent (still a valid block reason).
     expect(
       securityGateway.parseBlockReason(
         `${prefix}${JSON.stringify({ actionId: '', decisionKind: 'require_mfa' })}`,
       ),
-    ).toBeNull();
+    ).toEqual({ decisionKind: 'require_mfa' });
     // Missing / invalid decisionKind.
     expect(securityGateway.parseBlockReason(`${prefix}${JSON.stringify({ actionId: 'pa_1' })}`)).toBeNull();
     expect(

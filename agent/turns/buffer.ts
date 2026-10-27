@@ -9,6 +9,8 @@ import type { ToolExecutionResult } from '../tools';
 import type { ResumeTurnInput, TurnBuffer } from './contracts';
 import { safeToString } from './message-utils';
 import { cardFingerprint } from '@/lib/chat-cards';
+import { createTranslator, DEFAULT_LOCALE, isMessageKey } from '@/lib/i18n/shared';
+import { isInternalDiagnostic, safePublicText } from '@/lib/public-text';
 import type { ConversationIntent } from '@/lib/contracts/intent';
 import { inspectReplyFormat } from '../reply-format';
 import { toolPresentationId } from '../tool-presentation-identity';
@@ -107,6 +109,23 @@ export function activePlanMessage(buffer: TurnBuffer): ChatMessage | undefined {
     ?? buffer.resumedPlanMessage;
 }
 
+/** The one translator of this node's server-authored public text. */
+const t = createTranslator(DEFAULT_LOCALE);
+
+/**
+ * The RENDERED public summary of a SETTLED authorized call. `toolEvent.summary` is user text, never
+ * a catalog key: a catalog key renders to its message text, an internal diagnostic (a
+ * `__SECURITY_BLOCK__` refusal payload, a bare JSON fragment or a stack trace) renders to the
+ * `chat.error.toolFailed` message, and genuine business text (e.g. `Six subscriptions found`,
+ * `Query complete.`) is preserved verbatim.
+ */
+function settledSummary(result: ToolExecutionResult): { summary?: string } {
+  const text = result.summary || result.error;
+  if (!text) return {};
+  if (isInternalDiagnostic(text)) return { summary: safePublicText(text, t, 'chat.error.toolFailed') };
+  return { summary: isMessageKey(text) ? t(text) : text };
+}
+
 /** Settle the original recorded call without assigning the result to an unrelated later message. */
 export function publishAuthorizedToolOutcome(buffer: TurnBuffer, transcript: ChatMessage[], input: ResumeTurnInput): void {
   if (!input.toolCallId || !input.toolName) return;
@@ -115,7 +134,7 @@ export function publishAuthorizedToolOutcome(buffer: TurnBuffer, transcript: Cha
   const view: ToolEventView = { toolCallId: input.toolCallId, toolName: input.toolName,
     status: toolResultStatus(input.toolResult),
     ...(input.actionId ? { actionId: input.actionId } : {}),
-    ...(input.toolResult.summary ? { summary: input.toolResult.summary } : input.toolResult.error ? { summary: input.toolResult.error } : {}),
+    ...settledSummary(input.toolResult),
   };
   for (let index = transcript.length - 1; index >= 0; index--) {
     const message = transcript[index];
@@ -127,7 +146,7 @@ export function publishAuthorizedToolOutcome(buffer: TurnBuffer, transcript: Cha
     upsertToolEvent(message, owned);
     if (view.toolName === 'submit_plan') buffer.resumedPlanMessage = message;
     buffer.events.push({ type: 'tool_end', toolEvent: owned });
-    if (input.toolResult.ok) emitToolCards(buffer, input.resultToolName ?? input.toolName, input.toolResult, message);
+    if (input.toolResult.ok) emitToolCards(buffer, input.resultToolName ?? input.toolName, input.toolResult, message, input.actionId);
     publishToolMessage(buffer, message);
     return;
   }
@@ -138,8 +157,8 @@ export function emitCard(buffer: TurnBuffer, card: ChatCard, message: ChatMessag
   buffer.events.push({ type: 'card', card, ...(message ? { messageId: message.id } : {}) });
 }
 
-export function emitToolCards(buffer: TurnBuffer, toolName: string, result: ToolExecutionResult, message: ChatMessage | null): void {
-  for (const card of toCards(toolName as ToolName, result)) {
+export function emitToolCards(buffer: TurnBuffer, toolName: string, result: ToolExecutionResult, message: ChatMessage | null, actionId?: string): void {
+  for (const card of toCards(toolName as ToolName, result, actionId)) {
     if (message?.cards?.some(existing => cardFingerprint(existing) === cardFingerprint(card))) continue;
     emitCard(buffer, card, message);
   }

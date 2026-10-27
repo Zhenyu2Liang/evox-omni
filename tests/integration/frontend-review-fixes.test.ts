@@ -77,7 +77,9 @@ describe('frontend review: production boundaries', () => {
     const original = holdings.find(row => row.productId === 'prod_wenjiana')!;
     const duplicate = { ...original, id: 'another-holding', amount: '1000.66' };
     const html = renderToStaticMarkup(createElement(InvestmentsCard, { data: { holdings: [original, duplicate] } }));
-    expect((html.match(/持有金额/g) ?? []).length).toBe(2);
+    expect((html.match(/剩余持仓成本/g) ?? []).length).toBe(2);
+    expect((html.match(/data-investment-holding-id=/g) ?? []).length).toBe(2);
+    expect(html).toContain('1,000.66');
     expect(html).toContain('3.25%');
     const incomplete = { ...original, product: undefined } as unknown as HoldingView;
     expect(() => renderToStaticMarkup(createElement(InvestmentsCard, { data: { holdings: [incomplete] } })))

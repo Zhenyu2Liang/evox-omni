@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Security Gateway — THE chokepoint of the code-enforced safety model.
  *
  * Every banking tool call proposed by the model passes through here. The gateway:
@@ -27,6 +27,8 @@ import type {
   SecurityDecision,
   SecurityDecisionKind,
   SecurityEvaluation,
+  SecurityFailure,
+  SecurityFailureReason,
 } from '../lib/contracts/security';
 import { evaluateTool, getToolPolicy } from './permission-engine';
 import type { ToolEvaluation } from './permission-engine';
@@ -36,7 +38,7 @@ import {
   evaluateTransferRisk,
 } from './risk-engine';
 import { isLocked } from './circuit-breaker';
-import { getChallenge, issueChallenge, verify } from './mfa';
+import { attemptState, challengeInvalidation, getChallenge, issueChallenge, verify } from './mfa';
 import {
   assertActionMayStart,
   claimPendingAction,
@@ -44,7 +46,6 @@ import {
   getPendingAction,
   getMfaChallenge,
   listPendingActionsByTask,
-  setPendingActionStatus,
 } from '../lib/db/repositories/pendingAction';
 import { getSession } from '../lib/db/repositories/session';
 import {
@@ -58,20 +59,35 @@ import { prisma } from '../lib/db/client';
 import { recordSecurityEvent } from '../audit';
 import { safeParse } from '../lib/json';
 import { formatCNY, moneyToCents, normalizeTransferAmount, centsToMoney, type MoneyAmount } from '../lib/money';
-import { valuationToMinor } from '../lib/decimal';
-import { settledRedemptionAmount } from '../banking-sdk/valuation';
+import { valuationToMinor, compareDecimal, nonNegativeDecimal, type DecimalAmount } from '../lib/decimal';
+import {
+  NET_VALUE_DECIMALS,
+  REDEMPTION_FEE_RULE,
+  SHARE_DECIMALS,
+  floorToShares,
+  marketValueFromShares,
+  settlementFromShares,
+  sharesFromAmount,
+} from '../banking-sdk/net-value';
+import type { RedeemMode } from '../banking-sdk/types';
 import { canonicalCommandArgs } from '../lib/contracts/command';
 import { recordAuthorizationDecision } from './authorization-record';
-import { DAILY_TRANSFER_LIMIT, RISK_LABEL } from '../lib/constants';
+import { DAILY_TRANSFER_LIMIT, MFA_MAX_ATTEMPTS, RISK_LABEL } from '../lib/constants';
 import { AppError } from '../lib/errors';
 import { requestDigest } from '../lib/ledger';
 import { realNow } from '../lib/clock';
 import mfaMessages from './messages/mfa.zh-CN.json';
 import { resolveBankingArgs } from '../lib/banking-selectors';
+import {
+  buildCardClarifyMessage,
+  canonicalizeCardArgs,
+  cardTypeLabel,
+  resolveCardTarget,
+} from './card-resolution';
 import { withActionPolicy } from '../lib/action-summary';
 import { scheduledTime } from '../lib/scheduled-time';
 import { redactRequest, redactSecrets } from '../lib/sensitive';
-import { formatDateTime } from '../lib/date';
+import { businessCalendarParts, formatDateTime } from '../lib/date';
 import type { ErrorCode } from '../lib/errors';
 
 /** Prefix wrapped around the serialized block reason so `parseBlockReason` is exact. */
@@ -112,6 +128,8 @@ export interface AuthorizationResult {
   mfaResult?: 'success' | 'failed' | 'not_required';
   /** Typed failure code (present iff `ok === false` for a domain refusal). */
   code?: ErrorCode;
+  /** Structured refusal facts (code + reason + attempts); never rendered as raw diagnostic text. */
+  failure?: SecurityFailure;
   /** Safe, user-facing message (never leaks the MFA code). */
   message: string;
   /** The updated pending action, when available. */
@@ -141,6 +159,16 @@ export interface ToolCallAuthorization {
   /** Opaque string to return as the runtime block reason; present iff `evaluation.blocked`. */
   blockReason?: string;
 }
+/**
+ * The TYPED contents of a serialized block reason. ctionId is optional: a deny refusal (a
+ * tripped circuit breaker, a cancelled owning plan) has no pending action at all. ailure carries
+ * the structured refusal facts so no caller ever has to parse text.
+ */
+interface ParsedBlockReason {
+  actionId?: string;
+  decisionKind: SecurityDecisionKind;
+  failure?: SecurityFailure;
+}
 
 /**
  * Convenience orchestrator for the agent layer's `beforeToolCall` hook:
@@ -158,7 +186,7 @@ export interface SecurityGateway {
   /** Serialize the opaque block reason the runtime returns to the model. */
   serializeBlockReason(decision: SecurityDecision, action: PendingAction): string;
   /** Parse a block reason produced by `serializeBlockReason`; `null` if not a block reason. */
-  parseBlockReason(reason: string): { actionId: string; decisionKind: SecurityDecisionKind } | null;
+  parseBlockReason(reason: string): ParsedBlockReason | null;
   /**
    * Authorize a pending action after a human decision. Ownership is REQUIRED (a missing/mismatching
    * `userId` / `sessionId` is refused with `AppError('SECURITY_DENIED')`). This is the ONLY entry
@@ -207,6 +235,15 @@ const DECISION_KINDS: readonly SecurityDecisionKind[] = [
   'require_mfa',
   'deny',
 ];
+/** Allowed failure reasons — used to validate a PARSED block reason (unknown ⇒ dropped). */
+const FAILURE_REASONS: readonly SecurityFailureReason[] = [
+  'mfa_code_invalid',
+  'mfa_attempts_exhausted',
+  'mfa_session_locked',
+  'circuit_open',
+  'manual_review_hold',
+  'denied',
+];
 
 /**
  * Shown when a parked YELLOW `transfer_money` escalates to RED at EXECUTION time (its fresh
@@ -229,6 +266,61 @@ const PLAN_CANCELLED_MESSAGE = '操作所属的任务计划已取消，该操作
 /** Code-free confirmation messages. */
 const CONFIRM_OK_MESSAGE = '操作已确认，正在执行。';
 const VERIFY_OK_MESSAGE = '安全验证通过，操作已确认，正在执行。';
+
+/**
+ * Every circuit-breaker refusal (account-level lock, tripped by ANY operation of the account) shares
+ * this one sentence, so the copy never pretends a per-operation attempt limit was reached.
+ */
+const CIRCUIT_LOCK_MESSAGE = '当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。';
+
+/** Shown ONLY when THIS operation's own attempt record is exhausted. */
+const ATTEMPTS_EXHAUSTED_MESSAGE = '验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。';
+
+/**
+ * Verbatim public copy (`lib/tool-feedback.ts#PUBLIC_BUSINESS_ERRORS` → `chat.error.verificationConsumed`)
+ * for a verification submitted against an ALREADY-CONSUMED challenge.
+ */
+const CONSUMED_CHALLENGE_MESSAGE = 'This verification challenge has already been consumed.';
+
+/**
+ * Chinese labels for a PERSISTED `PendingAction` status. Those statuses are machine values
+ * (`locked`, `awaiting_mfa`, `cancelled`, …) and MUST NOT be rendered as copy: a refusal that has to
+ * name the CURRENT state names it through this map. An unknown/future value degrades to a neutral
+ * phrase instead of leaking the raw token.
+ */
+const PENDING_ACTION_STATUS_LABEL: Record<PendingActionStatus, string> = {
+  pending: '待确认',
+  awaiting_mfa: '待安全验证',
+  confirmed: '已确认',
+  executed: '已执行',
+  failed: '已失败',
+  cancelled: '已取消',
+  locked: '已锁定',
+  needs_reconciliation: '待人工核对',
+};
+
+/** User-facing label for a persisted action status (never the raw internal status token). */
+function statusLabel(status: string): string {
+  return (PENDING_ACTION_STATUS_LABEL as Record<string, string>)[status] ?? '状态已变更';
+}
+
+/**
+ * Statuses a LATE result notification may overwrite. `locked` is deliberately ABSENT: the
+ * circuit-breaker lock is TERMINAL, so a result notification arriving after it (a stale
+ * continuation, a retried settlement) must never relabel that row `executed` / `failed` and thereby
+ * fabricate execution evidence for an operation that was never authorized to run. The authoritative
+ * evidence of an execution is the settlement transaction (status + result + audit), never this
+ * notification.
+ */
+const RESULT_RECORDABLE_STATUSES: PendingActionStatus[] = [
+  'pending',
+  'awaiting_mfa',
+  'confirmed',
+  'executed',
+  'failed',
+  'cancelled',
+  'needs_reconciliation',
+];
 
 /** Safe fallback summary used when the persisted `summaryJson` cannot be parsed. */
 const FALLBACK_SUMMARY: PendingActionSummary = {
@@ -500,23 +592,240 @@ async function findReusableAction(
   );
 }
 
-/** The redemption quote belongs to the original server decision, not the model's request identity. */
+/** The clarification the contract demands when a redemption states no口径 — there is no default. */
+const REDEEM_CLARIFY_MESSAGE = '赎回需要明确口径：请确认按「份额」还是按「金额」赎回';
+
+/** 口径 labels for the confirmation card. */
+const REDEMPTION_MODE_LABEL: Record<RedeemMode, string> = {
+  SHARES: '按份额赎回',
+  AMOUNT: '按金额赎回',
+  ALL: '全部赎回',
+};
+
+/** Server-minted snapshot fields: they belong to the original decision, not to the request identity. */
+const REDEMPTION_SNAPSHOT_FIELDS: ReadonlySet<string> = new Set([
+  'expectedPositionVersion',
+  'expectedShares',
+  'expectedNetValue',
+  'expectedNetValueDate',
+  'expectedSettlementAmount',
+]);
+
+/**
+ * The redemption口径 a request states (`docs/cn/investments.md`). A missing/unknown口径 — or the
+ * retired principal-based `redeemAmount` — is a CLARIFICATION, never a guess: silently defaulting is
+ * exactly what the contract forbids.
+ */
+function redemptionMode(args: Record<string, unknown>): RedeemMode {
+  if (args.redeemAmount !== undefined) {
+    throw new AppError('VALIDATION', REDEEM_CLARIFY_MESSAGE, {
+      redeemAmount: args.redeemAmount,
+      reason: 'PRINCIPAL_MODE_RETIRED',
+    });
+  }
+  const mode = args.mode;
+  if (mode !== 'SHARES' && mode !== 'AMOUNT' && mode !== 'ALL') {
+    throw new AppError('VALIDATION', REDEEM_CLARIFY_MESSAGE, { mode: typeof mode === 'string' ? mode : null });
+  }
+  return mode;
+}
+
+/** Reject a mixed口径: each mode owns exactly one input field and `ALL` owns none. */
+function assertRedeemForm(mode: RedeemMode, args: Record<string, unknown>): void {
+  const mixed = mode === 'SHARES'
+    ? args.amount !== undefined
+    : mode === 'AMOUNT'
+      ? args.shares !== undefined
+      : args.shares !== undefined || args.amount !== undefined;
+  if (mixed) {
+    throw new AppError('VALIDATION', '赎回口径不可混用：按份额与按金额只能二选一，全额赎回不接受份额或金额', {
+      mode,
+      shares: args.shares ?? null,
+      amount: args.amount ?? null,
+    });
+  }
+}
+
+/** A requested share count: positive decimal text, at most 6 fractional digits, within the holding. */
+function requestedRedemptionShares(raw: unknown, heldShares: DecimalAmount): DecimalAmount {
+  if (raw === undefined) throw new AppError('VALIDATION', '按份额赎回需要给出赎回份额');
+  if (typeof raw !== 'string') throw new AppError('VALIDATION', '赎回份额必须以十进制文本给出', { shares: raw });
+  const shares = nonNegativeDecimal(raw);
+  if (compareDecimal(shares, '0') <= 0) throw new AppError('VALIDATION', '赎回份额必须大于零', { shares });
+  if (floorToShares(shares) !== shares) {
+    throw new AppError('VALIDATION', `赎回份额最多允许 ${SHARE_DECIMALS} 位小数`, { shares });
+  }
+  if (compareDecimal(shares, heldShares) > 0) {
+    throw new AppError('VALIDATION', '赎回份额不能超过持有份额', { redeemedShares: shares, totalShares: heldShares });
+  }
+  return shares;
+}
+
+/** A requested amount口径: positive CNY, never above the position's current market value. */
+function requestedRedemptionAmount(raw: unknown, heldShares: DecimalAmount, netValue: DecimalAmount): MoneyAmount {
+  if (raw === undefined) throw new AppError('VALIDATION', '按金额赎回需要给出赎回金额');
+  if (typeof raw !== 'string') throw new AppError('VALIDATION', '赎回金额必须以十进制文本给出', { amount: raw });
+  const requestedMinor = moneyToCents(raw);
+  if (requestedMinor <= 0n) throw new AppError('VALIDATION', '赎回金额必须大于零', { amount: centsToMoney(requestedMinor) });
+  // The SDK rejects an amount above the market value instead of silently widening it to a full
+  // redemption; the quote applies the SAME bound with the SAME market value helper.
+  const marketValueMinor = valuationToMinor(marketValueFromShares(heldShares, netValue));
+  if (requestedMinor > marketValueMinor) {
+    throw new AppError('VALIDATION', '赎回金额超过持仓市值，请改用全额赎回或按份额赎回', {
+      amount: centsToMoney(requestedMinor),
+      marketValue: centsToMoney(marketValueMinor),
+    });
+  }
+  return centsToMoney(requestedMinor);
+}
+
+/** The product's published net value; absent/corrupt/non-positive counts as "not published". */
+function publishedNetValue(product: { latestNetValuePerUnit: string | null }): DecimalAmount | undefined {
+  const raw = product.latestNetValuePerUnit;
+  if (raw === null) return undefined;
+  try {
+    const netValue = nonNegativeDecimal(raw);
+    return compareDecimal(netValue, '0') > 0 ? netValue : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The holding's recorded shares; absent/corrupt/non-positive counts as "not recorded" (never guessed). */
+function recordedHoldingShares(raw: string | null): DecimalAmount | undefined {
+  if (raw === null) return undefined;
+  try {
+    const shares = nonNegativeDecimal(raw);
+    return compareDecimal(shares, '0') > 0 ? shares : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The 「净值 + 份额」 quote the confirmation snapshot persists — computed only by SDK helpers. */
+interface RedemptionQuote {
+  positionVersion: number;
+  mode: RedeemMode;
+  /** Shares this redemption actually redeems under the stated口径. */
+  shares: DecimalAmount;
+  /** Net value per unit they are priced at. */
+  netValue: DecimalAmount;
+  /** Business date (epoch ms) of `netValue`; absent when the product published none. */
+  netValueDate?: number;
+  /** Amount credited, HALF_UP to cents exactly once (the SDK's own settlement helper). */
+  settlementAmount: MoneyAmount;
+  /** Fee charged (always `0.00` under the simulated rule). */
+  feeAmount: MoneyAmount;
+  /** `SIMULATED_NONE` — the fee口径 the SDK books, quoted so the card states the same rule. */
+  feeRule: string;
+}
+
+/**
+ * Mint the server's redemption quote from the OWNED holding and its product.
+ *
+ * The arithmetic is NEVER re-implemented in the security layer: `sharesFromAmount` and
+ * `settlementFromShares` are the very helpers `banking-sdk/investment.ts` settles with, so the
+ * approved quote and the settled amount cannot diverge. A holding with no recorded shares or a
+ * product with no published net value refuses to quote at all — no fabricated settlement is ever
+ * shown, and the SDK would refuse the same redemption at execution.
+ */
+function quoteRedemption(
+  holding: {
+    id: string;
+    positionVersion: number;
+    productId: string;
+    shares: string | null;
+    product: { latestNetValuePerUnit: string | null; latestNetValueDate: Date | null };
+  },
+  args: Record<string, unknown>,
+): RedemptionQuote {
+  const mode = redemptionMode(args);
+  assertRedeemForm(mode, args);
+
+  const netValue = publishedNetValue(holding.product);
+  if (netValue === undefined) {
+    throw new AppError('VALIDATION', '该产品未发布净值，暂不可赎回', { productId: holding.productId });
+  }
+  const heldShares = recordedHoldingShares(holding.shares);
+  if (heldShares === undefined) {
+    throw new AppError('CONFLICT', '该持仓尚未记录份额，暂不可赎回', { holdingId: holding.id });
+  }
+
+  const shares = mode === 'ALL'
+    ? heldShares
+    : mode === 'SHARES'
+      ? requestedRedemptionShares(args.shares, heldShares)
+      : sharesFromAmount(requestedRedemptionAmount(args.amount, heldShares, netValue), netValue);
+  if (compareDecimal(shares, heldShares) > 0) {
+    throw new AppError('VALIDATION', '赎回份额不能超过持有份额', { redeemedShares: shares, totalShares: heldShares });
+  }
+
+  const netValueDate = holding.product.latestNetValueDate?.getTime();
+  return {
+    mode,
+    shares,
+    positionVersion: holding.positionVersion,
+    netValue,
+    ...(netValueDate !== undefined ? { netValueDate } : {}),
+    settlementAmount: settlementFromShares(shares, netValue),
+    feeAmount: '0.00',
+    feeRule: REDEMPTION_FEE_RULE,
+  };
+}
+
+/** The server snapshot merged into the parked args (and therefore into the command digest). */
+function redemptionSnapshot(quote: RedemptionQuote): Record<string, unknown> {
+  return {
+    expectedPositionVersion: quote.positionVersion,
+    expectedShares: quote.shares,
+    expectedNetValue: quote.netValue,
+    ...(quote.netValueDate !== undefined ? { expectedNetValueDate: quote.netValueDate } : {}),
+    expectedSettlementAmount: quote.settlementAmount,
+  };
+}
+
+/** Business date text (UTC+08:00) of a net value date — a date, not an instant. */
+function businessDateText(ts: number): string {
+  const parts = businessCalendarParts(ts);
+  return `${String(parts.year).padStart(4, '0')}-${String(parts.month + 1).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`;
+}
+
+/** Net values are quoted to 4 fractional digits; canonical decimal text drops trailing zeros. */
+function formatNetValue(netValue: DecimalAmount): string {
+  const [integer, fraction = ''] = netValue.split('.');
+  return `${integer}.${fraction.padEnd(NET_VALUE_DECIMALS, '0')}`;
+}
+
+/**
+ * The redemption snapshot belongs to the original server decision, not the model's request identity:
+ * every server-minted `expected*` field is excluded so a re-park of the same node matches its action.
+ */
 function requestArgs(tool: ToolName, args: Record<string, unknown>): Record<string, unknown> {
   if (tool !== 'redeem_investment') return args;
-  const { expectedRedemptionAmount: _quote, ...request } = args;
-  return request;
+  return Object.fromEntries(Object.entries(args).filter(([key]) => !REDEMPTION_SNAPSHOT_FIELDS.has(key)));
 }
 
 /**
  * Outcome of the internal park path. `created` ⇒ a `PendingAction` was persisted (or reused);
  * `plan_cancelled` ⇒ refused because the owning `AgentTask` is already `'cancelled'`; `clarify` ⇒ a
- * transfer recipient could not be resolved unambiguously, so NOTHING was persisted (no `PendingAction`,
+ * transfer recipient — or a card target — could not be resolved unambiguously, so NOTHING was persisted
+ * (no `PendingAction`,
  * no MFA challenge) and the caller must ask the user to clarify.
  */
 type CreatePendingActionResult =
   | { kind: 'created'; action: PendingAction }
   | { kind: 'plan_cancelled' }
   | { kind: 'clarify'; message: string };
+
+/** Tools whose target card may be named by selectors (`cardType`/`cardTail`/`cardNumber`) instead of an id. */
+const CARD_TARGET_TOOLS: readonly string[] = [
+  'set_card_limit',
+  'freeze_card',
+  'unfreeze_card',
+  'consume_virtual_card',
+  'report_lost_card',
+  'replace_card',
+];
 
 /**
  * Persist a gated call as a `PendingAction` with a `PendingActionSummary`.
@@ -526,6 +835,12 @@ type CreatePendingActionResult =
  * recipient returns `{ kind: 'clarify' }` without persisting anything, and a resolved one canonicalizes
  * the args to the resolved `contactId` BEFORE the dedupe (so a re-park compares canonical args and the
  * args the SDK later executes are the ones validated here).
+ *
+ * Every CARD-target tool gets the same park-time treatment through `security/card-resolution.ts`: the
+ * user's words (`cardType`/`cardTail`/`cardNumber`, or an exact `cardId`) become ONE owned card, an
+ * unresolvable/ambiguous/invalid selector is a `{ kind: 'clarify' }` request, and a resolved target is
+ * canonicalized to the resolved `cardId` BEFORE `resolveBankingArgs`, so the card shown on the
+ * confirmation summary is exactly the card the SDK operates on.
  *
  * Returns `{ kind: 'plan_cancelled' }` when the call is plan-scoped (`ctx.taskId`) and the owning
  * `AgentTask` is already `'cancelled'`. The plan-status read and the row insert run in ONE transaction,
@@ -537,6 +852,16 @@ async function gatewayCreatePendingAction(
   ctx: GatewayContext,
   ev: SecurityEvaluation,
 ): Promise<CreatePendingActionResult> {
+  // Card targets are resolved from the USER'S WORDS before anything else touches the args: an exact-id
+  // validation can then never mask a selector, and a tail/card number placed in the id slot is REFUSED
+  // (never looked up) instead of silently matching some other card.
+  if (CARD_TARGET_TOOLS.includes(ctx.toolName)) {
+    const card = await resolveCardTarget(ctx.userId, ctx.args);
+    if (card.status !== 'resolved') {
+      return { kind: 'clarify', message: buildCardClarifyMessage(card) };
+    }
+    ctx = { ...ctx, args: canonicalizeCardArgs(ctx.args, card.card.id) };
+  }
   ctx = { ...ctx, args: await resolveBankingArgs(ctx.userId, ctx.toolName, ctx.args),
     userRequest: redactRequest(ctx.userRequest) };
   ctx.args = canonicalCommandArgs(ctx.args);
@@ -580,7 +905,7 @@ async function gatewayCreatePendingAction(
   const summary = buildPendingActionSummary(ctx, ev, recipient, accountLabel);
   if (ctx.args.cardId) {
     const card = await prisma.card.findFirst({ where: { id: String(ctx.args.cardId), userId: ctx.userId } });
-    if (card) summary.fields.unshift({ label: '卡片', value: `${({ CREDIT: '信用卡', DEBIT: '借记卡', VIRTUAL: '虚拟卡' } as Record<string, string>)[card.type] ?? card.type} ${card.numberMasked}` });
+    if (card) summary.fields.unshift({ label: '卡片', value: `${cardTypeLabel(card.type)} ${card.numberMasked}` });
   }
   if (ctx.args.productId) {
     const product = await prisma.investmentProduct.findUnique({ where: { id: String(ctx.args.productId) } });
@@ -588,36 +913,26 @@ async function gatewayCreatePendingAction(
   }
   if (ctx.args.holdingId) {
     const holding = await prisma.investmentHolding.findFirst({ where: { id: String(ctx.args.holdingId), userId: ctx.userId }, include: { product: true } });
-    if (holding) summary.fields.unshift({ label: '持仓', value: `${holding.product.name}（${holding.id}）` });
+    if (holding) summary.fields.unshift({ label: '持仓', value: holding.product.name });
     if (holding && ctx.toolName === 'redeem_investment') {
-      // The SERVER mints the redemption quote from the PARKED request: the requested PRINCIPAL portion
-      // (`redeemAmount`; absent ⇒ the whole holding) picks the SAME proportional valuation the SDK
-      // re-checks at execution, so the approved amount and the settled amount cannot diverge. An
-      // over-redeem request is refused HERE, before persisting, so no action is ever minted for it.
+      // The SERVER mints the 「净值 + 份额」 quote from the PARKED request: the stated口径 decides the
+      // shares redeemed, and the SAME SDK helpers (`sharesFromAmount` / `settlementFromShares`) settle
+      // them, so the approved amount and the settled amount cannot diverge. A request that cannot be
+      // quoted (no口径, retired principal field, no recorded shares, no published net value, over-size,
+      // mixed口径) is refused HERE, before persisting, so no action is ever minted for it.
       // The gateway only SNAPSHOTS the quote — it never mutates a balance.
-      const totalPrincipalMinor = holding.principalAmountMinor;
-      const requestedMinor = ctx.args.redeemAmount === undefined ? undefined : moneyToCents(ctx.args.redeemAmount);
-      if (requestedMinor !== undefined && requestedMinor > totalPrincipalMinor) {
-        throw new AppError('VALIDATION', '赎回本金金额不能超过持仓本金', {
-          redeemAmount: centsToMoney(requestedMinor),
-          totalPrincipal: centsToMoney(totalPrincipalMinor),
-        });
-      }
-      const redeemedPrincipalMinor = requestedMinor ?? totalPrincipalMinor;
-      const marketValue = holding.estimatedMarketValue === null
-        ? centsToMoney(totalPrincipalMinor) : holding.estimatedMarketValue;
-      // FULL mints the whole rounded valuation; PARTIAL mints the SAME proportional settlement the SDK
-      // re-checks at execution, so the confirmed quote and the settled amount cannot diverge.
-      const amount = redeemedPrincipalMinor === totalPrincipalMinor
-        ? centsToMoney(valuationToMinor(marketValue))
-        : settledRedemptionAmount(marketValue, totalPrincipalMinor, redeemedPrincipalMinor);
-      ctx.args = { ...ctx.args, expectedRedemptionAmount: amount };
-      const partial = redeemedPrincipalMinor !== totalPrincipalMinor;
+      const quote = quoteRedemption(holding, ctx.args);
+      ctx.args = { ...ctx.args, ...redemptionSnapshot(quote) };
+      // The money this action moves is the settlement credited, never a principal figure.
+      summary.amount = quote.settlementAmount;
       summary.fields.push(
-        { label: '赎回范围', value: partial ? `部分赎回（本金 ${formatCNY(centsToMoney(redeemedPrincipalMinor))}／共计 ${formatCNY(centsToMoney(totalPrincipalMinor))}）` : '全部赎回该笔持仓' },
-        { label: 'Principal', value: formatCNY(centsToMoney(totalPrincipalMinor)) },
-        { label: '赎回到账金额', value: formatCNY(amount) },
-        { label: '金额变化', value: '金额变化时停止执行，需重新确认' },
+        { label: '赎回口径', value: REDEMPTION_MODE_LABEL[quote.mode] },
+        { label: '赎回份额', value: quote.shares },
+        { label: '成交净值', value: formatNetValue(quote.netValue) },
+        { label: '净值日期', value: quote.netValueDate === undefined ? '未公布' : businessDateText(quote.netValueDate) },
+        { label: '预计到账金额', value: formatCNY(quote.settlementAmount) },
+        { label: '费用口径', value: `赎回费 ${formatCNY(quote.feeAmount)}（${quote.feeRule}：模拟规则免收）` },
+        { label: '金额变化', value: '净值、份额或到账金额变化时停止执行，需重新确认' },
       );
     }
   }
@@ -699,15 +1014,45 @@ async function gatewayCreatePendingAction(
   return { kind: 'created', action: toContractPendingAction(created.row) };
 }
 
-/** Serialize the opaque block reason the runtime returns to the model. */
-function serializeBlockReason(decision: SecurityDecision, action: PendingAction): string {
-  return `${BLOCK_REASON_PREFIX}${JSON.stringify({ actionId: action.id, decisionKind: decision.kind })}`;
+/** Serialize the opaque block reason the runtime returns to the model (prefix + typed payload). */
+function serializeBlockReason(
+  decision: SecurityDecision,
+  action: PendingAction,
+  failure?: SecurityFailure,
+): string {
+  return `${BLOCK_REASON_PREFIX}${JSON.stringify({
+    actionId: action.id,
+    decisionKind: decision.kind,
+    ...(failure ? { failure } : {}),
+  })}`;
+}
+
+/** Keep only the TYPED facts of a serialized failure; an unknown reason drops the whole failure. */
+function parseFailure(value: unknown): SecurityFailure | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const record = value as Record<string, unknown>;
+  const code = record.code;
+  const reason = record.reason;
+  if (typeof code !== 'string' || code.length === 0) return undefined;
+  if (typeof reason !== 'string' || !(FAILURE_REASONS as readonly string[]).includes(reason)) return undefined;
+  const count = (key: string): number | undefined =>
+    typeof record[key] === 'number' && Number.isFinite(record[key] as number) ? (record[key] as number) : undefined;
+  const actionId = typeof record.actionId === 'string' && record.actionId.length > 0 ? record.actionId : undefined;
+  const attemptsUsed = count('attemptsUsed');
+  const attemptsLeft = count('attemptsLeft');
+  const maxAttempts = count('maxAttempts');
+  return {
+    code: code as ErrorCode,
+    reason: reason as SecurityFailureReason,
+    ...(actionId ? { actionId } : {}),
+    ...(attemptsUsed !== undefined ? { attemptsUsed } : {}),
+    ...(attemptsLeft !== undefined ? { attemptsLeft } : {}),
+    ...(maxAttempts !== undefined ? { maxAttempts } : {}),
+  };
 }
 
 /** Parse a block reason produced by `serializeBlockReason`; `null` if not a block reason. */
-function parseBlockReason(
-  reason: string,
-): { actionId: string; decisionKind: SecurityDecisionKind } | null {
+function parseBlockReason(reason: string): ParsedBlockReason | null {
   if (typeof reason !== 'string' || !reason.startsWith(BLOCK_REASON_PREFIX)) return null;
 
   let parsed: unknown;
@@ -719,13 +1064,14 @@ function parseBlockReason(
   if (parsed === null || typeof parsed !== 'object') return null;
 
   const record = parsed as Record<string, unknown>;
-  const actionId = record.actionId;
   const decisionKind = record.decisionKind;
-
-  if (typeof actionId !== 'string' || actionId.length === 0) return null;
   if (!isDecisionKind(decisionKind)) return null;
 
-  return { actionId, decisionKind };
+  // `actionId` is OPTIONAL: a `deny` refusal (tripped breaker, cancelled plan) has no action at all.
+  const actionId = typeof record.actionId === 'string' && record.actionId.length > 0 ? record.actionId : undefined;
+  const failure = parseFailure(record.failure);
+
+  return { ...(actionId ? { actionId } : {}), decisionKind, ...(failure ? { failure } : {}) };
 }
 
 /**
@@ -746,6 +1092,7 @@ function planCancelledOutcome(
     tier: action.tier,
     requiresMfa: false,
     code: 'SECURITY_DENIED',
+    failure: { code: 'SECURITY_DENIED', reason: 'denied', actionId: row.id },
     message: PLAN_CANCELLED_MESSAGE,
     action: { ...action, status: 'cancelled' },
   };
@@ -774,6 +1121,7 @@ function lockedOutcome(
   actionId: string,
   action: PendingAction,
   requiresMfa: boolean,
+  reason: SecurityFailureReason,
 ): AuthorizationResult {
   return {
     ok: false,
@@ -782,7 +1130,8 @@ function lockedOutcome(
     tier: action.tier,
     requiresMfa,
     code: 'CIRCUIT_OPEN',
-    message: '当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。',
+    failure: { code: 'CIRCUIT_OPEN', reason, actionId, attemptsLeft: 0, maxAttempts: MFA_MAX_ATTEMPTS },
+    message: CIRCUIT_LOCK_MESSAGE,
     action,
   };
 }
@@ -810,6 +1159,9 @@ async function authorizeWithMfa(
   if (issued) await issueChallenge(actionId);
 
   if (!opts.mfaCode || issued) {
+    // NOT a refusal: a code is still REQUIRED (or a fresh challenge was just issued), so the caller is
+    // being asked to submit one. It therefore carries NO `code`/`failure` — `awaiting_mfa` is a PROMPT
+    // state, and reporting a normal step of the flow as a failure would misrepresent it.
     return {
       ok: false,
       status: 'awaiting_mfa',
@@ -821,35 +1173,106 @@ async function authorizeWithMfa(
     };
   }
 
+  // `verify` can refuse at the CHALLENGE level. `mfa.challengeInvalidation` classifies WHY, so each
+  // outcome gets its own honest semantics instead of one retryable `mfa_code_invalid` view:
+  //   consumed          → the decision is SETTLED: CAS the row to terminal `cancelled`, never a retry.
+  //   expired / changed → a fresh challenge was just minted, so re-prompting is accurate.
+  //   anything else     → fail CLOSED: no prompt against a challenge the server cannot vouch for.
   const res = await verify(actionId, opts.mfaCode);
   if (!res.ok) {
-    return {
-      ok: false,
-      status: 'awaiting_mfa',
-      actionId,
-      tier,
-      requiresMfa: true,
-      mfaResult: 'failed',
-      code: 'MFA_FAILED',
-      message: res.error.message,
-      action,
-    };
+    const invalidation = challengeInvalidation(res.error);
+    if (invalidation === 'consumed') {
+      const claimed = await claimPendingAction({ actionId, from: ['pending', 'awaiting_mfa'], to: 'cancelled' });
+      if (!claimed) {
+        // Lost the CAS: a concurrent decision settled the row first. NEVER execute here.
+        const current = await getPendingAction(actionId);
+        if (current?.status === 'locked') {
+          return lockedOutcome(actionId, toContractPendingAction(current), true, 'mfa_session_locked');
+        }
+        throw new AppError('CONFLICT', `操作当前状态为「${statusLabel(current?.status ?? row.status)}」，无法重复确认。`);
+      }
+      return {
+        ok: false,
+        status: 'cancelled',
+        actionId,
+        tier,
+        requiresMfa: false,
+        mfaResult: 'failed',
+        code: 'CONFLICT',
+        failure: { code: 'CONFLICT', reason: 'denied', actionId },
+        message: CONSUMED_CHALLENGE_MESSAGE,
+        action: { ...action, status: 'cancelled' },
+      };
+    }
+    if (invalidation !== null) {
+      // `expired` / `command_changed`: a brand-new challenge was just issued, so asking for a code
+      // again is accurate. Deliberately carries NO `code`/`failure` — a PROMPT, not a refusal.
+      await issueChallenge(actionId);
+      return {
+        ok: false,
+        status: 'awaiting_mfa',
+        actionId,
+        tier,
+        requiresMfa: true,
+        message: mfaMessages.renewedChallenge,
+        action,
+      };
+    }
+    throw new AppError('CONFLICT', '验证状态异常，该操作无法继续确认；请重新发起该操作。',
+      { code: 'CONFLICT', reason: 'denied', actionId });
   }
   if (!res.value.ok) {
     const { attemptsLeft, locked } = res.value;
+    // The operation's OWN attempt record is the ONLY authority for "this operation ran out of
+    // attempts": `verify` reports `locked` for EVERY operation of a locked account, so an operation
+    // that never consumed its limit must be told the ACCOUNT breaker tripped (`circuit_open`) — a
+    // `mfa_attempts_exhausted` here would claim 0 (or negative) used attempts in its own words.
+    const own = await attemptState(actionId);
+    const attemptsUsed = own ? own.attempts : Math.max(0, MFA_MAX_ATTEMPTS - attemptsLeft);
+    const maxAttempts = own?.maxAttempts ?? MFA_MAX_ATTEMPTS;
+    const exhausted = own ? own.exhausted : attemptsLeft === 0;
+    if (!locked) {
+      return {
+        ok: false,
+        status: 'awaiting_mfa',
+        actionId,
+        tier,
+        requiresMfa: true,
+        mfaResult: 'failed',
+        code: 'MFA_FAILED',
+        failure: { code: 'MFA_FAILED', reason: 'mfa_code_invalid', actionId, attemptsUsed, attemptsLeft, maxAttempts },
+        message: `验证码错误，请重试。剩余尝试次数：${attemptsLeft}。`,
+        action,
+      };
+    }
+    if (exhausted) {
+      return {
+        ok: false,
+        status: 'locked',
+        actionId,
+        tier,
+        requiresMfa: true,
+        mfaResult: 'failed',
+        code: 'CIRCUIT_OPEN',
+        failure: { code: 'MFA_LOCKED', reason: 'mfa_attempts_exhausted', actionId, attemptsUsed, attemptsLeft, maxAttempts },
+        message: ATTEMPTS_EXHAUSTED_MESSAGE,
+        // A GENUINE terminal lock is made DURABLE on the row; the transient `awaiting_mfa` path is NOT.
+        action: await persistLockedAction(actionId, action),
+      };
+    }
+    // The account-level breaker was tripped by a DIFFERENT operation: report `circuit_open` (never a
+    // per-operation attempt limit) and make the lock durable so the row stops reading as undecided.
     return {
       ok: false,
-      status: locked ? 'locked' : 'awaiting_mfa',
+      status: 'locked',
       actionId,
       tier,
       requiresMfa: true,
       mfaResult: 'failed',
-      code: locked ? 'CIRCUIT_OPEN' : 'MFA_FAILED',
-      message: locked
-        ? '验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。'
-        : `验证码错误，请重试。剩余尝试次数：${attemptsLeft}。`,
-      // A GENUINE terminal lock is made DURABLE on the row; the transient `awaiting_mfa` path is NOT.
-      action: locked ? await persistLockedAction(actionId, action) : action,
+      code: 'CIRCUIT_OPEN',
+      failure: { code: 'CIRCUIT_OPEN', reason: 'circuit_open', actionId, attemptsUsed, attemptsLeft, maxAttempts },
+      message: CIRCUIT_LOCK_MESSAGE,
+      action: await persistLockedAction(actionId, action),
     };
   }
 
@@ -883,7 +1306,7 @@ async function authorizeWithMfa(
   });
 
   if (claimOutcome.kind === 'conflict') {
-    throw new AppError('CONFLICT', `操作当前状态为「${row.status}」，无法重复确认。`);
+    throw new AppError('CONFLICT', `操作当前状态为「${statusLabel(row.status)}」，无法重复确认。`);
   }
   if (claimOutcome.kind === 'plan_cancelled') {
     return planCancelledOutcome(row, action);
@@ -976,7 +1399,7 @@ async function authorizeTransfer(
   });
 
   if (outcome.kind === 'conflict') {
-    throw new AppError('CONFLICT', `操作当前状态为「${row.status}」，无法重复确认。`);
+    throw new AppError('CONFLICT', `操作当前状态为「${statusLabel(row.status)}」，无法重复确认。`);
   }
 
   if (outcome.kind === 'plan_cancelled') {
@@ -1011,6 +1434,7 @@ async function authorizeTransfer(
       tier: 'RED',
       requiresMfa: true,
       code: 'LIMIT_EXCEEDED',
+      failure: { code: 'LIMIT_EXCEEDED', reason: 'denied', actionId: row.id },
       message: TRANSFER_ESCALATED_MESSAGE,
       action: { ...action, tier: 'RED', requiresMfa: true, status: 'awaiting_mfa',
         summary: withActionPolicy(action.summary, { actionId: row.id, tier: 'RED', requiresMfa: true }),
@@ -1052,13 +1476,13 @@ async function authorizeAction(
   // (never reopens verification: no new challenge, no consumed attempt, no re-prompt).
   if (row.status === 'locked') {
     const lockedAction = toContractPendingAction(row);
-    return lockedOutcome(actionId, lockedAction, row.requiresMfa || lockedAction.tier === 'RED');
+    return lockedOutcome(actionId, lockedAction, row.requiresMfa || lockedAction.tier === 'RED', 'mfa_session_locked');
   }
 
   // Only undecided actions can request a code. A historical RED flag on a confirmed/terminal
   // action must not reopen verification, issue a new challenge or consume an MFA attempt.
   if (row.status !== 'pending' && row.status !== 'awaiting_mfa') {
-    throw new AppError('CONFLICT', `操作当前状态为「${row.status}」，无法重复确认。`);
+    throw new AppError('CONFLICT', `操作当前状态为「${statusLabel(row.status)}」，无法重复确认。`);
   }
 
   // Recheck current static policy before granting a new execution. Persisted decisions may be
@@ -1076,13 +1500,15 @@ async function authorizeAction(
   const action = toContractPendingAction(row);
   const effectiveRequiresMfa = row.requiresMfa || action.tier === 'RED';
   if (row.taskId && await prisma.manualReview.findFirst({ where: { taskId: row.taskId, status: 'open' } })) {
-    throw new AppError('CONFLICT', 'This workflow is under manual review; a new command cannot start.');
+    // A neutral internal sentence: the public copy is decided from the TYPED code by
+    // `lib/public-text.ts` (`chat.error.manualReviewHold`), never from this text.
+    throw new AppError('MANUAL_REVIEW_HOLD', 'This workflow is under manual review; a new command cannot start.');
   }
 
   // Circuit breaker is a hard gate the LLM (and even a correct code) cannot bypass.
   if (await isLocked(row.sessionId)) {
     // Make the lock DURABLE on the row so it is no longer surfaced as an undecided action.
-    return lockedOutcome(actionId, await persistLockedAction(actionId, action), effectiveRequiresMfa);
+    return lockedOutcome(actionId, await persistLockedAction(actionId, action), effectiveRequiresMfa, 'circuit_open');
   }
 
   // `transfer_money` is DYNAMIC: its tier is re-derived at EXECUTION time (see `authorizeTransfer`).
@@ -1104,7 +1530,7 @@ async function authorizeAction(
     sessionId: row.sessionId,
   });
   if (!claimed) {
-    throw new AppError('CONFLICT', `操作当前状态为「${row.status}」，无法重复确认。`);
+    throw new AppError('CONFLICT', `操作当前状态为「${statusLabel(row.status)}」，无法重复确认。`);
   }
   return {
     ok: true,
@@ -1139,7 +1565,7 @@ async function cancelAction(actionId: string, opts: CancelOptions): Promise<Pend
     sessionId: row.sessionId,
   });
   if (!claimed) {
-    throw new AppError('CONFLICT', `操作当前状态为「${row.status}」，无法取消。`);
+    throw new AppError('CONFLICT', `操作当前状态为「${statusLabel(row.status)}」，无法取消。`);
   }
 
   const updated = await getPendingAction(actionId);
@@ -1148,12 +1574,21 @@ async function cancelAction(actionId: string, opts: CancelOptions): Promise<Pend
 
 /**
  * Persist the TRUE terminal status of an action AFTER the caller has executed it (or failed), so a
- * subsequent confirm/cancel is correctly rejected as CONFLICT. Recorded VERBATIM and unconditionally
- * — the exactly-once claim happened at confirm time, and this never consults the owning plan, so an
- * action whose money already moved stays `'executed'` even if its plan is cancelled afterwards.
+ * subsequent confirm/cancel is correctly rejected as CONFLICT. The write is a STATUS CAS over
+ * `RESULT_RECORDABLE_STATUSES`, never a blind overwrite: the exactly-once claim already happened at
+ * confirm time, and this never consults the owning plan, so an action whose money already moved stays
+ * `'executed'` even if its plan is cancelled afterwards. A TERMINAL `'locked'` row therefore KEEPS
+ * its lock — a late/stale notification can neither un-lock it nor relabel it `'executed'` (which
+ * would fabricate execution evidence for an operation that was never authorized to run). The
+ * settlement row and audit written by the caller remain the authoritative evidence.
  */
 async function recordActionResult(actionId: string, status: 'executed' | 'failed'): Promise<void> {
-  await setPendingActionStatus(actionId, status);
+  const claimed = await claimPendingAction({ actionId, from: RESULT_RECORDABLE_STATUSES, to: status });
+  if (claimed) return;
+  if ((await getPendingAction(actionId)) === null) {
+    throw new AppError('NOT_FOUND', `未找到待处理的操作: ${actionId}`);
+  }
+  // The row sits in a status a result notification may NOT overwrite (`'locked'`): keep it as it is.
 }
 
 /** End-to-end helper used by `beforeToolCall`. */
@@ -1179,7 +1614,7 @@ async function handleToolCall(ctx: GatewayContext): Promise<ToolCallAuthorizatio
     return {
       evaluation,
       decision,
-      blockReason: `${BLOCK_REASON_PREFIX}${JSON.stringify({ decisionKind: 'deny' })}`,
+      blockReason: `${BLOCK_REASON_PREFIX}${JSON.stringify({ decisionKind: 'deny', failure: { code: 'CIRCUIT_OPEN', reason: 'circuit_open' } })}`,
     };
   }
 
@@ -1211,7 +1646,7 @@ async function handleToolCall(ctx: GatewayContext): Promise<ToolCallAuthorizatio
     return {
       evaluation,
       decision: { ...decision, kind: 'deny' },
-      blockReason: `${BLOCK_REASON_PREFIX}${JSON.stringify({ decisionKind: 'deny' })}`,
+      blockReason: `${BLOCK_REASON_PREFIX}${JSON.stringify({ decisionKind: 'deny', failure: { code: 'SECURITY_DENIED', reason: 'denied' } })}`,
     };
   }
 

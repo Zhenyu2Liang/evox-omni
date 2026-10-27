@@ -11,6 +11,7 @@ import { runSubmitPlan } from '@/agent/tools/planning';
 import { auditStore } from '@/audit/audit-logger';
 import { claimTaskExecution, claimTaskStatus } from '@/lib/db/repositories/task';
 import { MFA_CODE } from '@/lib/constants';
+import { createTranslator } from '@/lib/i18n/shared';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
 import { DEMO_USER_ID } from '@/tests/helpers/fixtures';
 import * as executionFences from '@/agent/execution-fence';
@@ -275,6 +276,28 @@ describe('[integration] manual handoff', () => {
     expect(blocked.body.data.ok).toBe(false);
     expect(blocked.body.data.status).toBe('pending');
     expect(blocked.body.data.message).toContain('manual review');
+    // A manual-review hold is its OWN structured refusal, not the generic "state changed" one.
+    const chinese = createTranslator('zh-CN');
+    expect(blocked.body.data.code).toBe('MANUAL_REVIEW_HOLD');
+    expect(blocked.body.data.code).not.toBe('CONFLICT');
+    expect(blocked.body.data.failure).toMatchObject({
+      code: 'MANUAL_REVIEW_HOLD', reason: 'manual_review_hold', actionId: approval.id,
+    });
+    expect(blocked.body.data.failure.reason).not.toBe('denied');
+    expect(blocked.body.data.message).toBe(chinese('chat.error.manualReviewHold'));
+    expect(blocked.body.data.message).not.toBe(chinese('chat.error.stateChanged'));
+    for (const absent of ['刷新', '__SECURITY_BLOCK__', 'decisionKind', 'Error:', ' at ']) {
+      expect(blocked.body.data.message).not.toContain(absent);
+    }
+    // Nothing internal leaks through the whole envelope, and the typed facts alone are enough for a
+    // client to render the refusal without matching any copy.
+    const wire = JSON.stringify(blocked.body);
+    for (const leak of ['__SECURITY_BLOCK__', 'decisionKind', 'at Object.', 'node_modules']) {
+      expect(wire).not.toContain(leak);
+    }
+    expect({
+      status: blocked.body.data.status, code: blocked.body.data.code, reason: blocked.body.data.failure.reason,
+    }).toEqual({ status: 'pending', code: 'MANUAL_REVIEW_HOLD', reason: 'manual_review_hold' });
     expect(await money()).toEqual(before);
     const resolved = await call(resolvePost, sessionId, { resolution: 'resume', notes: 'Continue with original user authorization' }, review.id);
     expect(resolved.http).toBe(200);

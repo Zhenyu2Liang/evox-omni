@@ -5,6 +5,7 @@ import { withinTransaction } from '@/lib/db/unit-of-work';
 import { AppError } from '@/lib/errors';
 import { canonicalCommandArgs, type BankingCommand } from '@/lib/contracts/command';
 import type { AddDemoCardRequest, CardChange, CardChangeResponse, ManualCardCommandName } from '@/lib/contracts/card-management';
+import type { SecurityFailure } from '@/lib/contracts/security';
 import { MANUAL_CARD_COMMAND_NAMES as NAMES, isManualCardCommand } from '@/lib/contracts/card-management';
 import { centsToMoney, moneyToCents } from '@/lib/money';
 import { requestDigest } from '@/lib/ledger';
@@ -28,6 +29,43 @@ export const addDemoCardSchema = z.object({ requestId: z.string().uuid(), type: 
 });
 export const deleteDemoCardSchema = z.object({ requestId: z.string().uuid() }).strict();
 export const verifyCardChangeSchema = z.object({ code: z.string().regex(/^\d{6}$/) }).strict();
+
+/**
+ * `locked` is the TERMINAL status the security gateway's MFA-exhaustion CAS writes (from
+ * `pending`/`awaiting_mfa` ONLY). A locked card change is dead: it is never verified, claimed,
+ * executed, replayed or cancelled, and nothing may ever write it back to `pending`/`awaiting_mfa` —
+ * an account unlock (`circuit-breaker.ts#resetSession`) clears the breaker and the failure counter
+ * but does NOT revive it, so the user must propose a NEW card change and confirm it again.
+ */
+const TERMINAL_LOCKED_STATUS = 'locked';
+
+/** Statuses a manual card change can still be verified/claimed FROM — never the terminal `locked`. */
+const UNDECIDED_STATUSES: readonly string[] = ['awaiting_mfa', 'pending'];
+
+/** Safe, user-facing refusal text for a card change that reached the terminal locked state. */
+const LOCKED_CHANGE_VERIFY_MESSAGE = '该卡片变更已因验证码错误次数过多被锁定，无法继续验证；请重新发起新的卡片变更。';
+const LOCKED_CHANGE_CANCEL_MESSAGE = '该卡片变更已因验证码错误次数过多被锁定，无法取消；请重新发起新的卡片变更。';
+
+/**
+ * The structured refusal for a card change whose persisted status is the TERMINAL `locked`: the
+ * typed `MFA_LOCKED` code plus the machine-readable `SecurityFailure` (reason
+ * `mfa_session_locked`), so callers never have to parse the Chinese message.
+ */
+function terminalLockedError(row: PendingAction, message: string): AppError {
+  const failure: SecurityFailure = { code: 'MFA_LOCKED', reason: 'mfa_session_locked', actionId: row.id };
+  return new AppError('MFA_LOCKED', message, failure);
+}
+
+/** The structured refusal for an OPEN session circuit breaker, where the terminal lock is still in force. */
+function breakerLockedError(row: PendingAction): AppError {
+  const failure: SecurityFailure = { code: 'CIRCUIT_OPEN', reason: 'circuit_open', actionId: row.id };
+  return new AppError('CIRCUIT_OPEN', 'Strong verification is locked.', failure);
+}
+
+/** Refuse a TERMINAL `locked` row BEFORE any challenge, verification attempt, write or receipt read. */
+function assertNotTerminallyLocked(row: PendingAction, message: string): void {
+  if (row.status === TERMINAL_LOCKED_STATUS) throw terminalLockedError(row, message);
+}
 
 function commandFor(row: PendingAction): BankingCommand {
   if (!isManualCardCommand(row.toolName)) throw new AppError('SECURITY_DENIED', 'This is not a manual card change.');
@@ -91,13 +129,21 @@ export async function proposeCardChange(identity: Identity, request: AddDemoCard
     await auditChange(created, 'waiting_verification', client);
     return created;
   }));
-  if (!['executed', 'cancelled'].includes(row.status)) await issueChallenge(id);
+  // A replayed request identity reuses its row. A settled (executed/cancelled) or TERMINAL locked row
+  // gets NO new challenge: re-issuing one would reactivate the verification of a dead change.
+  if (!['executed', 'cancelled', TERMINAL_LOCKED_STATUS].includes(row.status)) await issueChallenge(id);
   return { change: toChange(row) };
 }
 
+/**
+ * Card changes of this workspace, including TERMINAL `locked` rows: they stay VISIBLE as the final
+ * record of the refusal, but `locked` never implies that verification, execution or cancellation is
+ * still possible. While the owner breaker is open every undecided row is displayed as `locked`, and an
+ * unlock does NOT revive any of them — the user must propose a new change.
+ */
 export async function listCardChanges(identity: Identity): Promise<CardChange[]> {
   const rows = await prisma.pendingAction.findMany({ where: { ...identity, toolName: { in: NAMES },
-    status: { in: ['awaiting_mfa', 'pending', 'locked'] } }, orderBy: { createdAt: 'asc' } });
+    status: { in: ['awaiting_mfa', 'pending', TERMINAL_LOCKED_STATUS] } }, orderBy: { createdAt: 'asc' } });
   const locked = await isLocked(identity.sessionId);
   return rows.map(row => ({ ...toChange(row), ...(locked ? { status: 'locked' as const } : {}) }));
 }
@@ -105,11 +151,14 @@ export async function listCardChanges(identity: Identity): Promise<CardChange[]>
 /** Verification is the explicit confirmation of an immutable, reviewed proposal. */
 export async function verifyCardChange(identity: Identity, id: string, code: string): Promise<CardChangeResponse> {
   const row = await ownedChange(identity, id);
+  // TERMINAL lock wins over everything else: refuse BEFORE reading a receipt, issuing a challenge,
+  // verifying a code, consuming an attempt or writing anything. No replay, no revival.
+  assertNotTerminallyLocked(row, LOCKED_CHANGE_VERIFY_MESSAGE);
   const command = commandFor(row);
   const receipt = await readCommandReceipt(command);
   if (receipt) return { change: { ...toChange(row), status: 'executed', card: receipt.data as CardView }, ok: true };
-  if (!['awaiting_mfa', 'pending', 'locked'].includes(row.status)) throw new AppError('CONFLICT', 'This card change is no longer pending.');
-  if (await isLocked(identity.sessionId)) throw new AppError('CIRCUIT_OPEN', 'Strong verification is locked.');
+  if (!UNDECIDED_STATUSES.includes(row.status)) throw new AppError('CONFLICT', 'This card change is no longer pending.');
+  if (await isLocked(identity.sessionId)) throw breakerLockedError(row);
   await issueChallenge(id);
   const checked = await verify(id, code);
   if (!checked.ok) {
@@ -134,8 +183,13 @@ export async function verifyCardChange(identity: Identity, id: string, code: str
     const challenge = current?.mfa;
     const expected = requestDigest({ userId: row.userId, toolName: row.toolName, args: command.args });
     const breaker = await client.circuitBreakerState.findUnique({ where: { key: `user:${identity.userId}` } });
+    // A TERMINAL locked row is NEVER claimable — refused explicitly here so that no concurrent path
+    // (a stale verification, a race with the gateway's lock CAS, an unlock in between) can turn
+    // `locked` into `confirmed` and therefore into an executed write. `locked` is not in the
+    // claimable set below, so the CAS `status: current.status → 'confirmed'` can never match it.
+    if (current?.status === TERMINAL_LOCKED_STATUS) throw new AppError('SECURITY_DENIED', 'The card change was security-locked and cannot be executed.');
     if (!current || current.userId !== identity.userId || current.sessionId !== identity.sessionId ||
-        !['awaiting_mfa', 'pending', 'locked'].includes(current.status) || breaker?.locked ||
+        !UNDECIDED_STATUSES.includes(current.status) || breaker?.locked ||
         current.argsJson !== row.argsJson || !challenge || challenge.status !== 'verified' || challenge.consumedAt ||
         !challenge.expiresAt || challenge.expiresAt.getTime() <= realNow() || challenge.commandDigest !== expected) {
       throw new AppError('SECURITY_DENIED', 'The card change verification is expired, revoked or invalid.');
@@ -151,12 +205,19 @@ export async function verifyCardChange(identity: Identity, id: string, code: str
   return { change: { ...toChange(row), status: 'executed', card: result.data as CardView }, ok: true, attemptsLeft: MFA_MAX_ATTEMPTS, locked: false };
 }
 
+/**
+ * Cancel an undecided card change (`pending`/`awaiting_mfa` → `cancelled`); nothing is executed.
+ * A TERMINAL `locked` change can NOT be cancelled — the same rule as
+ * `security-gateway.ts#cancelAction`, which only cancels from `pending`/`awaiting_mfa` — so a locked
+ * change stays a locked record instead of being rewritten into a different final state.
+ */
 export async function cancelCardChange(identity: Identity, id: string): Promise<CardChangeResponse> {
   const row = await ownedChange(identity, id);
+  assertNotTerminallyLocked(row, LOCKED_CHANGE_CANCEL_MESSAGE);
   if (row.status === 'cancelled') return { change: toChange(row), ok: true };
   await prisma.$transaction(async client => {
     await client.user.updateMany({ where: { id: identity.userId }, data: { id: identity.userId } });
-    const cancelled = await client.pendingAction.updateMany({ where: { id, ...identity, status: { in: ['pending', 'awaiting_mfa', 'locked'] } }, data: { status: 'cancelled' } });
+    const cancelled = await client.pendingAction.updateMany({ where: { id, ...identity, status: { in: ['pending', 'awaiting_mfa'] } }, data: { status: 'cancelled' } });
     if (cancelled.count !== 1) throw new AppError('CONFLICT', 'Only an unexecuted card change can be cancelled.');
     await client.mfaChallenge.updateMany({ where: { actionId: id }, data: { status: 'failed', consumedAt: new Date(realNow()) } });
     await auditChange(row, 'cancelled', client);

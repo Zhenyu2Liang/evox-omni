@@ -10,7 +10,7 @@ export default async function ActivityPage() {
   const { sessionId, userId } = await requireIdentity();
   const entries = await listOperationHistory({ sessionId, userId });
   return <main className="mx-auto w-full min-w-0 max-w-4xl space-y-6 p-4 sm:p-6 lg:p-8">
-    <header><h1 className="text-2xl font-semibold tracking-tight text-banking-deep">{t('pages.activity.title')}</h1>
+    <header><h1 className="bank-page-heading text-2xl font-semibold tracking-tight text-banking-deep">{t('pages.activity.title')}</h1>
       <p className="mt-1 text-sm text-banking-navy">{t('pages.activity.summary', { count: entries.length })}</p></header>
     <ActivityHistory entries={entries} t={t} />
   </main>;

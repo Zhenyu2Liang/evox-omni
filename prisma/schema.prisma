@@ -13,7 +13,7 @@
 //   - `channel`       on Transaction    = "APP" | "CARD" | "TRANSFER" | "SUBSCRIPTION"
 //   - `type`          on Card           = "DEBIT" | "CREDIT" | "VIRTUAL"
 //   - `status`        on Card           = "ACTIVE" | "FROZEN" | "LOST" | "PENDING"
-//   - `linkedAccountId` on Card         = id of the user's CHECKING account the card spends from (historical reference, no relation)
+//   - `linkedAccountId` on Card         = id of the user's CHECKING account the card spends from (real FK: Card.linkedAccount ↔ Account.cards)
 //   - `status`        on Subscription   = "ACTIVE" | "CANCELLED"
 //   - `riskLevel`     on InvestmentProduct = "R1" | "R2" | "R3" | "R4" | "R5"
 //   - `status`        on InvestmentHolding = "HOLDING" | "REDEEMED"
@@ -65,6 +65,7 @@ model Account {
 
   user         User          @relation(fields: [userId], references: [id])
   transactions Transaction[]
+  cards        Card[] // cards spending from / displaying this account
 
   @@index([userId])
 }
@@ -97,6 +98,9 @@ model Contact {
   userId String
   name   String
   phone  String
+  // Full fictional test mobile number (11 digits) FOR SERVER-SIDE EXACT MATCHING ONLY: never
+  // project, log or return it in a tool result. Historical rows stay NULL (not derivable from phone).
+  phoneFull String?
   bank   String?
   remark String?
 
@@ -111,19 +115,24 @@ model Card {
   type           String // "DEBIT" | "CREDIT" | "VIRTUAL"
   network        String   @default("UnionPay")
   numberMasked   String
+  // Full fictional card number (digits only) FOR SERVER-SIDE EXACT MATCHING ONLY: never project,
+  // log or return it in a tool result. Historical rows stay NULL (not derivable from numberMasked).
+  numberFull     String?
   status         String   @default("ACTIVE") // "ACTIVE" | "FROZEN" | "LOST" | "PENDING"
   creditLimitMinor    BigInt? @map("credit_limit_minor")
   availableLimitMinor BigInt? @map("available_limit_minor")
   monthlyLimitMinor   BigInt? @map("monthly_limit_minor")
   // id of the replacement card (no relation — historical reference only)
   replacedByCardId    String? @map("replaced_by_card_id")
-  // id of the user's CHECKING account this card spends from (no relation — historical reference only)
+  // id of the user's CHECKING account this card spends from (real FK: linkedAccount <-> Account.cards)
   linkedAccountId     String? @map("linked_account_id")
 
-  user   User        @relation(fields: [userId], references: [id])
-  limits CardLimit[]
+  user          User        @relation(fields: [userId], references: [id])
+  linkedAccount Account?    @relation(fields: [linkedAccountId], references: [id])
+  limits        CardLimit[]
 
   @@index([userId])
+  @@index([linkedAccountId])
 }
 
 model CardLimit {
@@ -183,6 +192,10 @@ model InvestmentProduct {
   termDays     Int
   minAmountMinor BigInt @map("min_amount_minor")
   description  String?
+  // Latest SIMULATED net value per unit: canonical decimal TEXT, at most 4 fractional digits (e.g. "1.0234"). NULL when no net value is published.
+  latestNetValuePerUnit String?   @map("latest_net_value_per_unit")
+  // Business date (UTC+08:00) the published net value applies to.
+  latestNetValueDate    DateTime? @map("latest_net_value_date")
 
   holdings InvestmentHolding[]
 }
@@ -191,8 +204,18 @@ model InvestmentHolding {
   id          String   @id @default(cuid())
   userId      String
   productId   String
-  principalAmountMinor BigInt @map("principal_amount_minor")
+  principalAmountMinor BigInt @map("principal_amount_minor") // REMAINING cost basis (remaining principal) after partial redemptions.
   estimatedMarketValue String? @map("estimated_market_value") // Exact CNY valuation, before settlement rounding.
+  // Current held SHARES: canonical decimal TEXT, at most 6 fractional digits (e.g. "1960.784314"). NULL for a legacy holding whose shares have not been derived yet.
+  shares              String? // see `sharesEstimated` below when this value was derived, not recorded
+  // TRUE when `shares` was DERIVED from this holding's old booked value by
+  // `scripts/investment-share-backfill.mjs` instead of being recorded by a real subscription, so the
+  // valuation is presented as 估算 (`valueBasis: 'MIGRATED_ESTIMATE'`), never as an exact one.
+  sharesEstimated Boolean @default(false) @map("shares_estimated")
+  // Incremented by every economic position change; gates partial as well as full redemptions.
+  positionVersion Int @default(0) @map("position_version")
+  // REALIZED profit already booked by redemptions, CNY cents (may be negative). Cumulative profit = realized + unrealized.
+  realizedProfitMinor BigInt  @default(0) @map("realized_profit_minor")
   subscribeResult String? // Original SDK purchase outcome, persisted in the purchase transaction.
   boughtAt    DateTime @default(now())
   status      String   @default("HOLDING") // "HOLDING" | "REDEEMED"

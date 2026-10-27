@@ -60,7 +60,7 @@ export function AnomalyBanner(props: AnomalyBannerProps) {
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
         <span className="font-medium text-banking-deep">{transaction.merchant}</span>
         <Money amount={transaction.amount} signed />
-        <span className="text-gray-500">{formatDateTime(transaction.occurredAt)}</span>
+        <span className="text-banking-navy">{formatDateTime(transaction.occurredAt)}</span>
       </div>
 
       {(onAcknowledge || onViewDetail || onFreeze) && (

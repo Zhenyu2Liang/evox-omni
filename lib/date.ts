@@ -49,6 +49,12 @@ function pad(n: number, width = 2): string {
   return String(n).padStart(width, '0');
 }
 
+/** Formats a business calendar date (UTC+08:00) as `YYYY-MM-DD` — a date, not an instant. Pure. */
+export function formatBusinessDate(ts: Date | number): string {
+  const { year, month, day } = businessCalendarParts(ts);
+  return `${pad(year, 4)}-${pad(month + 1)}-${pad(day)}`;
+}
+
 /** Formats a timestamp (Date or epoch ms) as `YYYY-MM-DD HH:mm` in local time. Pure. */
 export function formatDateTime(ts: Date | number): string {
   const d = new Date((ts instanceof Date ? ts.getTime() : ts) + BUSINESS_OFFSET_MS);

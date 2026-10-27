@@ -24,11 +24,18 @@
 | 模块职责与执行顺序 | [architecture.md](architecture.md) |
 | 事件、检查点、重试与恢复 | [agent-durability.md](agent-durability.md) |
 | 金融单位与结算 | [financial-values.md](financial-values.md) |
+| 理财净值、份额与收益口径 | [investments.md](investments.md) |
+| 卡片增删、结算账户绑定与余额展示 | [card-management.md](card-management.md) |
+| 号码与卡片的身份判定、候选筛选、完整号码边界与补全 | [identity-resolution.md](identity-resolution.md) |
+| 工具参数、报错与模型可见结果 | [tool-contracts.md](tool-contracts.md) |
+| 字符串匹配是否参与业务决策 | [string-matching-review.md](string-matching-review.md) |
 | 对话卡片与调用详情 | [chat-presentation.md](chat-presentation.md) |
+| 对话归档、上下文压缩与原话搜索 | [context-compaction.md](context-compaction.md) |
 | 权限、认证与审计 | [security.md](security.md) |
 | 人工接管与证据处理 | [manual-review.md](manual-review.md) |
 | 定时任务与提醒 | [scheduled-tasks.md](scheduled-tasks.md) |
 | 微信登录、对话和确认命令 | [weixin.md](weixin.md) |
+| Pi 版本与接口适配 | [pi-integration.md](pi-integration.md) |
 | 测试方法与证据范围 | [test-cases.md](test-cases.md) |
 | 模拟能力与未验证条件 | [known-risks.md](known-risks.md) |
 
@@ -61,6 +68,7 @@
 本规则必须按 `for-instruction-writing` 检查。
 机器检查报告的错误必须修复。
 Anti-Echo 疑点必须删除或记录具体保留理由。
+机器检查的 G4「动作藏在套话里」与 G5「事实或数量不清楚」常被本仓库术语命中（「已实现收益」「已实现功能说明」「部分赎回」「实现见」），属误报，记录理由后保留。
 文档变化后，必须重新核验疑点。
 复核记录可保存到工作区的 `.pnpm-store/`。
 

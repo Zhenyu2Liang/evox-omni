@@ -68,7 +68,7 @@ Prisma 数据库保存模型请求、事件和执行回执。
 Pi 拼装后的完整工具调用仍按原日志规则脱敏保存。
 认证头、密钥和凭据不进入供应商审计记录。
 传输完成只证明协议结束，不能证明语言在语义上完整。
-旧截图缺少结束标记证据，不能据此确定截断来源。
+供应商审计记录只作传输证据，不判断回复是否可信。
 
 未完成的模型输出只保存为事件证据。
 错误、中止和截断响应不能作为可执行决策。
@@ -175,6 +175,36 @@ Pi、HTTP 续跑和调度路径共用 `ToolInvocation`。
 旧计划结果不能跳过尚未完成的原图。
 暂停、取消、失败的图保留原控制状态。
 
+## 已锁定操作的恢复
+
+`locked` 是终态：验证码尝试用尽或账户熔断后，操作已结算为拒绝。
+恢复和重连只报告这个事实，不把操作写回待决定状态。
+锁定判定与对外文案见[安全设计](security.md#多因子认证)。
+
+`agent/durable/continuation.ts#restoreWaitingCheckpoint` 按持久化的状态投影原停放调用：
+
+| 持久化状态 | 恢复时发布的内容 |
+| --- | --- |
+| `locked` | 保留原工具行和目录文案，另发类型化 `security_event`。`code` 为 `MFA_LOCKED`，`reason` 为 `mfa_attempts_exhausted`。 |
+| `executed`、`failed`、`cancelled`、`needs_reconciliation` | 同一结构，`code` 和 `reason` 取该状态的已结算事实。 |
+
+投影只依据持久化状态，不重新区分锁定来源。
+`settledParkedProjection` 不重建确认或验证码面板。
+已提交的 `__SECURITY_BLOCK__` 载荷留在工具事件和内部结果中，公开文本改由目录文案生成。
+已锁定调用不重新验证、不重试，也不进入人工核对。
+
+`agent/action-status.ts#mayPromptForDecision` 只在 `pending`、`awaiting_mfa` 时返回真。
+`agent/turns/authorization-view.ts` 和 `agent/turns/events.ts` 用同一判定发布决定入口。
+因此终态行在恢复和重连后都不弹出确认或验证码卡片。
+
+`agent/action-status.ts#isLegalActionSourceStatus` 从不把 `locked` 当作来源状态。
+`isClaimableActionStatus` 同样排除 `locked`。
+`agent/confirmation-recovery.ts#settlePendingAction` 在事务开始前拒绝非法来源，不写入状态、结果或审计。
+
+用户显式重试锁定操作时，系统新建 `PendingAction`。
+`agent/workflows/parked-actions.ts` 以 `MFA_LOCKED` 拒绝原行。
+账户解锁不改变该行，见[安全设计](security.md#多因子认证)。
+
 ## 回复纠正与建议续答
 
 正常交流只对完整协议封套做回复格式检查。
@@ -234,6 +264,43 @@ Pi、HTTP 续跑和调度路径共用 `ToolInvocation`。
 代码见[回复格式检查](../../agent/reply-format.ts)和[回复纠正](../../agent/turns/live-prompt.ts)。
 恢复用例见[纠正预算测试](../../tests/unit/agent/durable-reply-repair.test.ts)。
 建议目的用例见[建议恢复测试](../../tests/unit/agent/durable-advice-context.test.ts)。
+
+## 声明写入的单次续写
+
+一轮声明了写操作却没有受控工具调用时，运行时只追加一次续写。
+代码见 [write-continuation.ts](../../agent/write-continuation.ts)。
+
+声明来自 `describe_turn` 记录的 `ConversationIntent`，属于模型解释，不是授权。
+以下条件同时满足时才触发续写：
+
+- `llmMode` 为 `live`。
+- 声明中有 `effect` 为 `write` 的工具。
+- 本轮没有确认事件、验证码事件、写操作结果和 `submit_plan` 调用。
+- 最后一条助手消息的 `stopReason` 为 `stop`。
+- 该回复不需要格式纠正，也不是可渲染的指引信封。
+
+预算随检查点保存，结构见 [reply-repair.ts](../../agent/reply-repair.ts) 的 `WriteContinuationState`：
+
+| 字段 | 内容 |
+| --- | --- |
+| `phase` | `requested` 表示预算和指令已保存，`completed` 表示续写请求已返回。 |
+| `attempt` | 固定为 `1`，表示至多一次续写。 |
+| `sourceDigest` | 触发续写的原助手消息摘要。 |
+| `instruction` | 发给模型的完整纠正指令。 |
+| `declaredTools` | 本轮声明的写工具名，只作证据。 |
+
+预算和指令在联系服务商之前提交。
+恢复时 `phase` 已是 `completed`，或原消息摘要改变，都不再请求模型。
+`phase` 仍为 `requested` 且摘要一致时，恢复复用原指令发出这一次请求。
+恢复路径见 [continuation.ts](../../agent/durable/continuation.ts)，不追加第二次续写。
+
+续写先撤销未校验的候选回复，再发布 `repairing` 进度。
+前台续写不设置回复纠正标记，否则声明的写入会被 `beforeToolCall` 拒绝。
+续写不创建待确认操作，也不确认、执行或绕过安全网关。
+
+续写后仍没有受控写入时，由服务端说明真实状态。
+文字来自 [financial-response.ts](../../agent/financial-response.ts) 的 `renderFinancialResponse`，`declared` 选项列出本轮声明的操作。
+该文字说明操作尚未提交，并提示核对信息后重新发送或使用已有操作卡。
 
 ## 独立工作流
 
@@ -318,11 +385,15 @@ Pi Core 的事件订阅等待监听器完成。
 | --- | --- |
 | [journal.ts](../../agent/durable/journal.ts) | 保存原事件、模型请求与检查点 |
 | [continuation.ts](../../agent/durable/continuation.ts) | 继续原模型执行 |
+| [action-status.ts](../../agent/action-status.ts) | 待确认操作的状态词表、来源守卫与决定入口判定 |
+| [write-continuation.ts](../../agent/write-continuation.ts) | 声明写入的单次续写与服务端状态说明 |
 | [authorized-checkpoint.ts](../../agent/durable/authorized-checkpoint.ts) | 核验授权结果续讲 |
 | [workflow-resumption.ts](../../agent/durable/workflow-resumption.ts) | 恢复外层模型调用的原图 |
 | [standalone-workflow.ts](../../agent/durable/standalone-workflow.ts) | 恢复独立图 |
 | [recovery-worker.ts](../../agent/recovery-worker.ts) | 发现候选并领取恢复任务 |
 | [真实进程测试](../../tests/integration/process-restart.test.ts) | `SIGKILL` 后继续模型和原操作 |
 | [独立图进程测试](../../tests/integration/standalone-workflow-restart.test.ts) | 原图、授权、控制状态和回执 |
+| [单次续写测试](../../tests/integration/write-continuation.test.ts) | 前台和恢复路径各只续写一次 |
+| [续写预算测试](../../tests/unit/agent/write-continuation-durable.test.ts) | 预算先于请求保存，重启不追加预算 |
 
 测试执行方式见[测试指南](test-cases.md)。

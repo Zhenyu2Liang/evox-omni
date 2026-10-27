@@ -69,7 +69,7 @@ export function createHolding(input: { userId: string; productId: string; amount
 export function updateHoldingStatus(id: string, status: string): Promise<InvestmentHolding> {
   return dbClient().investmentHolding.update({
     where: { id },
-    data: { status },
+    data: { status, positionVersion: { increment: 1 } },
   });
 }
 

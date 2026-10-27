@@ -38,7 +38,7 @@ export function SpendingCard({ data, className }: SpendingCardProps) {
 
   const momUp = compareDecimal(data.momChangePct, '0') > 0;
   const momFlat = compareDecimal(data.momChangePct, '0') === 0;
-  const momClass = momFlat ? 'text-slate-500' : momUp ? 'text-banking-danger' : 'text-banking-success';
+  const momClass = momFlat ? 'text-banking-navy' : momUp ? 'text-banking-danger' : 'text-banking-success';
   const momText = `${momUp ? '+' : ''}${data.momChangePct}%`;
 
   return (
@@ -54,7 +54,7 @@ export function SpendingCard({ data, className }: SpendingCardProps) {
             <Money amount={data.total} className="text-2xl font-semibold text-banking-deep" />
           </ResultMetric>
           <ResultMetric label={t('cards.spending.previous')}>
-            <Money amount={data.prevTotal} className="text-base text-slate-600" />
+            <Money amount={data.prevTotal} className="text-base text-banking-navy" />
           </ResultMetric>
           <ResultMetric label={t('cards.spending.change')}>
             <span className={`text-base font-medium ${momClass}`}>{momText}</span>
@@ -70,12 +70,12 @@ export function SpendingCard({ data, className }: SpendingCardProps) {
 
         {data.topMerchant && (
           <div className="rounded-xl bg-banking-light p-3">
-            <div className="text-xs text-slate-500">{t('cards.spending.topMerchant')}</div>
+            <div className="text-banking-caption text-banking-navy">{t('cards.spending.topMerchant')}</div>
             <div className="mt-1 flex flex-wrap items-center justify-between gap-3">
               <span className="font-medium text-banking-navy">{data.topMerchant.merchant}</span>
               <span className="flex flex-wrap items-center gap-2">
                 <Money amount={data.topMerchant.amount} className="font-semibold text-banking-deep" />
-                <span className="text-xs text-slate-500">{t('cards.transaction.count', { count: data.topMerchant.count })}</span>
+                <span className="text-banking-caption text-banking-navy">{t('cards.transaction.count', { count: data.topMerchant.count })}</span>
               </span>
             </div>
           </div>
@@ -83,12 +83,12 @@ export function SpendingCard({ data, className }: SpendingCardProps) {
 
         {data.largest && (
           <div className="rounded-xl bg-banking-light p-3">
-            <div className="text-xs text-slate-500">{t('cards.spending.largest')}</div>
+            <div className="text-banking-caption text-banking-navy">{t('cards.spending.largest')}</div>
             <div className="mt-1 flex flex-wrap items-center justify-between gap-3">
               <span className="font-medium text-banking-navy">{data.largest.merchant}</span>
               <Money amount={data.largest.amount} signed className="font-semibold text-banking-deep" />
             </div>
-            <div className="mt-1 text-xs text-slate-500">
+            <div className="mt-1 text-banking-caption text-banking-navy">
               {data.largest.category} · {formatDateTime(data.largest.occurredAt)}
             </div>
           </div>

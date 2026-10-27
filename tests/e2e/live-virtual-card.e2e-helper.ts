@@ -23,6 +23,7 @@ import path from 'node:path';
 import type { Page } from 'playwright-core';
 import type { PrismaClient } from '../../lib/db/prisma';
 import { centsToMoney, formatCNY, moneyToCents } from '../../lib/money';
+import { CARD_LABEL, CARD_LABEL_RETIRED } from './card-labels.e2e-helper';
 import {
   NAV_TIMEOUT_MS,
   REPO_ROOT,
@@ -114,6 +115,11 @@ export interface LiveCardRecord {
   availableLimit?: string;
   monthlyLimit?: string;
   linkedAccountId?: string;
+  linkedAccountName?: string;
+  /** `CardView.linkedAccountStatus` — `'LINKED' | 'MISSING' | 'UNTRUSTED' | 'NOT_APPLICABLE'`. */
+  linkedAccountStatus?: string;
+  /** `CardView.usable` — `true` only for `status === 'ACTIVE'`; independent of the money fields. */
+  usable?: boolean;
   linkedAccountNumber?: string;
   accountAvailableBalance?: string;
   payableAmount?: string;
@@ -142,7 +148,7 @@ export async function withDb<T>(fn: (db: PrismaClient) => Promise<T>): Promise<T
   }
 }
 
-/** Read a rendered `CardTile`'s `<dt>/<dd>` rows (`账户可用余额` / `当前可支付金额` / credit rows). */
+/** Read a rendered `CardTile`'s `<dt>/<dd>` rows (`账户余额` / `可用余额` / credit rows). */
 export async function readCardTileRows(page: Page, cardId: string): Promise<Record<string, string>> {
   return page.locator(`[data-card-id="${cardId}"]`).first().evaluate((tile) => {
     const rows: Record<string, string> = {};
@@ -381,6 +387,12 @@ export function assertVirtualCardView(
   if (card === undefined) throw new Error(`GET /api/cards 缺少卡片 ${expected.cardId}`);
   if (card.type !== 'VIRTUAL') throw new Error(`${expected.cardId}.type 应为 VIRTUAL，实际 ${card.type}`);
   if (card.status !== 'ACTIVE') throw new Error(`${expected.cardId}.status 应为 ACTIVE，实际 ${card.status}`);
+  if (card.linkedAccountStatus !== 'LINKED') {
+    throw new Error(`${expected.cardId}.linkedAccountStatus 应为 LINKED（虚拟卡是绑定 ${VC_CHECKING_ACCOUNT_ID} 的借记工具），实际 ${card.linkedAccountStatus}`);
+  }
+  if (card.usable !== true) {
+    throw new Error(`${expected.cardId}.usable 应为 true（ACTIVE 卡当前可用于消费），实际 ${card.usable}`);
+  }
   if (card.creditLimit !== undefined || card.availableLimit !== undefined) {
     throw new Error(`${expected.cardId} 是借记类虚拟卡，不得暴露信用额度字段，实际 ${JSON.stringify(card)}`);
   }
@@ -394,7 +406,7 @@ export function assertVirtualCardView(
     throw new Error(`${expected.cardId}.accountAvailableBalance 应为 ${expected.accountAvailableBalance}，实际 ${card.accountAvailableBalance}`);
   }
   if (card.payableAmount !== expected.payableAmount) {
-    throw new Error(`${expected.cardId}.payableAmount 应为 ${expected.payableAmount}（= min(账户可用余额, 剩余月限额)），实际 ${card.payableAmount}`);
+    throw new Error(`${expected.cardId}.payableAmount 应为 ${expected.payableAmount}（= min(账户余额, 剩余月限额)），实际 ${card.payableAmount}`);
   }
   if (expected.numberMasked !== undefined && card.numberMasked !== expected.numberMasked) {
     throw new Error(`${expected.cardId}.numberMasked 应为 ${expected.numberMasked}，实际 ${card.numberMasked}`);
@@ -402,8 +414,8 @@ export function assertVirtualCardView(
 }
 
 /**
- * Assert the RENDERED `CardTile` of a virtual card: server-projected 关联账户 / 账户可用余额 / 月限额 /
- * 当前可支付金额, and NO 信用额度 / 可用额度 (those two rows are CREDIT-only in `CardTile`).
+ * Assert the RENDERED `CardTile` of a virtual card: server-projected 关联账户 / 账户余额 / 月限额 / 可用余额,
+ * and NO 信用额度 / 可用额度 (those two rows are CREDIT-only in `CardTile`).
  */
 export function assertVirtualCardTile(
   cardId: string,
@@ -411,7 +423,7 @@ export function assertVirtualCardTile(
   tileText: string,
   expected: VirtualCardProjection,
 ): void {
-  for (const creditLabel of ['信用额度', '可用额度']) {
+  for (const creditLabel of [CARD_LABEL.creditLimit, CARD_LABEL.availableLimit]) {
     if (rows[creditLabel] !== undefined) {
       throw new Error(`虚拟卡 ${cardId} 不应渲染「${creditLabel}」行，实际 ${JSON.stringify(rows)}`);
     }
@@ -419,19 +431,37 @@ export function assertVirtualCardTile(
       throw new Error(`虚拟卡 ${cardId} 的卡片文本出现「${creditLabel}」（虚拟卡不是信用工具）：${tileText.slice(0, 240)}`);
     }
   }
-  if (!tileText.includes('关联账户')) throw new Error(`虚拟卡 ${cardId} 未渲染「关联账户」：${tileText.slice(0, 240)}`);
+  if (!tileText.includes(CARD_LABEL.linkedAccount)) throw new Error(`虚拟卡 ${cardId} 未渲染「${CARD_LABEL.linkedAccount}」：${tileText.slice(0, 240)}`);
   if (expected.linkedAccountText !== undefined && !tileText.includes(expected.linkedAccountText)) {
-    throw new Error(`虚拟卡 ${cardId} 的「关联账户」应显示 ${expected.linkedAccountText}：${tileText.slice(0, 240)}`);
+    throw new Error(`虚拟卡 ${cardId} 的「${CARD_LABEL.linkedAccount}」应显示 ${expected.linkedAccountText}：${tileText.slice(0, 240)}`);
   }
-  if (!tileText.includes('月限额')) throw new Error(`虚拟卡 ${cardId} 未渲染「月限额」：${tileText.slice(0, 240)}`);
+  if (!tileText.includes(CARD_LABEL.monthlyLimit)) throw new Error(`虚拟卡 ${cardId} 未渲染「${CARD_LABEL.monthlyLimit}」：${tileText.slice(0, 240)}`);
   if (!tileText.includes(formatCNY(expected.monthlyLimit))) {
-    throw new Error(`虚拟卡 ${cardId} 的「月限额」应显示 ${formatCNY(expected.monthlyLimit)}：${tileText.slice(0, 240)}`);
+    throw new Error(`虚拟卡 ${cardId} 的「${CARD_LABEL.monthlyLimit}」应显示 ${formatCNY(expected.monthlyLimit)}：${tileText.slice(0, 240)}`);
   }
-  if (rows['账户可用余额'] !== formatCNY(expected.accountAvailableBalance)) {
-    throw new Error(`虚拟卡 ${cardId} 的「账户可用余额」应为 ${formatCNY(expected.accountAvailableBalance)}，实际 ${rows['账户可用余额']}（${JSON.stringify(rows)}）`);
+  // The label MUST actually be rendered: without this guard a renamed label would turn BOTH sides of the
+  // comparison below into `undefined` and the assertion would pass vacuously.
+  if (rows[CARD_LABEL.accountBalance] === undefined) {
+    throw new Error(`虚拟卡 ${cardId} 未渲染「${CARD_LABEL.accountBalance}」行（标签缺失会让金额断言失去意义）：${JSON.stringify(rows)}`);
   }
-  if (rows['当前可支付金额'] !== formatCNY(expected.payableAmount)) {
-    throw new Error(`虚拟卡 ${cardId} 的「当前可支付金额」应为 ${formatCNY(expected.payableAmount)}，实际 ${rows['当前可支付金额']}（${JSON.stringify(rows)}）`);
+  if (rows[CARD_LABEL.accountBalance] !== formatCNY(expected.accountAvailableBalance)) {
+    throw new Error(`虚拟卡 ${cardId} 的「${CARD_LABEL.accountBalance}」应为 ${formatCNY(expected.accountAvailableBalance)}，实际 ${rows[CARD_LABEL.accountBalance]}（${JSON.stringify(rows)}）`);
+  }
+  if (rows[CARD_LABEL.usableBalance] === undefined) {
+    throw new Error(`虚拟卡 ${cardId} 未渲染「${CARD_LABEL.usableBalance}」行（标签缺失会让金额断言失去意义）：${JSON.stringify(rows)}`);
+  }
+  if (rows[CARD_LABEL.usableBalance] !== formatCNY(expected.payableAmount)) {
+    throw new Error(`虚拟卡 ${cardId} 的「${CARD_LABEL.usableBalance}」应为 ${formatCNY(expected.payableAmount)}，实际 ${rows[CARD_LABEL.usableBalance]}（${JSON.stringify(rows)}）`);
+  }
+  // SUPERSEDED LABELS — `CardTile` renders 账户余额 / 可用余额 now. A tile that still shows the retired
+  // 账户可用余额 / 当前可支付金额 rows is presenting a superseded contract and must fail immediately.
+  for (const retiredLabel of [CARD_LABEL_RETIRED.accountAvailable, CARD_LABEL_RETIRED.payableAmount]) {
+    if (rows[retiredLabel] !== undefined) {
+      throw new Error(`虚拟卡 ${cardId} 不应再渲染废弃标签「${retiredLabel}」行，实际 ${JSON.stringify(rows)}`);
+    }
+    if (tileText.includes(retiredLabel)) {
+      throw new Error(`虚拟卡 ${cardId} 的卡片文本仍出现废弃标签「${retiredLabel}」（旧契约已废止）：${tileText.slice(0, 240)}`);
+    }
   }
 }
 
@@ -500,7 +530,7 @@ export async function gotoCards(page: Page, baseUrl: string): Promise<void> {
 
 /**
  * Click a card tile's 消费 button and wait for the REAL `CardConsumeDialog` form bound to `cardId`.
- * Returns the dialog's server-projected summary rows (关联账户 / 账户可用余额 / 月限额 / 当前可支付金额).
+ * Returns the dialog's server-projected summary rows (关联账户 / 账户余额 / 月限额 / 可用余额).
  */
 export async function openConsumeDialog(page: Page, cardId: string): Promise<Record<string, string>> {
   await waitForElementHydration(page, `[data-card-id="${cardId}"] [data-card-consume] button`);

@@ -7,7 +7,7 @@
   "engines": {
     "node": ">=22.19.0"
   },
-  "description": "AI Banking Agent competition demo — Pi Agent + custom Banking Tools + Security Gateway",
+  "description": "万象柜坊 EvoX Omni competition demo — Pi Agent + custom Banking Tools + Security Gateway",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -33,11 +33,11 @@
     "@earendil-works/pi-agent-core": "1.2.0",
     "@earendil-works/pi-ai": "1.2.0",
     "@earendil-works/pi-coding-agent": "1.2.0",
-    "@next/env": "16.4.0",
+    "@next/env": "16.4.3",
     "@prisma/adapter-better-sqlite3": "7.10.0",
     "@prisma/client": "7.10.0",
     "decimal.js": "10.6.0",
-    "next": "16.4.0",
+    "next": "16.4.3",
     "pi-weixinbot": "1.0.5",
     "qrcode": "1.5.4",
     "react": "19.3.0",
@@ -47,7 +47,7 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "@next/eslint-plugin-next": "16.4.0",
+    "@next/eslint-plugin-next": "16.4.3",
     "@tailwindcss/postcss": "4.3.3",
     "@types/node": "26.6.5",
     "@types/qrcode": "1.5.6",

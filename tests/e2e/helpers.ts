@@ -515,14 +515,15 @@ function resolveNextBin(): string | undefined {
  * empty stdout pipe in this environment.
  */
 function devServerCommand(port: number): { command: string; args: string[] } {
+  const mode = process.env.E2E_SERVER_MODE === 'production' ? 'start' : 'dev';
   const nextBin = resolveNextBin();
   if (nextBin !== undefined) {
-    return { command: process.execPath, args: [nextBin, 'dev', '-p', String(port)] };
+    return { command: process.execPath, args: [nextBin, mode, '-p', String(port)] };
   }
   if (process.platform === 'win32') {
-    return { command: 'cmd.exe', args: ['/d', '/s', '/c', `npx next dev -p ${port}`] };
+    return { command: 'cmd.exe', args: ['/d', '/s', '/c', `npx next ${mode} -p ${port}`] };
   }
-  return { command: 'npx', args: ['next', 'dev', '-p', String(port)] };
+  return { command: 'npx', args: ['next', mode, '-p', String(port)] };
 }
 
 /**
@@ -540,7 +541,7 @@ export function startDevServer(port: number): DevServer {
     env: {
       ...process.env,
       NEXT_TELEMETRY_DISABLED: '1',
-      BANKING_NEXT_DIST_DIR: '.next-e2e',
+      BANKING_NEXT_DIST_DIR: process.env.E2E_SERVER_MODE === 'production' ? '.next-build' : '.next-e2e',
       DEMO_USER_ID: 'user_liming',
       // Isolate the app from the shared `prisma/dev.db` — see `useIsolatedDatabase`/`E2E_DB_URL`.
       DATABASE_URL: process.env['DATABASE_URL'] ?? E2E_DB_URL,
@@ -920,6 +921,8 @@ export function launchBrowser(executablePath: string): Promise<Browser> {
 }
 
 export interface WithPageOptions {
+  /** Onboarding owns the genuinely fresh profile; other journeys represent a returning user. */
+  firstVisit?: boolean;
   timeoutMs?: number;
   navigationTimeoutMs?: number;
   /** Label used for a failure screenshot. */
@@ -952,6 +955,9 @@ export async function withPage<T>(
   opts: WithPageOptions = {},
 ): Promise<T> {
   const context = await browser.newContext();
+  if (!opts.firstVisit) await context.addInitScript(() => {
+    localStorage.setItem('banking-agent:guide-dismissed', '1');
+  });
   const page = await context.newPage();
   page.setDefaultTimeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   page.setDefaultNavigationTimeout(opts.navigationTimeoutMs ?? NAV_TIMEOUT_MS);
@@ -984,8 +990,20 @@ export const SELECTORS = {
   approvalRequest: '[data-approval-request="true"]',
   /** The dock's verification input; historical receipts never contain one. */
   mfaInput: '[data-approval-request="true"] input[aria-label="验证码"]',
-  /** `app/security/ResetBreakerButton.tsx` — the GATED unlock control's 6-digit code input. */
-  breakerCodeInput: 'input[aria-label="6 位验证码"]',
+  /** `app/security/ResetBreakerButton.tsx` — the DEVELOPER-ONLY maintenance button (no credential). */
+  developerResetButton: 'button[data-developer-breaker-reset]',
+  /**
+   * The developer maintenance SURFACE: the `ResetBreakerButton` root `<div>` wrapping the
+   * `developerOnly` label, the `[data-developer-breaker-reset]` button and its status line
+   * (`app/security/ResetBreakerButton.tsx` return value). A code-input check scoped HERE keeps the
+   * "developer reset needs no banking credential" fact on the developer control — the always-rendered
+   * runtime unlock panel owns the only code entry on `/security`, in BOTH normal and developer mode.
+   */
+  developerResetCodeInput: 'div:has(> button[data-developer-breaker-reset]) input[aria-label="6 位验证码"]',
+  /** `app/security/UnlockPanel.tsx` (`data-unlock-panel`) — the runtime unlock surface, always rendered. */
+  unlockPanel: '[data-unlock-panel]',
+  /** The unlock panel's own 6-digit entry (`security.reset.codeLabel`, zh-CN default locale). */
+  unlockCodeInput: '[data-unlock-panel] input[aria-label="6 位验证码"]',
 } as const;
 
 /**
@@ -1217,11 +1235,26 @@ export interface CardLimitView {
   amount: string;
 }
 
-/** A `CardView` (`GET /api/cards`). */
+/**
+ * A `CardView` (`GET /api/cards`) — a **read-model SUBSET**: the fields this harness actually reads,
+ * taken straight from the JSON response (nothing here builds a `CardView` literal, so nothing here can
+ * drift into a fabricated shape).
+ *
+ * The rest of the server contract (`banking-sdk/types.ts#CardView`) a card assertion may rely on:
+ * `linkedAccountStatus` and `usable` are always present, while `accountAvailableBalance` /
+ * `payableAmount` come back ONLY when `linkedAccountStatus === 'LINKED'`. An unusable card is not an
+ * empty one: `FROZEN`/`LOST` keep their REAL balances and merely set `usable === false` (i.e.
+ * `status !== 'ACTIVE'`), whereas `MISSING`/`UNTRUSTED` bindings carry NO amount field at all (never a
+ * placeholder `0.00`). A `CREDIT` card is always `NOT_APPLICABLE`: it has no settlement-account cash.
+ */
 export interface CardView {
   id: string;
   status: string;
   limits: CardLimitView[];
+  /** How a card's settlement account resolved — `CardView.linkedAccountStatus` (`banking-sdk/types.ts`). */
+  linkedAccountStatus?: 'LINKED' | 'MISSING' | 'UNTRUSTED' | 'NOT_APPLICABLE';
+  /** Whether the card can be charged at all — `CardView.usable`, i.e. `status === 'ACTIVE'`. */
+  usable?: boolean;
 }
 
 /** A non-terminal `PendingAction` from `GET /api/actions`. */

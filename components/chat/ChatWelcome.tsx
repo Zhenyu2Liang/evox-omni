@@ -1,6 +1,7 @@
 'use client';
 
 import { useI18n } from '@/lib/i18n/LocaleProvider';
+import { BrandMark } from '@/components/ui/BrandMark';
 
 const SUGGESTIONS = [
   { title: 'chat.suggestion.balance.title', description: 'chat.suggestion.balance.description', prompt: 'chat.suggestion.balance.prompt', symbol: 'balance' },
@@ -8,6 +9,8 @@ const SUGGESTIONS = [
   { title: 'chat.suggestion.subscription.title', description: 'chat.suggestion.subscription.description', prompt: 'chat.suggestion.subscription.prompt', symbol: 'subscription' },
   { title: 'chat.suggestion.transfer.title', description: 'chat.suggestion.transfer.description', prompt: 'chat.suggestion.transfer.prompt', symbol: 'transfer' },
 ] as const;
+const ICON_TONES = ['bg-banking-teal-soft text-banking-teal', 'bg-banking-blue-soft text-banking-blue',
+  'bg-banking-lilac-soft text-banking-lilac', 'bg-banking-apricot-soft text-banking-apricot'] as const;
 
 function SuggestionIcon({ symbol }: { symbol: typeof SUGGESTIONS[number]['symbol'] }) {
   const paths = {
@@ -23,17 +26,17 @@ export function ChatWelcome({ onSelect, disabled }: { onSelect: (prompt: string)
   const { t } = useI18n();
   return (
     <section className="mx-auto flex w-full max-w-2xl flex-col items-start py-5 sm:py-16">
-      <div aria-hidden="true" className="mb-5 flex h-11 w-11 items-center justify-center rounded-2xl bg-banking-accent/10 text-banking-accent sm:mb-6 sm:h-14 sm:w-14">
-        <svg viewBox="0 0 32 32" fill="none" className="h-8 w-8"><path d="m16 3 3.4 9.6L29 16l-9.6 3.4L16 29l-3.4-9.6L3 16l9.6-3.4L16 3Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" /></svg>
+      <div aria-hidden="true" className="mb-5 flex h-12 w-14 items-center justify-center sm:mb-6 sm:h-14 sm:w-16">
+        <BrandMark width={64} height={56} className="h-full w-full object-contain" />
       </div>
       <h2 className="max-w-lg text-3xl font-semibold leading-tight tracking-tight text-banking-deep sm:text-4xl">{t('chat.welcome.title')}</h2>
       <p className="mt-4 max-w-lg text-sm leading-6 text-banking-navy">{t('chat.welcome.description')}</p>
       <div className="mt-6 grid w-full grid-cols-2 gap-3 sm:mt-8">
-        {SUGGESTIONS.map(suggestion => (
-          <button key={suggestion.symbol} type="button" disabled={disabled} onClick={() => onSelect(t(suggestion.prompt))} className="group flex items-center gap-2 rounded-2xl border border-slate-200/80 bg-white p-3 text-left transition hover:border-banking-accent/40 hover:shadow-xs disabled:opacity-50 sm:block sm:p-4">
-            <span className="inline-flex shrink-0 rounded-xl bg-slate-50 p-1.5 text-banking-accent transition group-hover:bg-banking-accent/10 sm:mb-3 sm:p-2"><SuggestionIcon symbol={suggestion.symbol} /></span>
-            <span className="block text-xs font-semibold leading-5 text-banking-deep sm:text-sm">{t(suggestion.title)}</span>
-            <span className="mt-1 hidden text-xs leading-5 text-banking-navy sm:block">{t(suggestion.description)}</span>
+        {SUGGESTIONS.map((suggestion, index) => (
+          <button key={suggestion.symbol} type="button" disabled={disabled} onClick={() => onSelect(t(suggestion.prompt))} className="group flex items-center gap-2 rounded-2xl border border-banking-border/80 bg-banking-surface p-3 text-left transition hover:border-banking-accent/40 hover:shadow-xs disabled:opacity-50 sm:block sm:p-4">
+            <span data-suggestion-icon className={`inline-flex shrink-0 rounded-xl p-1.5 transition group-hover:bg-banking-accent/10 sm:mb-3 sm:p-2 ${ICON_TONES[index]}`}><SuggestionIcon symbol={suggestion.symbol} /></span>
+            <span className="block text-banking-caption font-semibold leading-5 text-banking-deep sm:text-sm">{t(suggestion.title)}</span>
+            <span className="mt-1 hidden text-banking-caption leading-5 text-banking-navy sm:block">{t(suggestion.description)}</span>
           </button>
         ))}
       </div>

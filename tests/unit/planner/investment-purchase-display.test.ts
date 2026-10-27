@@ -94,7 +94,8 @@ describe('investment purchase display', () => {
       expect(markup).toContain(
         translate('zh-CN', 'business.investments.purchaseCount', { count: 2 }),
       );
-      expect(markup).not.toContain(formatDateTime(FIRST));
+      expect(markup).toContain(formatDateTime(FIRST));
+      expect(markup).toContain('data-holding-details');
     });
 
     it('derives the latest purchase time from the recorded purchases when lastPurchaseAt is absent', () => {

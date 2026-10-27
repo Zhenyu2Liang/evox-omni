@@ -36,14 +36,14 @@ interface StatusMeta {
  * `TaskNodeStatus` is covered so an unknown status can never fall through unrendered.
  */
 const STATUS_META: Record<TaskNodeStatus, StatusMeta> = {
-  pending: { icon: '○', label: 'tasks.timeline.pending', tone: 'neutral', text: 'text-gray-400' },
-  running: { icon: '●', label: 'tasks.timeline.running', tone: 'info', text: 'text-banking-accent' },
+  pending: { icon: '○', label: 'tasks.timeline.pending', tone: 'neutral', text: 'text-banking-navy' },
+  running: { icon: '●', label: 'tasks.timeline.running', tone: 'info', text: 'text-banking-interactive' },
   waiting_confirmation: { icon: '⏳', label: 'tasks.timeline.waitingConfirmation', tone: 'warn', text: 'text-banking-warn' },
   waiting_verification: { icon: '⏳', label: 'tasks.timeline.waitingVerification', tone: 'warn', text: 'text-banking-warn' },
   success: { icon: '✓', label: 'tasks.timeline.success', tone: 'success', text: 'text-banking-success' },
   failed: { icon: '✗', label: 'tasks.timeline.failed', tone: 'danger', text: 'text-banking-danger' },
-  cancelled: { icon: '×', label: 'tasks.timeline.cancelled', tone: 'neutral', text: 'text-gray-400' },
-  skipped: { icon: '–', label: 'tasks.timeline.skipped', tone: 'neutral', text: 'text-gray-400' },
+  cancelled: { icon: '×', label: 'tasks.timeline.cancelled', tone: 'neutral', text: 'text-banking-navy' },
+  skipped: { icon: '–', label: 'tasks.timeline.skipped', tone: 'neutral', text: 'text-banking-navy' },
 };
 
 /** Minimal row shape the timeline renders (spec `name`/`tool` enriched from the result). */
@@ -107,14 +107,14 @@ export function AgentTaskTimeline(props: AgentTaskTimelineProps) {
                   <Badge tone={meta.tone}>{t(meta.label)}</Badge>
                 </div>
                 {developerMode && tool !== undefined && (
-                  <div className="mt-0.5 text-xs text-gray-500">
+                  <div className="mt-0.5 text-banking-caption text-banking-navy">
                     {t('tasks.timeline.tool')}<code className="rounded-sm bg-banking-light px-1 py-0.5">{tool}</code>
                   </div>
                 )}
                 {status === 'failed' && result?.error !== undefined && (
-                  <p className="mt-0.5 text-xs text-banking-danger">{publicToolError(result.error, t)}</p>
+                  <p className="mt-0.5 text-banking-caption text-banking-danger">{publicToolError(result.error, t)}</p>
                 )}
-                {developerMode && status === 'failed' && result?.error !== undefined && <details className="mt-2 text-xs text-banking-navy">
+                {developerMode && status === 'failed' && result?.error !== undefined && <details className="mt-2 text-banking-caption text-banking-navy">
                   <summary>{t('chat.diagnostics.detail')}</summary>
                   <pre className="mt-1 whitespace-pre-wrap break-words">{String(sanitizeToolArguments(result.error))}</pre>
                 </details>}

@@ -17,7 +17,7 @@ export function ResultCard({ title, children, className, description, marker }: 
       className={className}
       title={(
         <div className="flex items-center gap-2.5">
-          {marker ? <span aria-hidden="true" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-banking-light text-banking-accent">{marker}</span> : null}
+          {marker ? <span aria-hidden="true" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-banking-light text-banking-interactive">{marker}</span> : null}
           <span className="text-sm font-semibold">{title}</span>
         </div>
       )}
@@ -31,7 +31,7 @@ export function ResultCard({ title, children, className, description, marker }: 
 export function ResultMetric({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="min-w-0 rounded-xl bg-banking-light/70 p-3">
-      <dt className="text-xs text-banking-navy/60">{label}</dt>
+      <dt className="text-banking-caption text-banking-navy">{label}</dt>
       <dd className="mt-1 break-words text-sm font-semibold tabular-nums text-banking-deep">{children}</dd>
     </div>
   );

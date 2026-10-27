@@ -6,7 +6,10 @@
  * issues the VIRTUAL card once a human supplies the code. The model-free execution path (used by the
  * confirmation flow, plan nodes and retries) is idempotent per `idempotencyKey`.
  *
- * Fixtures: demo user 李明; no VIRTUAL card in the seed. Helpers: ../helpers/*.
+ * Fixtures: demo user 李明; no VIRTUAL card in the seed. The issued card is ACCOUNT-BOUND at creation:
+ * the model names no settlement account, so the server binds the user's ONLY checking account
+ * (`acct_checking`, 活期账户 ****8821) — a virtual card that could not spend is never minted.
+ * Helpers: ../helpers/*.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -23,6 +26,14 @@ useFreshDatabase();
 
 const MONTHLY_LIMIT = '2000.00';
 const USER_REQUEST = '帮我申请一张月限额2000元的虚拟卡';
+/**
+ * The one CHECKING account of the demo user (`ACCOUNTS` in ../helpers/fixtures): 活期账户 ****8821,
+ * ¥23,580.00. A VIRTUAL card is account-bound at creation and the model never names an account — the
+ * server resolves the user's ONLY checking account (`resolveLinkedAccount`).
+ */
+const SETTLEMENT = 'acct_checking';
+const SETTLEMENT_MASKED = '****8821';
+const SETTLEMENT_BALANCE = '23580.00';
 
 /** Drive a fresh turn whose single model step proposes the RED `apply_virtual_card` call. */
 async function proposeVirtualCard(): Promise<{
@@ -68,6 +79,7 @@ describe('Scenario 14 — 申请虚拟卡 (RED MFA apply_virtual_card)', () => {
     expect(row.requiresMfa).toBe(true);
     expect(row.status).toBe('awaiting_mfa');
     expect(JSON.parse(row.argsJson)).toEqual({ monthlyLimit: MONTHLY_LIMIT });
+    // The model never names a settlement account: the SDK resolves it at creation (asserted below).
 
     expect(await getTestPrisma().card.count({ where: { type: 'VIRTUAL' } })).toBe(0);
   });
@@ -87,7 +99,20 @@ describe('Scenario 14 — 申请虚拟卡 (RED MFA apply_virtual_card)', () => {
     // A virtual card carries no credit limit and no per-category limits.
     expect(card.creditLimitMinor).toBeNull();
     expect(card.availableLimitMinor).toBeNull();
+    // Account-bound at creation (the model supplied no account: the server resolved the ONLY CHECKING).
+    expect(card.linkedAccountId).toBe(SETTLEMENT);
     expect(await getTestPrisma().cardLimit.count({ where: { cardId: card.id } })).toBe(0);
+
+    // The projection resolves that binding to LINKED: the card spends the ACCOUNT's cash (it owns no
+    // balance of its own), capped by its own limit — min(23,580.00 cash, 2,000.00 remaining limit).
+    const view = (await banking.card.getCards(DEMO_USER_ID)).find((entry) => entry.id === card.id);
+    expect(view).toBeDefined();
+    expect(view!.linkedAccountId).toBe(SETTLEMENT);
+    expect(view!.linkedAccountStatus).toBe('LINKED');
+    expect(view!.linkedAccountNumber).toBe(SETTLEMENT_MASKED);
+    expect(view!.accountAvailableBalance).toBe(SETTLEMENT_BALANCE);
+    expect(view!.payableAmount).toBe(MONTHLY_LIMIT);
+    expect(view!.usable).toBe(true);
 
     expect(
       (await getTestPrisma().pendingAction.findUniqueOrThrow({ where: { id: res.mfa!.actionId } })).status,

@@ -70,8 +70,16 @@ export function budgetPayload(value: unknown): BusinessReceipt | null {
 export function investmentPayload(value: unknown, kind: 'investmentPurchase' | 'investmentRedemption'): BusinessReceipt | null {
   if (!record(value) || typeof value.success !== 'boolean' || !money(value.amount) || !money(value.newBalance) || !timestamp(value.occurredAt) ||
     value.redemptionValuation !== undefined && !decimal(value.redemptionValuation) ||
-    value.settlementRounding !== undefined && value.settlementRounding !== 'HALF_UP') return null;
+    value.settlementRounding !== undefined && value.settlementRounding !== 'HALF_UP' ||
+    value.productName !== undefined && !text(value.productName) ||
+    ['remainingShares', 'redeemedShares', 'netValuePerUnit'].some(key => value[key] !== undefined && !decimal(value[key])) ||
+    value.feeAmount !== undefined && !money(value.feeAmount)) return null;
   return { kind, success: value.success, amount: value.amount, newBalance: value.newBalance, occurredAt: value.occurredAt,
+    ...(value.productName === undefined ? {} : { productName: value.productName as string }),
+    ...(value.remainingShares === undefined ? {} : { remainingShares: value.remainingShares as string }),
+    ...(value.redeemedShares === undefined ? {} : { redeemedShares: value.redeemedShares as string }),
+    ...(value.netValuePerUnit === undefined ? {} : { netValuePerUnit: value.netValuePerUnit as string }),
+    ...(value.feeAmount === undefined ? {} : { feeAmount: value.feeAmount as string }),
     ...(value.redemptionValuation === undefined ? {} : { redemptionValuation: value.redemptionValuation as string }),
     ...(value.settlementRounding === undefined ? {} : { settlementRounding: 'HALF_UP' as const }) };
 }

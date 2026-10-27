@@ -71,6 +71,75 @@ GREEN 只表示执行策略，不表示没有副作用。
 `test-18` 的咨询与歧义轮没有工具调用，因此既无面板也无 `PendingAction`，构成「模型只用文字声称」情形的负向对照。
 `test-04` 只证明注入文本不改变权限等级，不核对模型文字与实际工具调用/待决行是否一致。
 
+## 卡片与结算账户
+
+DEBIT 与 VIRTUAL 卡是结算账户借记工具，创建即绑定一个本人 CHECKING 账户。
+绑定由 `banking-sdk/card.ts#resolveLinkedAccount` 完成：显式 id 必须属本人（否则 `SECURITY_DENIED`）且为 CHECKING（否则 `VALIDATION`）。
+省略 id 时只在用户恰好一个 CHECKING 账户时自动绑定；0 个或多个都报 `VALIDATION`，从不回退默认账户。
+`replace_card` 让 DEBIT / VIRTUAL 的补办卡继承源卡结算账户，并重新校验该账户。
+VIRTUAL 源卡无绑定报 `CONFLICT`；无绑定的 DEBIT 源卡补办成功，补办卡仍无绑定。
+CREDIT 卡永不绑定：`addDemoCard` 与 `replaceCard` 都不为 CREDIT 写 `linkedAccountId`。
+`Card.linkedAccountId` 是真实外键，删除账户后该列为 `null`；「记录一个不存在的账户 id」在存储层不可表示。
+因此 `UNTRUSTED` 的真实来源是他人账户或非 CHECKING 账户，`MISSING` 的真实来源是空绑定。
+
+`CardView.linkedAccountStatus` 是必填全量状态：`LINKED`、`MISSING`、`UNTRUSTED`、`NOT_APPLICABLE`。
+`LINKED` 表示记录的账户存在、属本人且为 CHECKING；`MISSING` 表示卡上没有记录账户。
+`UNTRUSTED` 表示记录的 id 解析不到本人 CHECKING 账户；`NOT_APPLICABLE` 恒为 CREDIT。
+`linkedAccountNumber`、`linkedAccountName`、`accountAvailableBalance`、`payableAmount` 只在 `LINKED` 时出现。
+MISSING 与 UNTRUSTED 不报任何余额字段，绝不以 `0.00` 冒充空账户。
+`accountAvailableBalance` 是账户余额，不是卡片自有余额；同一账户的多张卡共享同一数额。
+`payableAmount = min(账户余额, 家庭本月剩余限额)`；月限额为空表示不限，等于账户余额。
+`usable` 只表示 `status === 'ACTIVE'`；`FROZEN` 与 `LOST` 仍保留完整余额字段。
+
+`test-13`、`test-14`、`test-16` 断言该投影：`LINKED`、账户尾号 `****8821`、`accountAvailableBalance` 等于账户余额。
+`test-19` 断言 CREDIT 恒 `NOT_APPLICABLE` 且余额字段为 `undefined`，补办卡与源卡都不绑定结算账户。
+夹具 `card_debit` 已绑定 `acct_checking`（活期账户，余额 `23580.00`）；`card_credit` 不绑定。
+## 熔断锁定路径
+
+`test-10-circuit-breaker.test.ts` 是本目录唯一覆盖「MFA 次数耗尽 → 熔断锁定」的场景（`test-03`/`test-09`/`test-13`/`test-14`/`test-16`/`test-19` 只走 `blocked` + `awaiting_mfa`，同名 `locked` 匹配多来自 `blocked`/`unlocked` 子串）。
+它只断言服务端事实：`MfaChallenge.status='locked'` 且 `attempts===maxAttempts===3`、`CircuitBreakerState.locked`/`failures`/`lockedAt`、`CIRCUIT_BREAKER_TRIPPED`（severity `high`）恰 1 条、`MFA_FAILURE` 恰 3 条、`authorizeAction` 返回 `ok:false`/`status:'locked'`、后续 RED 工具调用 `evaluation.blocked` + `decision.kind='deny'` 且不再建 `PendingAction`、余额与持仓不变。
+人类可见文案只按片段断言：`text` 含「验证码错误」与「锁定」，`auth.message` 含「熔断」。
+
+### 锁定文案与网关分支的对应（`security/security-gateway.ts`）
+
+第三条错码的 `text` 是 `authorizeWithMfa` 的 MFA_LOCKED 句子（`:911`「验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。」），本目录只断言其中的「锁定」。
+锁定后带正确码再授权的 `message` 来自 `lockedOutcome`（`:841`「当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。」），本目录只断言「熔断」子串。
+该次 `authorizeAction` 在 `row.status === 'locked'` 短路处返回（`:1116-1119`），因此 `authorizeAction` 的熔断闸门分支（`:1146-1148`，`isLocked` → `persistLockedAction`）在本目录从未被执行。
+新工具调用被拒的文案来自 `gatewayDecide` 的 `HIGH_RISK_BLOCKED` 分支（`:446`，同时含「熔断」「锁定」），`test-10` 只断言 `evaluation.blocked`/`decision.kind='deny'`/无 `action`，不读该文案。
+
+### 熔断所有者与隔离
+
+`runTurn` 会 upsert 归属 `DEMO_USER_ID` 的 `AgentSession`（`../helpers/scenario.ts:429`），`resolveBreakerOwner` 优先取会话用户（`security/circuit-breaker.ts:115-121`），所以本目录所有场景共用 `user:user_liming` 一条熔断状态。
+隔离只来自 `useFreshDatabase()` 在每个用例前清库；`newSessionId()` 不隔离熔断，`test-10` 头注释的「session 级隔离」说法已过时。
+本目录不读 `AuditLog`（全目录无 `auditLog` 断言），也不经 HTTP（`GET /api/actions` 在此不可达，`test-19` 的 `api/actions` 只出现在注释里）。
+本目录与 `../helpers` 都不匹配 `chat.error.securityLocked`/`chat.error.toolFailed`、完整锁定语（「验证码错误次数过多……安全中心……」）、`__SECURITY_BLOCK__`、`CIRCUIT_OPEN` 或 HTTP 423；那些只出现在 `../app` 的 HTTP 用例与 `../integration`、`../e2e` 目录。
+`../helpers/scenario.ts#handleToolExecutionEnd` 会把 `deny` 阻塞理由发布为 `security_event{kind:'locked'}`，但本目录没有用例断言该事件。
+`MfaCard`/`publicToolError` 的 LOCKED 渲染不属于本目录覆盖范围。
+
+### 锁定路径的可观测面与逐条断言位置
+
+`ScenarioResult` 只有 `text`/`events`/`toolEvents`/`cards`，没有 `status`/`mfaResult`/`code`；
+`../helpers/scenario.ts#decideAndContinue` 在 `auth.ok===false` 时返回 `{events:[], cards:[], text: auth.message}`，
+所以「错码仍有剩余次数」「第三次错码刚锁定」「已锁定后再试」三者只能靠 `text` 字符串区分。
+
+| 断言 | 位置 |
+| --- | --- |
+| 第 1 次错码文案含「验证码错误」 | `test-10-circuit-breaker.test.ts:93` |
+| 第 3 次错码文案含「锁定」 | `test-10-circuit-breaker.test.ts:111`（本目录唯一的锁定人话断言） |
+| `MfaChallenge.status='locked'` 且 `attempts`/`maxAttempts` 为 3 | `test-10-circuit-breaker.test.ts:105-107` |
+| 熔断状态 `locked`/`failures`/`lockedAt` | `test-10-circuit-breaker.test.ts:123-127` |
+| `CIRCUIT_BREAKER_TRIPPED` severity `high`、message 含「锁定」，`MFA_FAILURE` 恰 3 条 | `test-10-circuit-breaker.test.ts:140-151` |
+| `authorizeAction` 返回 `ok:false`/`status:'locked'`/`message` 含「熔断」 | `test-10-circuit-breaker.test.ts:172-174` |
+| 锁定后 `handleToolCall` 返回 `evaluation.blocked` + `decision.kind='deny'` + 无 `action` + 不新增 `PendingAction` | `test-10-circuit-breaker.test.ts:185-188` |
+| 无码确认/验证的文案含「验证码」 | `test-03-transfer-mfa.test.ts:142`、`test-09-investment-mfa.test.ts:157` |
+| 工具错误卡片文本（时间守卫拒绝理由） | `test-17-consumption-time-guard.test.ts:206-210`、`:241-242`、`:324-327` |
+
+本目录没有任何断言涉及 `PendingAction.status='locked'`、`code:'CIRCUIT_OPEN'`、`security_event`（`kind` 或 `message`）、
+`__SECURITY_BLOCK__` 原文、`chat.error.toolFailed`、`chat.error.securityLocked`；`it.each` 仅 `test-17:227` 一处。
+`mock-integration.test.ts:98-105#expectHealthyTurn` 是唯一的「每轮无 `error` 事件且 assistant 文本非空」全局守卫，
+只查非空与无错误，因此错误文案被换成通用兜底、或原始阻塞载荷出现在文本里，都不会被发现。
+渲染层人话与 `__SECURITY_BLOCK__` 泄漏由 `../unit/planner/tool-feedback.test.ts` 与 `../e2e` 覆盖，不在此目录。
+
 ## 虚拟卡家族与消费入账时间
 
 `test-16` 以一次会话走完「申请 → 消费到限额 → 挂失 → 补办 → 继续消费」的 MFA 闸门路径。
@@ -85,6 +154,14 @@ GREEN 只表示执行策略，不表示没有副作用。
 首拒层是工具注册表安装的 `prepareArguments` 参数校验，因此不会持久化 `PendingAction`、也不产生 `AuthorizationDecision`。
 已持久化动作与计划节点的重放同样被拒；不带时间字段的对照计划可正常提交。
 拒绝时不产生扣款、`channel='CARD'` 流水或 `CardConsumption` 记录。
+
+## 货币格式化的断言口径
+
+本目录唯一的 `formatCNY` 使用者是 `test-02-transfer-confirm.test.ts`：`AMOUNT = '200'`（十进制字符串元），期望值为计算值而非硬编码——`:123` 与 `:155` 用 `toBe(formatCNY(AMOUNT))` 断言 `PendingActionSummary` 与确认卡片的 `Amount` 字段，`:130` 把它写进整份 `fields` 数组的 `toEqual`，`:243` 用 `toContain(formatCNY(AMOUNT))` 断言叙述（同行注释给出 `¥200.00`）。本目录没有 `formatDecimalCNY`。
+
+其余 `¥` 命中几乎全是测试标题与文档注释里的说明性金额；`test-01-balance.test.ts:38` 的 `NARRATION = '您的活期余额为 ¥23,580.00。'` 是喂给脚本化模型的输入文案，本目录只有 `:91`/`:141` 与 `mock-integration.test.ts:134` 三条 `toContain('23,580')` 弱断言（只认千分位片段，不认 `¥` 与小数位）。
+
+因此本目录不覆盖 `¥0.00`、`-¥…`、三位小数 HALF_UP 取整；金额精度与舍入只在 `../unit/banking-sdk`、`../integration` 与 `../e2e` 断言。共享的可复用渲染金额夹具在 `../fixtures/mfa-escalation.zh-CN.json#formattedAmount`（`"¥500.50"`，由 `../integration/decision-guidance.test.ts` 断言）。
 
 ## 已知问题
 

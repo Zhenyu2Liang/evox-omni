@@ -92,7 +92,10 @@ export async function POST(req: NextRequest, ctx: IdRouteContext): Promise<Respo
       // to keep offering the code input, and a YELLOW confirmation never required MFA at all.
       mfaResult: 'not_required',
       message: outcome.message,
-      events,
+      ...(outcome.code ? { code: outcome.code } : {}),
+      ...(outcome.failure
+        ? { failure: outcome.failure, attemptsLeft: outcome.failure.attemptsLeft, maxAttempts: outcome.failure.maxAttempts }
+        : {}),      events,
     };
 
     return jsonResponse<ActionResponse>(mapped);

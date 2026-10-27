@@ -48,6 +48,7 @@ import { ledgerKeyForAction } from '@/lib/ledger';
 import { prisma } from '@/lib/db/client';
 import { newId } from '@/lib/ids';
 import { restoreConversationUserMemory } from './conversation-context';
+import { currentTurnFocus, withCurrentTurnFocus } from './current-turn-focus';
 import { CONVERSATION_TOOL_REJECTION } from '@/lib/tool-feedback';
 import { createContextCompactor, type ContextCompactionState } from './context-compaction';
 import { estimateContextTokens } from './context-compaction/projection';
@@ -361,16 +362,16 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
     afterToolCall,
     finishTurn,
     prepareRequest: async (request, signal) => {
-      readTurnIntent();
+      const focus = currentTurnFocus(readTurnIntent());
       const projection = normalizeToolResultMessages(request.context.messages);
       const systems = projection.filter(message => message.role === 'system');
       const declared = new Set(getCurrentTools(projection).map(tool => tool.name));
       const missingTools = (request.context.tools ?? []).filter(tool => !declared.has(tool.name)).map(toToolDeclaration);
-      const overhead = missingTools.length || systems.length === 0 ? estimateContextTokens([{
+      const overhead = estimateContextTokens([focus]) + (missingTools.length || systems.length === 0 ? estimateContextTokens([{
         role: 'system', timestamp: 0, content: systems.length ? '' : systemPrompt, toolsAdded: missingTools,
-      }]) : 0;
+      }]) : 0);
       const messages = options.journal?.hasOriginalModelInput()
-        ? request.context.messages : await compactor.project(projection, signal, overhead);
+        ? request.context.messages : withCurrentTurnFocus(await compactor.project(projection, signal, overhead), focus);
       const recorded = await options.journal?.prepareModelRequest({ ...request, context: { ...request.context, messages } });
       preparedModelMessages = recorded?.context?.messages ?? messages;
       // Pi's loop retains its full conversation. Only transformContext sees the request projection.

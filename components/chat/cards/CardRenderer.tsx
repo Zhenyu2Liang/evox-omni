@@ -72,7 +72,7 @@ function renderCard(p: CardRendererProps) {
     case 'spending':
       return <SpendingCard data={p.card.data as SpendingAnalysis} className={p.className} />;
     case 'cards':
-      return <CardsCard data={p.card.data as CardView[]} className={p.className} />;
+      return <CardsCard data={p.card.data as CardView[]} issuanceActionId={p.card.issuanceActionId} className={p.className} />;
     case 'investments':
       return <InvestmentsCard data={p.card.data as InvestmentsCardData} className={p.className} />;
     case 'subscriptions':

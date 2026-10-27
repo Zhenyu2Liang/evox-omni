@@ -24,15 +24,62 @@
 Decimal 最多支持 40 位整数和 18 位小数。
 数值定义见 [金融数值](financial-values.md)。
 
+## 未验证的范围
+
+微信通道的真实收发未验证。
+扫码登录、出站长轮询与发送的代码在 `channels/weixin/` 内，线协议来自 `pi-weixinbot@1.0.5`。
+自动化验收使用本地假协议服务器，`token` 是假值，`/getupdates` 响应由测试伪造。
+`channels/weixin/transport.ts`、`channels/weixin/worker.ts` 与 `channels/weixin/login.ts` 没有自动化测试，也没有真机记录。
+真实账号的消息收发、客户端兼容性、会话有效期与账号级限制未验证。
+完成验证需要真实账号和手机，从扫码登录到收到回复逐步执行。
+说明见 [微信通道](weixin.md)。
+
+卡片关联状态的 `MISSING` 与 `UNTRUSTED` 分支没有真实数据验证。
+`banking-sdk/card.ts` 的 `resolveSettlement` 按固定顺序判定：`CREDIT` 为 `NOT_APPLICABLE`，空绑定为 `MISSING`，记录 id 不是本人活期账户为 `UNTRUSTED`，否则为 `LINKED`。
+只有 `LINKED` 带账户名、脱敏账号与余额，其余状态这些字段缺省而不是 `0.00`。
+这两个分支只由用例直接写库构造。
+构造方式有四种：清空绑定、绑定其他用户的账户、绑定非活期账户，以及删除账户触发外键 `SetNull`。
+用例见 `tests/unit/banking-sdk/card-linked-account.test.ts`。
+演示种子与接口、页面流程都不产生这两个分支，因此没有可复现的用户流程证据。
+口径见 [卡片管理](card-management.md)。
+
+live 验收的结论只对已运行场景成立。
+证据表与每轮认证范围见 [LIVE-ACCEPTANCE-REPORT.md](../../tests/e2e/LIVE-ACCEPTANCE-REPORT.md)。
+每行证据只认证报告标注的产品树。
+产品代码改动后，需要在该产品树上重跑。
+报告列出的未验证内容见 [NOT verified by these runs](../../tests/e2e/LIVE-ACCEPTANCE-REPORT.md#not-verified-by-these-runs)。
+这批内容包括生产构建、集群并发、真实银行接口与其他节点的 Vitest。
+模型稳定性、`DEBIT` 卡补办的 live 路径与 `MISSING`、`UNTRUSTED` 绑定的页面渲染也属于这批内容。
+
 ## 业务结果的含义
 
-- 理财申购从活期账户扣款，追加申购并入已有持仓。部分赎回按指定本金金额结算，剩余本金继续持有；全额赎回关闭整笔持仓。
+- 理财申购从活期账户扣款，追加申购并入已有持仓。赎回必须声明服务端模式 `SHARES`／`AMOUNT`／`ALL`：`SHARES` 按份额赎回，`AMOUNT` 按 `FLOOR(金额 ÷ 净值, 6 位小数)` 折算份额，`ALL` 赎回全部份额。超出持仓的请求被拒绝而不截断，剩余份额为零时关闭整笔持仓。
 - 卡片限额只修改分类消费上限，不调整总授信。虚拟卡绑定活期账户，支持本地模拟消费，未接入真实商户支付。
+- 虚拟卡消费在本地记账：一次事务扣减绑定的活期账户并写入 `CardConsumption`，不产生真实商户或银行交易。
+- 消费时刻由服务端生成，调用方传入的 `occurredAt` 被拒绝。
+- 月限额把同一张卡补办前后的消费合并累计。
 - 原交易记录没有卡片 ID。异常交易冻结入口要求用户选择卡片。
 - 本人交易确认只保存审计记录，不删除异常标记。
 - 总资产等于账户余额与持仓估值之和，不扣除信用卡负债。
 - 安全中心的开发者重置按钮只解除熔断，不授予原操作执行权。确认和认证仍按原状态处理。
 - 有向无环图（DAG）工作流按节点提交，整个计划不是单个事务。后继节点失败不会回退已入账交易。
+- 历史持仓的份额只能由离线脚本 `scripts/investment-share-backfill.mjs` 派生。
+- 派生口径是 `shares = FLOOR(账面市值 ÷ 净值, 6 位小数)`，结果标记为 `shares_estimated`。
+- 读取侧 `valueBasis` 为 `MIGRATED_ESTIMATE`，界面标注“估算”。这类持仓是估算值，不是真实申购记录。
+- 产品未发布净值或净值为零时，脚本跳过该行，不伪造份额。负净值让整轮中止且零写入。
+- 市值一律按 `份额 × 最新净值` 派生，入口是 `banking-sdk/investment.ts#holdingValuation`。
+- 净值最多 4 位小数，份额最多 6 位小数，超出位数的输入按参数错误拒绝。
+- `InvestmentHolding.estimatedMarketValue` 只是写入时的快照，读取路径不使用。
+- 份额或净值缺失时，`valueBasis` 为 `HISTORICAL_DATA_INSUFFICIENT`，市值回退为剩余成本，且不给收益与收益率。申购时间与净值历史不参与估值。
+- 费用恒为零是模拟口径：数据模型没有费用列，持仓、`Transaction` 与 `CardConsumption` 都不记录费用。
+- 赎回结果保留 `feeAmount`（恒 `0.00`）与 `feeRule`（恒 `SIMULATED_NONE`）两个展示字段，金额不是计算出来的。
+- 到账金额是 `HALF_UP(赎回份额 × 成交净值)`，不扣减费用。申购与虚拟卡消费只按请求金额记账。
+- 费用字段不在赎回的确认快照里，费率口径变化不会让挂起动作失效。真实费率、最低收费与费用归还规则未验证。
+- 并发赎回在 SQLite 下只有进程内串行保证。同一进程只有一个数据库连接，`lib/db/serialized-connection.ts` 的 FIFO 互斥量覆盖普通语句与整段交互式事务。
+- 第二笔赎回在第一笔提交后才开始，被带旧 `shares` 与 `status: 'HOLDING'` 的条件写拒绝，整笔回滚并抛 `CONFLICT`（`该持仓已发生变化，请重新确认。`）。
+- 该串行保证不跨进程：`pnpm agent:worker`、`pnpm scheduler:tick` 与微信通道各持独立连接。
+- 第二个写进程在原生锁上等待 10 秒后以 `SQLITE_BUSY` 失败，应用层没有映射成类型化冲突。换成支持并发的后端前，不能假设高并发安全。
+- 用例见 `tests/unit/banking-sdk/atomicity.test.ts`，覆盖一次成功、一次 `CONFLICT` 与账户只入账一次。该用例不含跨进程与 HTTP 层竞态。
 
 代码入口见 [理财](../../banking-sdk/investment.ts)、[卡片](../../banking-sdk/card.ts) 和 [资产汇总](../../banking-sdk/dashboard.ts)。
 异常处理见 [本人交易确认](../../app/api/transactions/[id]/acknowledge/route.ts) 和 [异常交易卡片](../../components/chat/cards/AnomalyCard.tsx)。

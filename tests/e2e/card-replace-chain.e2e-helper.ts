@@ -23,6 +23,8 @@
 import { spawnSync } from 'node:child_process';
 import type { Page } from 'playwright-core';
 import { centsToMoney, formatCNY, moneyToCents } from '../../lib/money';
+import { CARD_LABEL, CARD_LABEL_RETIRED } from './card-labels.e2e-helper';
+import { assertIssuanceReceipt } from './issuance-receipt.e2e-helper';
 import {
   REPO_ROOT,
   SELECTORS,
@@ -157,6 +159,88 @@ export function certifiedHead(): string {
   return out.status === 0 && text !== '' ? text : '(未知)';
 }
 
+// --- rendered `CardTile` label contract ----------------------------------------------------------
+//
+// `readCardTileRows` keys its `Record<renderedLabel, renderedValue>` by the label the tile ACTUALLY
+// renders, so every lookup in this module goes through {@link CARD_LABEL} (`./card-labels.e2e-helper`,
+// derived from `lib/i18n/messages/business.zh-CN.json` — the very catalogue
+// `components/banking/CardTile.tsx` renders from). A hard-coded literal turns a catalogue rename into a
+// silent `undefined` lookup, which then fails for the wrong reason (or passes vacuously on an absence).
+
+/**
+ * A superseded label must not be a row any more. `CARD_LABEL_RETIRED` (`账户可用余额` / `当前可支付金额`)
+ * stays in the catalogue, so this proves a tile renders the CURRENT rows — `账户余额` / `可用余额` —
+ * instead of merely forgetting the old ones: finding a retired row is a rendering defect.
+ */
+export function assertNoRetiredCardLabels(rows: Record<string, string>, label: string): void {
+  if (CARD_LABEL_RETIRED.accountAvailable in rows || CARD_LABEL_RETIRED.payableAmount in rows) {
+    throw new Error(
+      `${label}：卡片不得再渲染已废弃标签「${CARD_LABEL_RETIRED.accountAvailable}」/「${CARD_LABEL_RETIRED.payableAmount}」，实际渲染行 ${JSON.stringify(rows)}`,
+    );
+  }
+}
+
+/**
+ * A `CREDIT` tile renders its credit rows and NO settlement-account amount: a credit card's
+ * `CardView.linkedAccountStatus` is always `NOT_APPLICABLE` (`banking-sdk/types.ts`), so it has no
+ * account cash — inventing an `账户余额` row for it is exactly the credit/debit confusion to avoid.
+ */
+export function assertCreditTileLabels(rows: Record<string, string>, label: string): void {
+  assertNoRetiredCardLabels(rows, label);
+  if (rows[CARD_LABEL.creditLimit] === undefined || rows[CARD_LABEL.availableLimit] === undefined) {
+    throw new Error(
+      `${label}：CREDIT 卡片必须渲染「${CARD_LABEL.creditLimit}」与「${CARD_LABEL.availableLimit}」两行，实际渲染行 ${JSON.stringify(rows)}`,
+    );
+  }
+  if (rows[CARD_LABEL.accountBalance] !== undefined || rows[CARD_LABEL.usableBalance] !== undefined) {
+    throw new Error(
+      `${label}：CREDIT 卡片没有结算账户，不得渲染「${CARD_LABEL.accountBalance}」/「${CARD_LABEL.usableBalance}」行，实际渲染行 ${JSON.stringify(rows)}`,
+    );
+  }
+}
+
+/**
+ * A card whose settlement ACCOUNT resolved renders the account rows and NO credit row: a `VIRTUAL` /
+ * `DEBIT` card is a debit instrument drawing on that account's cash, so `信用额度` / `可用额度` on it
+ * would be a credit line invented on top of cash. Those rows carry the REAL amounts even while the card
+ * is unusable (`usable === false`, e.g. `LOST`) — unusable is not empty.
+ *
+ * `MISSING` / `UNTRUSTED` — ONLY the notice (`未关联账户` / `账户暂不可用`) and NO money row at all,
+ * never a placeholder `0.00`.
+ */
+export function assertLinkedAccountTileLabels(
+  rows: Record<string, string>,
+  label: string,
+  status: 'LINKED' | 'MISSING' | 'UNTRUSTED' = 'LINKED',
+  tileText?: string,
+): void {
+  assertNoRetiredCardLabels(rows, label);
+  if (status !== 'LINKED') {
+    const notice = status === 'MISSING' ? CARD_LABEL.linkedAccountMissing : CARD_LABEL.linkedAccountUntrusted;
+    for (const moneyRow of [CARD_LABEL.accountBalance, CARD_LABEL.usableBalance]) {
+      if (rows[moneyRow] !== undefined) {
+        throw new Error(
+          `${label}：linkedAccountStatus=${status} 时不得渲染「${moneyRow}」行（该状态没有金额，绝不以 0.00 冒充），实际渲染行 ${JSON.stringify(rows)}`,
+        );
+      }
+    }
+    if (tileText !== undefined && !tileText.includes(notice)) {
+      throw new Error(`${label}：linkedAccountStatus=${status} 时应渲染提示「${notice}」：${tileText.slice(0, 240)}`);
+    }
+    return;
+  }
+  if (rows[CARD_LABEL.accountBalance] === undefined || rows[CARD_LABEL.usableBalance] === undefined) {
+    throw new Error(
+      `${label}：绑定账户的非信用卡必须渲染「${CARD_LABEL.accountBalance}」与「${CARD_LABEL.usableBalance}」两行，实际渲染行 ${JSON.stringify(rows)}`,
+    );
+  }
+  if (rows[CARD_LABEL.creditLimit] !== undefined || rows[CARD_LABEL.availableLimit] !== undefined) {
+    throw new Error(
+      `${label}：非信用卡不得渲染信用额度行「${CARD_LABEL.creditLimit}」/「${CARD_LABEL.availableLimit}」，实际渲染行 ${JSON.stringify(rows)}`,
+    );
+  }
+}
+
 // --- credit-available maths (ONE definition, shared by lF's before/after diff) ---------------------
 
 /**
@@ -193,6 +277,9 @@ export function uniqueActiveCreditCard(cards: readonly LiveCardRecord[]): LiveCa
  * The credit-available figure the `/cards` PAGE actually renders: the `可用额度` `<dd>` of every
  * `CREDIT` tile, summed by card id. `app/cards/page.tsx` renders NO page-level aggregate, so "counted
  * once" can only be proven per tile — `includeLost: false` implements the correct (non-double) reading.
+ *
+ * The row label is {@link CARD_LABEL.availableLimit}: the string `CardTile` actually renders, never a
+ * literal that a catalogue rename would silently turn into an `undefined` row.
  */
 export async function renderedCreditAvailableMinor(
   page: Page,
@@ -206,7 +293,7 @@ export async function renderedCreditAvailableMinor(
   for (const card of creditCards) {
     await waitForElementHydration(page, `[data-card-id="${card.id}"]`);
     const rows = await readCardTileRows(page, card.id);
-    total += minorOf(rows['可用额度'], `${card.id} 卡片渲染的「可用额度」`);
+    total += minorOf(rows[CARD_LABEL.availableLimit], `${card.id} 卡片渲染的「${CARD_LABEL.availableLimit}」`);
   }
   return total;
 }
@@ -541,7 +628,7 @@ export function awaitPayableAmount(
     {
       timeoutMs: 180_000,
       intervalMs: 1_000,
-      description: `${label}：${cardId}.payableAmount === ${expected}（min(账户可用余额, 剩余月限额)）`,
+      description: `${label}：${cardId}.payableAmount === ${expected}（min(账户余额, 剩余月限额)）`,
     },
   );
 }
@@ -614,10 +701,13 @@ export async function scenarioCreditReplaceNewSession(params: CardChainParams): 
   await gotoCards(page, baseUrl);
   await waitForElementHydration(page, `[data-card-id="${LF_CREDIT_CARD_ID}"]`);
   const sourceTileAfterLost = await readCardTileRows(page, LF_CREDIT_CARD_ID);
+  assertCreditTileLabels(sourceTileAfterLost, 'lF 挂失后源信用卡卡片');
+  // 「不可用 ≠ 余额为零」: the source is LOST (`usable === false`) and STILL renders its real 可用额度
+  // row — what changes is that it is not counted in the credit total, never the amount on the tile.
   const renderedAfterLostMinor = await renderedCreditAvailableMinor(page, cardsAfterLost, { includeLost: false });
   const lostShot = await captureShot(page, 'lF-cards-after-lost');
-  if (sourceTileAfterLost['可用额度'] !== formatCNY(centsToMoney(LF_CREDIT_LIMIT_MINOR))) {
-    throw new Error(`lF：挂失后源卡仍应渲染原「可用额度」${formatCNY(centsToMoney(LF_CREDIT_LIMIT_MINOR))}（该值不得计入可用合计），实际 ${sourceTileAfterLost['可用额度']}（${JSON.stringify(sourceTileAfterLost)}）`);
+  if (sourceTileAfterLost[CARD_LABEL.availableLimit] !== formatCNY(centsToMoney(LF_CREDIT_LIMIT_MINOR))) {
+    throw new Error(`lF：挂失后源卡仍应渲染原「${CARD_LABEL.availableLimit}」${formatCNY(centsToMoney(LF_CREDIT_LIMIT_MINOR))}（该值不得计入可用合计），实际 ${sourceTileAfterLost[CARD_LABEL.availableLimit]}（${JSON.stringify(sourceTileAfterLost)}）`);
   }
   if (renderedAfterLostMinor !== nonLostAfterLostMinor) {
     throw new Error(`lF：/cards 渲染的非 LOST 信用卡可用合计（${renderedAfterLostMinor}）应等于 GET /api/cards 推导值（${nonLostAfterLostMinor}）`);
@@ -643,6 +733,7 @@ export async function scenarioCreditReplaceNewSession(params: CardChainParams): 
     label: 'lF 补办信用卡',
   });
   const newId = outcome.replacementId;
+  await assertIssuanceReceipt(page, baseUrl, leg.action.id, newId);
   if (outcome.replacementRaw.numberMasked === LF_CREDIT_CARD_MASK) {
     throw new Error(`lF：补办卡卡号不得沿用源卡 ${LF_CREDIT_CARD_MASK}，实际 ${outcome.replacementRaw.numberMasked}`);
   }
@@ -687,14 +778,31 @@ export async function scenarioCreditReplaceNewSession(params: CardChainParams): 
   await gotoCards(page, baseUrl);
   await waitForElementHydration(page, `[data-card-id="${newId}"]`);
   const replacementTileRows = await readCardTileRows(page, newId);
+  assertCreditTileLabels(replacementTileRows, 'lF 补办信用卡卡片');
   const renderedAfterReplaceMinor = await renderedCreditAvailableMinor(page, cardsAfter, { includeLost: false });
   const renderedNaiveMinor = await renderedCreditAvailableMinor(page, cardsAfter, { includeLost: true });
   const replaceShot = await captureShot(page, 'lF-cards-after-replace');
-  if (replacementTileRows['信用额度'] !== formatCNY(centsToMoney(LF_CREDIT_LIMIT_MINOR))) {
-    throw new Error(`lF：补办卡「信用额度」应渲染 ${formatCNY(centsToMoney(LF_CREDIT_LIMIT_MINOR))}，实际 ${replacementTileRows['信用额度']}（${JSON.stringify(replacementTileRows)}）`);
+  for (const card of cardsAfter.filter(card => card.status === 'ACTIVE')) {
+    const expected = card.type === 'CREDIT' ? card.availableLimit : card.type === 'VIRTUAL' ? card.payableAmount : card.accountAvailableBalance;
+    if (expected === undefined) continue;
+    const hero = page.locator(`[data-card-id="${card.id}"] [data-card-primary-amount]`);
+    if ((await hero.locator('dd').textContent())?.trim() !== formatCNY(expected)) throw new Error(`The ${card.type} tile shows the wrong primary amount`);
+    const details = page.locator(`[data-card-id="${card.id}"] [data-card-details]`);
+    if (await details.getAttribute('open') !== null) throw new Error('Card details must initially be collapsed');
+    await details.locator('summary').click();
+    if (!(await details.innerText()).trim()) throw new Error('Expanded card facts are unavailable');
+    await details.locator('summary').click();
   }
-  if (replacementTileRows['可用额度'] !== formatCNY(centsToMoney(LF_CREDIT_LIMIT_MINOR))) {
-    throw new Error(`lF：补办卡「可用额度」应渲染 ${formatCNY(centsToMoney(LF_CREDIT_LIMIT_MINOR))}，实际 ${replacementTileRows['可用额度']}（${JSON.stringify(replacementTileRows)}）`);
+  const desktopViewport = page.viewportSize();
+  await page.setViewportSize({ width: 390, height: 844 });
+  if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)) throw new Error('Mobile cards overflow horizontally');
+  await captureShot(page, 'lF-mobile-card-overview');
+  if (desktopViewport) await page.setViewportSize(desktopViewport);
+  if (replacementTileRows[CARD_LABEL.creditLimit] !== formatCNY(centsToMoney(LF_CREDIT_LIMIT_MINOR))) {
+    throw new Error(`lF：补办卡「${CARD_LABEL.creditLimit}」应渲染 ${formatCNY(centsToMoney(LF_CREDIT_LIMIT_MINOR))}，实际 ${replacementTileRows[CARD_LABEL.creditLimit]}（${JSON.stringify(replacementTileRows)}）`);
+  }
+  if (replacementTileRows[CARD_LABEL.availableLimit] !== formatCNY(centsToMoney(LF_CREDIT_LIMIT_MINOR))) {
+    throw new Error(`lF：补办卡「${CARD_LABEL.availableLimit}」应渲染 ${formatCNY(centsToMoney(LF_CREDIT_LIMIT_MINOR))}，实际 ${replacementTileRows[CARD_LABEL.availableLimit]}（${JSON.stringify(replacementTileRows)}）`);
   }
   if (renderedAfterReplaceMinor !== LF_CREDIT_LIMIT_MINOR) {
     throw new Error(`lF：/cards 上非 LOST 信用卡「可用额度」渲染合计应为 ${LF_CREDIT_AVAILABLE}（只计一次），实际 ${centsToMoney(renderedAfterReplaceMinor)}`);
@@ -744,7 +852,7 @@ export async function scenarioCreditReplaceNewSession(params: CardChainParams): 
     screenshots: { lostShot, replaceShot },
   });
 
-  return `lF（认证产品树 ${head}，模型 ${model}）1 挂失实际发送：${lostTurns.map((t) => `「${t}」`).join(' → ')} → MFA ${LF_MFA_CODE} → RAW ${LF_CREDIT_CARD_ID}.status=${lostRaw.status}（模型散文：${brief(lostProse)}）；2 补办前基线：GET /api/cards ${cardsAfterLost.length} 张（${describeCards(cardsAfterLost)}）、非 LOST 可用合计 ${centsToMoney(nonLostAfterLostMinor)}、朴素全 CREDIT 合计 ${centsToMoney(naiveAfterLostMinor)}、/cards 渲染非 LOST 可用 ${centsToMoney(renderedAfterLostMinor)}（源卡「可用额度」=${sourceTileAfterLost['可用额度']} 不得计入）、dashboard=${moneyBeforeReplace.checkingBalance}；3-4 补办实际发送：${leg.turns.map((t) => `「${t}」`).join(' → ')}（模型散文：${brief(leg.prose)}）→ /api/actions 出现 replace_card 待确认动作 ${leg.action.id}（tier=${leg.action.tier}、requiresMfa=${leg.action.requiresMfa}、status=${leg.action.status}；SQLite 同行 status=${leg.actionRow.status}、mfa=${leg.actionRow.mfa?.status ?? '无'}/${leg.actionRow.mfa?.attempts ?? '-'}），验证前卡片总数仍 ${leg.preVerification.cardCount}、未新增任何卡、源卡 status=${leg.preVerification.sourceStatus}、replacedByCardId=${leg.preVerification.sourceReplacedByCardId ?? 'null'}；5 未出现「只能手动办理」拒绝（replace_card 门控真实存在）；6 MFA ${LF_MFA_CODE} 后：恰 1 张新 CREDIT 卡 ${newId}（RAW status=${outcome.replacementRaw.status}、卡号 ${outcome.replacementRaw.numberMasked} ≠ ${LF_CREDIT_CARD_MASK}、creditLimitMinor=${outcome.replacementRaw.creditLimitMinor}、availableLimitMinor=${outcome.replacementRaw.availableLimitMinor}），源卡 status=${outcome.sourceRaw.status}、replacedByCardId=${outcome.sourceRaw.replacedByCardId}，卡片总数 ${cardsAfterLost.length} → ${cardsAfter.length}（基线 + 1）；7 额度不重复：非 LOST 可用合计 ${centsToMoney(availableAfterMinor)}（= 挂失前 ${centsToMoney(availableBeforeLostMinor)}），/cards 渲染非 LOST 可用合计 ${centsToMoney(renderedAfterReplaceMinor)}、补办卡「信用额度」=${replacementTileRows['信用额度']}、「可用额度」=${replacementTileRows['可用额度']}；把 LOST 源卡计入的朴素合计 ${centsToMoney(naiveAfterMinor)}（渲染 ${centsToMoney(renderedNaiveMinor)}）作为 bug 签名显式排除；8 资金不变：dashboard ${moneyBeforeReplace.checkingBalance} → ${moneyAfter.checkingBalance}、GET /api/bills 新增 0 条/消失 0 条；截图 ${lostShot ?? '未落盘'} / ${replaceShot ?? '未落盘'}；证据 JSON ${evidenceFile ?? '未落盘'}`;
+  return `lF（认证产品树 ${head}，模型 ${model}）1 挂失实际发送：${lostTurns.map((t) => `「${t}」`).join(' → ')} → MFA ${LF_MFA_CODE} → RAW ${LF_CREDIT_CARD_ID}.status=${lostRaw.status}（模型散文：${brief(lostProse)}）；2 补办前基线：GET /api/cards ${cardsAfterLost.length} 张（${describeCards(cardsAfterLost)}）、非 LOST 可用合计 ${centsToMoney(nonLostAfterLostMinor)}、朴素全 CREDIT 合计 ${centsToMoney(naiveAfterLostMinor)}、/cards 渲染非 LOST 可用 ${centsToMoney(renderedAfterLostMinor)}（源卡「${CARD_LABEL.availableLimit}」=${sourceTileAfterLost[CARD_LABEL.availableLimit]} 不得计入）、dashboard=${moneyBeforeReplace.checkingBalance}；3-4 补办实际发送：${leg.turns.map((t) => `「${t}」`).join(' → ')}（模型散文：${brief(leg.prose)}）→ /api/actions 出现 replace_card 待确认动作 ${leg.action.id}（tier=${leg.action.tier}、requiresMfa=${leg.action.requiresMfa}、status=${leg.action.status}；SQLite 同行 status=${leg.actionRow.status}、mfa=${leg.actionRow.mfa?.status ?? '无'}/${leg.actionRow.mfa?.attempts ?? '-'}），验证前卡片总数仍 ${leg.preVerification.cardCount}、未新增任何卡、源卡 status=${leg.preVerification.sourceStatus}、replacedByCardId=${leg.preVerification.sourceReplacedByCardId ?? 'null'}；5 未出现「只能手动办理」拒绝（replace_card 门控真实存在）；6 MFA ${LF_MFA_CODE} 后：恰 1 张新 CREDIT 卡 ${newId}（RAW status=${outcome.replacementRaw.status}、卡号 ${outcome.replacementRaw.numberMasked} ≠ ${LF_CREDIT_CARD_MASK}、creditLimitMinor=${outcome.replacementRaw.creditLimitMinor}、availableLimitMinor=${outcome.replacementRaw.availableLimitMinor}），源卡 status=${outcome.sourceRaw.status}、replacedByCardId=${outcome.sourceRaw.replacedByCardId}，卡片总数 ${cardsAfterLost.length} → ${cardsAfter.length}（基线 + 1）；7 额度不重复：非 LOST 可用合计 ${centsToMoney(availableAfterMinor)}（= 挂失前 ${centsToMoney(availableBeforeLostMinor)}），/cards 渲染非 LOST 可用合计 ${centsToMoney(renderedAfterReplaceMinor)}、补办卡「${CARD_LABEL.creditLimit}」=${replacementTileRows[CARD_LABEL.creditLimit]}、「${CARD_LABEL.availableLimit}」=${replacementTileRows[CARD_LABEL.availableLimit]}；把 LOST 源卡计入的朴素合计 ${centsToMoney(naiveAfterMinor)}（渲染 ${centsToMoney(renderedNaiveMinor)}）作为 bug 签名显式排除；8 资金不变：dashboard ${moneyBeforeReplace.checkingBalance} → ${moneyAfter.checkingBalance}、GET /api/bills 新增 0 条/消失 0 条；截图 ${lostShot ?? '未落盘'} / ${replaceShot ?? '未落盘'}；证据 JSON ${evidenceFile ?? '未落盘'}`;
 }
 
 // --- SCENARIO lG ---------------------------------------------------------------------------------
@@ -919,7 +1027,7 @@ export async function scenarioFullCardChain(params: CardChainParams): Promise<st
   // CONTINUITY — the family's remaining allowance never resets: 70.00 before AND after 补办.
   const familyPayable = centsToMoney(expectedPayableMinor(limitMinor, firstSpendMinor, afterVcLost.balanceMinor));
   if (familyPayable !== '70.00') {
-    throw new Error(`lG：补办后家庭剩余月限额应为 70.00，实际 ${familyPayable}（账户可用余额 ${centsToMoney(afterVcLost.balanceMinor)}）`);
+    throw new Error(`lG：补办后家庭剩余月限额应为 70.00，实际 ${familyPayable}（账户余额 ${centsToMoney(afterVcLost.balanceMinor)}）`);
   }
   const cardsAfterVcReplace = await awaitPayableAmount(baseUrl, vcReplacementId, familyPayable, 'lG 虚拟卡补办后');
   if (cardById(cardsAfterVcReplace, vcReplacementId)?.payableAmount === VC_MONTHLY_LIMIT) {
@@ -928,6 +1036,7 @@ export async function scenarioFullCardChain(params: CardChainParams): Promise<st
   await gotoCards(page, baseUrl);
   await waitForElementHydration(page, `[data-card-id="${vcReplacementId}"]`);
   const vcReplaceTileRows = await readCardTileRows(page, vcReplacementId);
+  assertLinkedAccountTileLabels(vcReplaceTileRows, 'lG 补办虚拟卡卡片');
   const vcReplaceShot = await captureShot(page, 'lG-virtual-replacement');
 
   // ---- STEP 5: 补办卡上消费 70.00（成功，payable→0.00），再 1.00 必须被 422 LIMIT_EXCEEDED 拒绝 --------
@@ -1032,9 +1141,10 @@ export async function scenarioFullCardChain(params: CardChainParams): Promise<st
   await gotoCards(page, baseUrl);
   await waitForElementHydration(page, `[data-card-id="${creditReplacementId}"]`);
   const creditReplaceTileRows = await readCardTileRows(page, creditReplacementId);
+  assertCreditTileLabels(creditReplaceTileRows, 'lG 补办信用卡卡片');
   const creditReplaceShot = await captureShot(page, 'lG-credit-replacement');
-  if (creditReplaceTileRows['可用额度'] !== formatCNY(centsToMoney(LF_CREDIT_LIMIT_MINOR))) {
-    throw new Error(`lG：补办信用卡「可用额度」应渲染 ${formatCNY(centsToMoney(LF_CREDIT_LIMIT_MINOR))}，实际 ${creditReplaceTileRows['可用额度']}`);
+  if (creditReplaceTileRows[CARD_LABEL.availableLimit] !== formatCNY(centsToMoney(LF_CREDIT_LIMIT_MINOR))) {
+    throw new Error(`lG：补办信用卡「${CARD_LABEL.availableLimit}」应渲染 ${formatCNY(centsToMoney(LF_CREDIT_LIMIT_MINOR))}，实际 ${creditReplaceTileRows[CARD_LABEL.availableLimit]}`);
   }
   const availableAfterCreditReplaceMinor = nonLostCreditAvailableTotalMinor(cardsAfterCreditReplace);
   const naiveAfterCreditReplaceMinor = allCreditAvailableTotalMinor(cardsAfterCreditReplace);

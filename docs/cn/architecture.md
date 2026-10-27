@@ -48,16 +48,20 @@ SSE 指服务端事件流，JSON 指结构化响应格式。
 | 授权后续讲 | [authorization-resume.ts](../../agent/authorization-resume.ts) | 将已提交结果写回原调用，再继续对话。 |
 | Pi 运行时 | [banking-agent.ts](../../agent/banking-agent.ts) | 创建用户绑定的工具集合，安装执行钩子。 |
 | 轮次展示 | [turn-presentation.ts](../../agent/turn-presentation.ts)、[turns](../../agent/turns/) | 展示缓冲、证据绑定、动作卡片和模型请求控制。 |
+| 写入续写与金融答复 | [write-continuation.ts](../../agent/write-continuation.ts)、[financial-response.ts](../../agent/financial-response.ts) | 声明写操作却未提交时的单次续写，以及由结构化证据生成的金融答复。 |
 | 运行持久化 | [durable](../../agent/durable/)、[agentRun 仓储](../../lib/db/repositories/agentRun.ts) | 事件顺序、调用身份、执行租约和恢复。 |
 | 工具契约 | [contracts](../../lib/contracts/)、[工具目录](../../lib/contracts/tool-catalog.ts) | 名称、效果、权限、重放规则和公开数据契约。 |
 | 工具适配器 | [tools](../../agent/tools/) | 参数 schema 和服务端用户绑定的执行器。 |
 | 轮次声明与计划编译 | [intent-context.ts](../../agent/intent-context.ts)、[turn-intent.ts](../../agent/tools/turn-intent.ts)、[plan-compiler.ts](../../agent/tools/plan-compiler.ts) | 本轮用途、写操作顺序、参数 schema 和节点输出。 |
 | 工作流执行 | [planner](../../planner/)、[workflows](../../agent/workflows/) | 图状态、节点认领、持久化、控制和续跑。 |
+| 计划失败契约 | [failure.ts](../../planner/failure.ts)、[node-outcome.ts](../../planner/node-outcome.ts) | 结构化拒绝携带、封存判定和节点结果映射。 |
 | 授权与确认 | [security](../../security/)、[confirmation](../../agent/confirmation/) | 权限、身份、执行有效性和原计划续跑。 |
+| 身份解析与脱敏 | [phone.ts](../../lib/phone.ts)、[recipient-resolution.ts](../../security/recipient-resolution.ts)、[card-resolution.ts](../../security/card-resolution.ts)、[mask.ts](../../lib/mask.ts) | 完整号码或本人 id 的身份判定、候选收窄、参数规范化和对外脱敏。 |
+| 安全失败与公开文案 | [security-gateway.ts](../../security/security-gateway.ts)、[public-text.ts](../../lib/public-text.ts)、[tool-feedback.ts](../../lib/tool-feedback.ts)、[public-security-event.ts](../../app/api/_lib/public-security-event.ts)、[public-task-text.ts](../../app/schedules/public-task-text.ts) | 结构化拒绝事实、锁定终态和各类对外文案收口。 |
 | 脚本模型 | [mock-responder.ts](../../agent/providers/mock-responder.ts)、[mock](../../agent/providers/mock/) | 按意图分派、解析和结果说明。 |
 | 金融命令事务 | [command-execution.ts](../../agent/command-execution.ts) | 参数摘要、回执核验和原子提交。 |
-| 银行业务 | [banking-sdk](../../banking-sdk/) | 资源所有权、精确金额运算和模拟业务变更。 |
-| 数据与审计 | [lib/db](../../lib/db/)、[audit](../../audit/) | 仓储、事务传递和持久化记录。 |
+| 银行业务 | [banking-sdk](../../banking-sdk/)、[net-value.ts](../../banking-sdk/net-value.ts) | 资源所有权、精确金额运算、净值与份额换算和模拟业务变更。 |
+| 数据与审计 | [lib/db](../../lib/db/)、[unit-of-work.ts](../../lib/db/unit-of-work.ts)、[audit](../../audit/) | 仓储、事务传递和持久化记录。 |
 | 人工与调度 | [manual-review.ts](../../agent/manual-review.ts)、[scheduled-dispatcher.ts](../../agent/scheduled-dispatcher.ts) | 人工接手、提醒和到期付款工作流。 |
 
 路由将业务执行委托给编排层和银行业务层。
@@ -157,6 +161,15 @@ Web 入口使用固定演示用户和 `demo:${userId}` 会话。
 确认读取后，可绑定原请求的完整写入序列。
 后续写入仍需单独授权，序列不能再改变。
 
+收款人与卡片只按完整号码或本人确切 id 判定身份。
+掩码和尾号只收窄候选，候选唯一化后才写入规范化 id，对外投影一律脱敏。
+身份规则见[号码与卡片身份解析](identity-resolution.md)。
+
+在线模式下，声明了写操作却没有提交受控工具调用时，运行时追加 1 次有界续写。
+续写预算与纠正指令随会话检查点保存，重启复用同一预算，不追加第二次请求。
+续写后仍没有受控调用时，服务端按声明与已执行事实叙述真实未提交状态。
+续写规则见[持久化与恢复](agent-durability.md)。
+
 新用户消息开始一份新的轮次声明。
 声明包含用途、操作名称和顺序，可重复声明同一工具。
 用途分为交流、建议、查询和办理。
@@ -227,6 +240,26 @@ Groq、OpenRouter、xAI、Mistral 和 Cerebras。
 确认与验证码路由先检查资源是否属于固定演示用户及共享会话。
 执行前再检查当前权限和执行所有权。
 多因子认证简称 MFA。
+熔断器锁按所有者划分，[circuit-breaker.ts](../../security/circuit-breaker.ts)的 `resolveBreakerOwner` 把会话解析为 `user:<userId>`。
+因此同一账户的另一个操作也报告锁定。
+
+拒绝事实用 `SecurityFailure` 的 `code`、`reason` 和次数表示。
+验证码失败达上限后，操作进入 `locked` 终态。
+`locked` 不再作为待决定项，也不允许恢复或重试。
+该状态由带来源守卫的比较并交换写入，`locked` 从不是合法来源。
+`authorizeWithMfa` 对锁定账户始终返回顶层 `CIRCUIT_OPEN`。
+`failure.code` 为 `MFA_LOCKED`、`reason` 为 `mfa_attempts_exhausted` 表示本操作耗尽尝试。
+`failure.code` 为 `CIRCUIT_OPEN`、`reason` 为 `circuit_open` 表示账户熔断由别处触发。
+两种判定都取自该操作自己的尝试记录。
+网关的 `blockReason` 是内部载荷，不进入对外文案。
+[internal-text.ts](../../lib/internal-text.ts)的 `isInternalDiagnostic` 是内部标记的唯一判定。
+公开文案由 [public-text.ts](../../lib/public-text.ts) 和 [tool-feedback.ts](../../lib/tool-feedback.ts) 收口。
+锁定与失败规则见[安全设计](security.md#多因子认证)。
+
+打开的人工复核项只拦截确认与验证。
+该拒绝返回 `code` 为 `MANUAL_REVIEW_HOLD`、`reason` 为 `manual_review_hold` 的领域结果。
+显式取消不经过该拦截，仍把原操作写成 `cancelled`。
+接管期间的对外文案只有 1 条，规则见[安全设计](security.md#人工复核接管)。
 
 权限失效、过期、取消和所有权丢失由服务端判定。
 规则与模拟认证边界见[安全设计](security.md)。
@@ -271,6 +304,90 @@ Groq、OpenRouter、xAI、Mistral 和 Cerebras。
 后台核对演示只在开发者模式提供。
 卡片增删使用独立页面流程，规则见[卡片管理](card-management.md)。
 
+## 安全拒绝的传播
+
+拒绝事实按网关、工具结果、计划节点、运行时结算、HTTP 出口、页面呈现的顺序传递。
+每一步只传结构化字段，原始网关载荷不进入可渲染文本。
+网关的拒绝事实与锁定规则见[安全设计](security.md#多因子认证)。
+
+1. 网关判定拒绝并返回 `SecurityFailure` 的 `code`、`reason` 和次数。
+2. [gated-execution.ts](../../agent/confirmation/gated-execution.ts)的 `blockedOutcome` 只取 `parseBlockReason` 解析出的 `failure` 作为对外拒绝。
+3. [outcomes.ts](../../agent/confirmation/outcomes.ts)的 `publicRefusalMessage` 按三级顺序取文案：有 `failure` 时用 `securityNotice`，只有 `code` 时用 `publicToolError`，其余用 `safePublicText`。
+4. 计划节点在进程内快照里携带 `PlanFailure` 与 `actionStatus`，并据此拒绝再次驱动该节点。
+5. 运行时把动作终态结算到工具调用，HTTP 出口按错误码返回状态码或领域结果。
+6. 页面与微信只渲染 [public-text.ts](../../lib/public-text.ts) 生成的公开文案。
+
+计划层的失败契约在 [failure.ts](../../planner/failure.ts)。
+`PlanFailure` 含 `code`、可选 `reason`、`actionId` 和次数。
+`toPlanFailure` 只复制已存在的类型化字段，`AppError` 只保留 `code`。
+`isLockedRefusal` 依据 `reason` 或 `code` 判定，不读取消息文本。
+
+节点结果用可选字段 `failure` 与 `actionStatus` 携带这两个事实。
+[node-outcome.ts](../../planner/node-outcome.ts)的 `settleToolNode` 原样携带这两个字段。
+同一次映射用 `publicFailureText` 投影 `summary` 和 `error`。
+内部诊断因此不会写入节点字段，业务正文按原样保留。
+缺少这两个字段的节点不视为封存。
+这两个字段不落库，节点行只存 `status`、`output`、`error` 与起止时间。
+写入映射见 [task-fencing.ts](../../agent/task-fencing.ts) 的 `toNodeUpdate`，读回映射见 [persistence.ts](../../agent/workflows/persistence.ts) 的 `toTaskPlan`。
+封存证据随进程结束失效，进程重启后的驱动由执行回执与幂等约束把关。
+
+`SealReason` 取 `locked_refusal` 或 `action_not_open`。
+`sealReason` 先判锁定拒绝，再判 `actionStatus` 已不属于 `pending` 或 `awaiting_mfa`。
+[executor.ts](../../planner/executor.ts)的 `runToolNode` 在认领节点之前调用 `mayDriveNode`。
+被封存的节点走 `sealNode`，不调用工具，也不新建待决定动作。
+`sealNode` 只把节点收敛为 `failed`，已记录的拒绝事实保持不变。
+工具抛出的错误同样记录为 `failure` 和经投影的 `error`。
+
+`mayResetNode` 只按封存状态拒绝重置。
+[executor.ts](../../planner/executor.ts)的重试扫描与 [lifecycle.ts](../../planner/lifecycle.ts)的 `retryPlan` 都跳过封存节点。
+`resumePlan` 在 `mayDriveNode` 为假时原样返回计划，不记录过时决定。
+[parked-actions.ts](../../agent/workflows/parked-actions.ts)的 `assertParkedActionsNotTerminal` 在认领之前只读检查停等动作。
+该检查在动作已终态时抛出结构化 `AppError`。
+`locked` 返回 `MFA_LOCKED`，其他终态返回 `CONFLICT`。
+检查的诊断字段只写入 `detail`。
+
+[agentRun.ts](../../lib/db/repositories/agentRun.ts)的 `settleInvocationFromAction` 把 `locked` 结算为 `ToolInvocation.status='failed'` 和 `errorCode='MFA_LOCKED'`。
+`locked` 不结算为 `needs_reconciliation`，因为锁定是已知结果而非未知提交。
+`SETTLED_PENDING_ACTION_STATUSES` 含 `locked`，`RUN_BLOCKING_PENDING_ACTION_STATUSES` 不含 `locked`。
+先结算再判定运行终态，因此只含锁定动作的运行也结束为 `failed`。
+
+[app/api/_lib/http.ts](../../app/api/_lib/http.ts)的 `STATUS_BY_CODE` 统一映射错误码：
+
+| 错误码 | HTTP 状态 |
+| --- | --- |
+| `MFA_LOCKED`、`CIRCUIT_OPEN` | `423` |
+| `SECURITY_DENIED`、`MFA_FAILED` | `403` |
+| `CONFLICT` | `409` |
+| `VALIDATION` | `400` |
+| `NOT_FOUND` | `404` |
+| `INSUFFICIENT_FUNDS`、`LIMIT_EXCEEDED` | `422` |
+| `TOOL_FAILED` | `502` |
+| `INTERNAL` 与未知异常 | `500` |
+
+非 `AppError` 的异常只返回 `INTERNAL` 和通用消息。
+响应信封为 `{ ok: true, data }` 或 `{ ok: false, error }`。
+
+已锁定动作上的决定请求返回领域结果，不返回错误信封。
+[locked-action.ts](../../app/api/_lib/locked-action.ts)的 `lockedActionRefusal` 返回 `200` 且 `data.ok=false`。
+该拒绝携带 `code='CIRCUIT_OPEN'` 与 `failure.reason='mfa_session_locked'`。
+拒绝文案固定，不含验证码，也不推断剩余次数。
+`/api/actions` 的决定状态只含 `pending`、`awaiting_mfa` 和 `needs_reconciliation`。
+
+安全事件在出口处净化。
+[public-security-event.ts](../../app/api/_lib/public-security-event.ts)的 `publicSecurityEvent` 保留标识、时间、会话、类型与严重级别。
+空消息或内部诊断消息落为空字符串，键本身保留。
+`detail` 仅在为纯 JSON 且所有字符串叶子都非内部诊断时保留，否则整键省略。
+事件本身不会被过滤或丢弃。
+`/api/security` 的事件与状态内近期事件都经过该投影。
+
+任务读取接口附加动作的当前状态。
+[task-pending-actions.ts](../../app/api/_lib/task-pending-actions.ts)为带 `pendingActionId` 的节点补充只读字段 `pendingActionStatus`。
+该模块不写状态，动作行缺失时不补充字段。
+
+对话流、确认卡片与微信桥都调用 `securityNotice`，不自行拼接拒绝文本。
+[public-task-text.ts](../../app/schedules/public-task-text.ts)的 `publicScheduleText` 单独门控 `/schedules` 的服务端文本。
+该函数只用 `isInternalDiagnostic` 判定，不用 `safePublicText`，因此业务正文按原样显示。
+
 ## 金融命令事务
 
 金融写入共用 `executeBankingCommand()`。
@@ -301,6 +418,16 @@ Groq、OpenRouter、xAI、Mistral 和 Cerebras。
 证据缺失或矛盾时，停止执行并转入人工核对。
 执行证据规则见[持久化与恢复](agent-durability.md)。
 金额和预算规则见[金融数值与结算](financial-values.md)。
+卡片消费扣减结算活期账户现金，并写入消费流水。
+借记卡与虚拟卡各绑定 1 个本人活期账户，卡片没有自己的余额。
+可支付金额是账户可用现金与剩余月限额的较小值，同账户多张卡共享这 1 份现金且只计一次。
+只有 `LINKED` 的绑定投影账户名、掩码卡号和余额。
+`MISSING` 与 `UNTRUSTED` 省略全部余额字段，不报 0。
+`FROZEN` 与 `LOST` 保留真实余额，`usable` 为 `false`。
+`consume_virtual_card` 在 1 个事务内扣减绑定活期账户，并写入消费流水与 `CardConsumption`。
+月限额按补办前后各卡合并计算，消费时刻由服务端决定，同执行键重放原结果。
+补办后的原卡为 `LOST` 终态，不计入信用可用额度。
+绑定、余额展示与数据升级规则见[卡片管理](card-management.md)。
 
 ## 持久化证据与恢复
 
@@ -350,16 +477,27 @@ Pi 模型续跑和独立工作流共用恢复进程。
 ## 投资申赎
 
 申购和赎回由[投资业务](../../banking-sdk/investment.ts)在同一事务中处理。
+持仓按净值与份额记账，口径见[理财产品](investments.md)。
 申购先校验产品起投金额和账户余额，再扣款并登记持仓。
+本次所得份额是 `FLOOR(金额 ÷ 最新净值, 6 位小数)`。
 对同一产品的再次申购并入原持仓，不新建持仓。
-并入时，本金和市值各增加本次金额，并追加购买记录。
-持仓视图返回最近申购时间和购买次数。
+并入时，成本与份额同时增加，并追加购买记录。
+追加申购金额不计入收益。
+持仓视图返回份额、最新净值、市值、收益与购买记录。
+市值由 `份额 × 最新净值` 推导且不取整，`estimatedMarketValue` 只在份额或净值缺失时作为历史估值保留，并标注待核对。
+没有可用份额或产品未发布净值时，市值回退为剩余成本，并省略持仓收益与累计收益。
+持仓收益是未实现收益，累计收益等于已实现收益加持仓收益。
 
-赎回不传 `redeemAmount` 时全额赎回，持仓状态由持有变为已赎回。
-传入小于持仓本金的正数金额时，只赎回该金额的本金。
-赎回本金小于持仓本金时，按市值比例结算，剩余本金和市值保留在持仓内。
-持仓保持持有状态，继续展示剩余本金、市值和收益。
-赎回金额超过持仓本金时，工具报错。
+赎回必须显式给出 `mode`：`SHARES`、`AMOUNT` 或 `ALL`。
+缺少、未知或混用口径，以及已退役的 `redeemAmount`，都是澄清而不是默认值。
+净值保留 4 位小数，份额保留 6 位小数。
+换算是 BigInt 定点纯函数，位于 [net-value.ts](../../banking-sdk/net-value.ts)。
+到账金额是 `HALF_UP(份额 × 成交净值, 人民币分)`，只取整一次。
+`ALL` 把持仓置为已赎回，另两种保持持有并扣减份额与剩余成本。
+剩余成本按份额比例扣减且守恒。
+确认快照与当前净值或份额不一致时抛 `CONFLICT`，要求重新确认。
+投资写入完成后，投资卡片展示提交后重读的持仓投影，不展示写入前的快照。
+展示口径见[理财产品](investments.md)。
 估值与结算规则见[金融数值](financial-values.md)。
 报价确认和重放规则见[银行工具契约](tool-contracts.md)。
 
@@ -368,7 +506,7 @@ Pi 模型续跑和独立工作流共用恢复进程。
 已入账现金按整数分使用 `BigInt` 保存。
 收益率和未舍入估值使用 `Decimal` 运算。
 SQLite 保存规范化的十进制文本。
-本金、估值和结算金额分别定义。
+剩余持仓成本、估值和结算金额分别定义。
 
 赎回仅在结算时按 `HALF_UP` 舍入到分。
 执行回执保留原报价、舍入规则和原结算结果。

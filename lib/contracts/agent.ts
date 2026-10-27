@@ -10,7 +10,7 @@ export type ChatRole = 'user' | 'assistant' | 'system' | 'tool';
 /** Business receipts contain only validated public result fields, never tool arguments. */
 export type BusinessReceipt =
   | { kind: 'budget'; name: string; amount: string; purpose?: string; status: 'RESERVED' | 'USED' | 'RELEASED'; dueDate?: number }
-  | { kind: 'investmentPurchase' | 'investmentRedemption'; success: boolean; amount: string; newBalance: string; occurredAt: number; redemptionValuation?: string; settlementRounding?: 'HALF_UP' };
+  | { kind: 'investmentPurchase' | 'investmentRedemption'; success: boolean; amount: string; newBalance: string; occurredAt: number; redemptionValuation?: string; settlementRounding?: 'HALF_UP'; productName?: string; remainingShares?: string; redeemedShares?: string; netValuePerUnit?: string; feeAmount?: string };
 
 export interface ContactCardView {
   name: string;
@@ -48,6 +48,8 @@ export interface ToolEventView {
   label?: string;
   summary?: string;
   errorCode?: import('@/lib/errors').ErrorCode;
+  /** Typed facts a catalog message may need to render this refusal (e.g. remaining attempts). */
+  errorParams?: Record<string, string | number>;
   /** Server-sanitized diagnostics; rendered only when the developer preference is enabled. */
   debugArguments?: unknown;
   /** Model-facing correction or execution diagnostics; never rendered as public error text. */
@@ -61,7 +63,7 @@ export type ChatCard =
   | { type: 'mfa'; actionId: string; hint?: string; action?: PendingActionSummary; status?: string; message?: string }
   | { type: 'transactions'; data: unknown }
   | { type: 'spending'; data: unknown }
-  | { type: 'cards'; data: unknown }
+  | { type: 'cards'; data: unknown; issuanceActionId?: string }
   | { type: 'investments'; data: unknown }
   | { type: 'subscriptions'; data: unknown }
   | { type: 'contacts'; data: ContactCardView[] }
@@ -76,6 +78,8 @@ export interface ChatMessage {
   id: string;
   role: ChatRole;
   content: string;
+  /** Optional server-authored preview; the original financial explanation remains expandable. */
+  financialSummary?: string;
   timestamp: number;
   /** Server offers this only before gateway/executor/write entry, including trusted preflight refusal. */
   retryRequest?: string;
@@ -97,7 +101,16 @@ export type AgentStreamEvent =
   | { type: 'confirmation_required'; action: PendingActionSummary; actionId: string }
   | { type: 'mfa_required'; actionId: string; hint?: string; action?: PendingActionSummary }
   | { type: 'action_settled'; actionId: string; status: PendingActionStatus; message?: string }
-  | { type: 'security_event'; kind: string; message: string }
+  | {
+      type: 'security_event';
+      kind: string;
+      code?: string;
+      reason?: string;
+      actionId?: string;
+      attemptsLeft?: number;
+      maxAttempts?: number;
+      message?: string;
+    }
   | { type: 'message_end'; message: ChatMessage }
   | { type: 'error'; message: string; code?: import('../errors').ErrorCode }
   | { type: 'done' };

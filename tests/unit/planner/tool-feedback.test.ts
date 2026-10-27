@@ -72,6 +72,10 @@ describe('model corrections are separate from public tool feedback', () => {
     expect(publicToolError('The verification challenge expired or the operation changed. Request a new challenge.', t)).toBe(t('chat.error.verificationExpired'));
     expect(publicToolError('\u9a8c\u8bc1\u7801\u9519\u8bef\uff0c\u8bf7\u91cd\u8bd5\u3002\u5269\u4f59\u5c1d\u8bd5\u6b21\u6570\uff1a2\u3002', t))
       .toBe(t('chat.error.verificationRemaining', { count: '2' }));
+    expect(publicToolError('\u9a8c\u8bc1\u7801\u9519\u8bef\u3002\u8fd8\u53ef\u5c1d\u8bd5 2 \u6b21\u3002', t))
+      .toBe(t('chat.error.verificationRemaining', { count: '2' }));
+    expect(publicToolError('\u9a8c\u8bc1\u7801\u9519\u8bef\u3002\u8fd8\u53ef\u5c1d\u8bd5 2 \u6b21\uff0c\u8bf7\u8054\u7cfb\u5ba2\u670d\u3002', t))
+      .toBe(t('chat.error.toolFailed'));
     expect(publicToolError('Verification backend private configuration', t)).toBe(t('chat.error.toolFailed'));
   });
 

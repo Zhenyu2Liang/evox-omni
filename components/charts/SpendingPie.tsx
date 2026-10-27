@@ -41,14 +41,14 @@ export function SpendingPie(p: SpendingPieProps) {
             );
           })}
         </svg>
-        <ul className="max-h-full w-[44%] shrink-0 space-y-2 overflow-y-auto pr-1 text-xs text-banking-navy">
+        <ul className="max-h-full w-[44%] shrink-0 space-y-2 overflow-y-auto pr-1 text-banking-caption text-banking-navy">
           {p.data.map((point, index) => (
             <li key={point.category} className="flex items-start gap-2">
               <span className="mt-1 h-2 w-2 shrink-0 rounded-full" style={{ background: seriesColor(index) }} />
               <span className="min-w-0 break-words">
                 <span className="block font-medium text-banking-deep">{point.category}</span>
                 <span className="block">{formatCNY(point.amount)}</span>
-                <span className="block text-banking-navy/60">{point.share}%</span>
+                <span className="block text-banking-navy">{point.share}%</span>
               </span>
             </li>
           ))}

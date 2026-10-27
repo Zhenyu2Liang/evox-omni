@@ -206,6 +206,7 @@ describe('banking-sdk/investment · aggregation — after a full redemption', ()
     const redeemed = await banking.investment.redeemInvestment({
       userId: DEMO_USER_ID,
       holdingId: SEEDED_HOLDING,
+      mode: 'ALL',
     });
     expect(redeemed.amount).toBe('5050.00');
     expect((await holdingById(SEEDED_HOLDING)).status).toBe('REDEEMED');

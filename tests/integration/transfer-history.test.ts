@@ -9,9 +9,13 @@
  *
  * REAL stack: the REAL route handlers (`POST /api/actions/[id]/confirm`, `POST /api/tasks/[id]`,
  * `GET /api/actions`), the REAL agent confirmation continuation, the REAL security gateway and the
- * REAL Banking SDK over the isolated test SQLite. The ONLY mock is REAL fault injection: the atomic
- * result+status `$transaction` write is made to reject ONCE, so the SDK side effect commits while
- * the action stays `confirmed` with `resultJson = null` (the wedge this suite recovers from).
+ * REAL Banking SDK over the isolated test SQLite. The ONLY mock is REAL fault injection: the
+ * SETTLEMENT `$transaction` of `agent/confirmation-recovery.ts#settlePendingAction` (which lands the
+ * terminal status via `claimPendingAction({ from: ['confirmed'], to: <decision> })`, then
+ * `resultJson` and the strict audit) is made to reject, so the SDK side effect commits while the
+ * action stays `confirmed` with `resultJson = null` (the wedge this suite recovers from).
+ * The fault is filtered to that single settlement CAS, so the gateway's authorization CAS and its
+ * post-settlement result notification always reach the real writer — the debit is never lost.
  */
 import { beforeEach, afterEach, afterAll, it, expect, vi } from 'vitest';
 import { NextRequest } from 'next/server';
@@ -37,6 +41,33 @@ const AFTER_TRANSFER = subtractMoney(SEEDED_BALANCE, AMOUNT);
 beforeEach(() => resetDatabase());
 afterEach(() => vi.restoreAllMocks());
 afterAll(() => disconnectTestPrisma());
+
+/**
+ * The REAL fault injection: make the SETTLEMENT `prisma.$transaction` genuinely roll back, so the
+ * transfer's debit has already committed while the action is left `confirmed` with
+ * `resultJson === null`. `agent/confirmation-recovery.ts#settlePendingAction` lands the terminal
+ * status through `claimPendingAction({ actionId, from: ['confirmed'], to: <decision status> }, tx)`
+ * INSIDE that transaction, so throwing from exactly that CAS rolls the status + result + strict audit
+ * writes back as ONE unit.
+ *
+ * The filter is what keeps the wedge real: the OTHER `claimPendingAction` calls of a confirmed write
+ * are the gateway's authorization CAS (`pending -> confirmed`, `input.to === 'confirmed'`) and
+ * `recordActionResult` (`from: RESULT_RECORDABLE_STATUSES`, after the settlement); neither matches
+ * `input.to === 'executed' && input.from.includes('confirmed')`, so the debit/ledger transaction and
+ * the authorization CAS always reach the real writer and the money really moves.
+ */
+function wedgeLandedResultTransaction() {
+  const realClaim = actionRepo.claimPendingAction;
+  let fired = 0;
+  const spy = vi.spyOn(actionRepo, 'claimPendingAction').mockImplementation(async (input, client) => {
+    if (input.to === 'executed' && input.from.includes('confirmed')) {
+      fired += 1;
+      throw new Error('review: settlement transaction unavailable after debit');
+    }
+    return realClaim(input, client);
+  });
+  return { spy, fired: () => fired, restore: () => spy.mockRestore() };
+}
 
 /** `POST /api/actions/[id]/confirm` through the REAL route handler. */
 async function confirm(id: string, s: string) {
@@ -100,10 +131,10 @@ async function balance() {
 
 /**
  * Gate a STANDALONE ¥200 `transfer_money` to 张伟, then WEDGE it: the atomic
- * result+status `$transaction` write rejects ONCE, so the debit COMMITS while the action is left
- * `confirmed` with `resultJson = null`. Asserts the fault injection really HIT (spy count == 1) and
- * the wedged precondition holds (status `confirmed`, null result, exactly ONE debit) BEFORE the
- * caller recovers — so a passing recovery can never be an artefact of a missed fault.
+ * settlement `$transaction` write rejects, so the debit COMMITS while the action is left
+ * `confirmed` with `resultJson = null`. Asserts the fault injection really HIT (the settlement CAS
+ * faulted exactly once) and the wedged precondition holds (status `confirmed`, null result, exactly
+ * ONE debit) BEFORE the caller recovers — so a passing recovery can never be a missed-fault artefact.
  */
 async function transferWedge(s: string) {
   const gate = await executeGatedTool({
@@ -117,12 +148,10 @@ async function transferWedge(s: string) {
   expect(id).toBeTruthy();
   expect(gate.requiresConfirmation).toBe(true);
 
-  const spy = vi
-    .spyOn(actionRepo, 'setPendingActionStatus')
-    .mockRejectedValueOnce(new Error('review: result write failed after debit'));
+  const fault = wedgeLandedResultTransaction();
   const first = await confirm(id, s);
-  expect(spy).toHaveBeenCalledTimes(1);
-  spy.mockRestore();
+  expect(fault.fired()).toBe(1);
+  fault.restore();
 
   const row = await getTestPrisma().pendingAction.findUniqueOrThrow({ where: { id } });
   expect(first.http).toBe(500);
@@ -273,13 +302,11 @@ it('REVIEW_TXN_PLAN_CANCEL — a committed plan transfer fact is retained across
   expect(await amountDebits()).toBe(debitsBefore);
   expect(await balance()).toBe(SEEDED_BALANCE);
 
-  // WEDGE the gated node's confirm: the debit COMMITS, the atomic result+status write fails once.
-  const spy = vi
-    .spyOn(actionRepo, 'setPendingActionStatus')
-    .mockRejectedValueOnce(new Error('review: plan node result write failed after debit'));
+  // WEDGE the gated node's confirm: the debit COMMITS, the settlement transaction rolls back.
+  const fault = wedgeLandedResultTransaction();
   const first = await confirm(action.id, s);
-  expect(spy).toHaveBeenCalledTimes(1);
-  spy.mockRestore();
+  expect(fault.fired()).toBe(1);
+  fault.restore();
   const wedged = await p.pendingAction.findUniqueOrThrow({ where: { id: action.id } });
   expect(first.http).toBe(500);
   expect(wedged.status).toBe('confirmed');

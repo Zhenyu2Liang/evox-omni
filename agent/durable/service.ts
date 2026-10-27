@@ -23,6 +23,7 @@ import { recoverStandaloneWorkflowRun } from './standalone-workflow';
 import { recoverTurnIntentControl } from './control-recovery';
 import { TURN_INTENT_TOOL } from '@/agent/tools/turn-intent';
 import { getConfig } from '@/lib/config';
+import { isOpenActionStatus, OPEN_ACTION_STATUSES } from '../action-status';
 
 export interface RunIdentity { sessionId: string; userId: string; }
 export interface InvocationSummary {
@@ -213,11 +214,16 @@ export async function recoverOwnedRun(runId: string, identity: RunIdentity, invo
       outcomes.push({ invocationId: outcome.invocationId, action: outcome.action, ...('reason' in outcome ? { reason: outcome.reason } : {}) });
     }
     const remaining = await listRunInvocations(runId);
-    const pending = await prisma.pendingAction.findMany({ where: { ...runPendingActionWhere(identity.sessionId, identity.userId, remaining), status: { in: ['pending', 'awaiting_mfa', 'confirmed', 'needs_reconciliation'] } }, select: { status: true } });
+    const pending = await prisma.pendingAction.findMany({ where: { ...runPendingActionWhere(identity.sessionId, identity.userId, remaining), status: { in: [...OPEN_ACTION_STATUSES, 'confirmed', 'needs_reconciliation', 'locked'] } }, select: { status: true } });
+    // Only an OPEN action is still a decision the user can make. `confirmed` (authorized, its process died) and every
+    // TERMINAL row — `locked` above all — are closed: they never re-open a confirmation/MFA decision, never resume the
+    // operation and never re-publish a decision prompt.
+    const openActions = pending.filter(action => isOpenActionStatus(action.status));
+    const closedActions = pending.filter(action => !isOpenActionStatus(action.status));
     let status: Exclude<AgentRunStatus, 'running'>;
-    if (remaining.some(invocation => invocation.status === 'waiting_verification') || pending.some(action => action.status === 'awaiting_mfa')) status = 'waiting_verification';
-    else if (remaining.some(invocation => invocation.status === 'waiting_confirmation') || pending.some(action => action.status === 'pending') || outcomes.some(outcome => outcome.action === 'waiting')) status = 'waiting_confirmation';
-    else if (outcomes.some(item => item.action === 'reconciliation_required') || remaining.length === 0 || remaining.some(invocation => invocation.status === 'needs_reconciliation' || invocation.status === 'interrupted' || (invocation.status === 'completed' && invocation.resultJson === null)) || pending.length !== 0) status = 'interrupted';
+    if (closedActions.length === 0 && (remaining.some(invocation => invocation.status === 'waiting_verification') || openActions.some(action => action.status === 'awaiting_mfa'))) status = 'waiting_verification';
+    else if (closedActions.length === 0 && (remaining.some(invocation => invocation.status === 'waiting_confirmation') || openActions.some(action => action.status === 'pending') || outcomes.some(outcome => outcome.action === 'waiting'))) status = 'waiting_confirmation';
+    else if (closedActions.length !== 0 || outcomes.some(item => item.action === 'reconciliation_required') || remaining.length === 0 || remaining.some(invocation => invocation.status === 'needs_reconciliation' || invocation.status === 'interrupted' || (invocation.status === 'completed' && invocation.resultJson === null))) status = 'interrupted';
     else if (remaining.some(invocation => invocation.status === 'failed' || invocation.status === 'cancelled')) status = 'failed';
     else status = 'completed';
     // Tool result recovery is only the first phase. Resume the same checkpoint and model input.

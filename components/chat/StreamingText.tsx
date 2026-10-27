@@ -27,12 +27,12 @@ export function StreamingText({ text, active = false, phase, className }: Stream
         .join(' ')}
     >
       {showHint ? (
-        <span className="animate-pulse text-banking-navy/80">{t(phase ? `chat.replyProgress.${phase}` : 'chat.working')}</span>
+        <span className="animate-pulse text-banking-navy">{t(phase ? `chat.replyProgress.${phase}` : 'chat.working')}</span>
       ) : (
         <AssistantMarkdown text={text} />
       )}
       {active && !showHint ? (
-        <span aria-hidden="true" className="ml-0.5 animate-pulse text-banking-accent">
+        <span aria-hidden="true" className="ml-0.5 animate-pulse text-banking-interactive">
           ▍
         </span>
       ) : null}

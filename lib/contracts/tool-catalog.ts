@@ -52,7 +52,7 @@ export const TOOL_CATALOG = {
   set_subscription_reminder: write('subscription', 'YELLOW', 'Change a subscription reminder.'),
   create_scheduled_task: write('task', 'YELLOW', 'Create a scheduled intent.'),
   subscribe_investment: write('investment', 'RED', 'Purchase an investment product.'),
-  redeem_investment: write('investment', 'RED', 'Redeem an owned investment holding.'),
+  redeem_investment: write('investment', 'RED', 'Redeem an owned investment holding by shares or by amount.'),
   report_lost_card: write('card', 'RED', 'Report an owned card lost. A lost card is permanent and cannot be revived.'),
   replace_card: write('card', 'RED', 'Replace an owned lost card with a new card after confirmation and strong verification.'),
   unfreeze_card: write('card', 'RED', 'Unfreeze an owned card.'),

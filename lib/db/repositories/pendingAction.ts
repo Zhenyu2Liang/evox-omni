@@ -4,6 +4,7 @@ import { toJson } from '../../json';
 import { AppError } from '../../errors';
 import type { RiskLevel } from '../../contracts/risk';
 import type { PendingActionSummary, PendingActionStatus } from '../../contracts/security';
+import { OPEN_PENDING_ACTION_STATUSES } from '../../contracts/security';
 
 /**
  * Repository for the `PendingAction` aggregate (+ its `MfaChallenge`).
@@ -210,7 +211,7 @@ export async function claimPendingActionLease(
   const result = await client.pendingAction.updateMany({
     where: {
       id: actionId,
-      status: { in: ['pending', 'awaiting_mfa'] },
+      status: { in: [...OPEN_PENDING_ACTION_STATUSES] },
       OR: [
         { executionLeaseOwner: null },
         { executionLeaseExpiresAt: { lte: lease.now } },
@@ -276,7 +277,7 @@ export async function assertActionMayStart(actionId: string, client: Prisma.Tran
   await client.pendingAction.updateMany({ where: { id: actionId }, data: { id: actionId } });
   const action = await client.pendingAction.findUnique({ where: { id: actionId }, select: { taskId: true } });
   if (action?.taskId && await client.manualReview.findFirst({ where: { taskId: action.taskId, status: 'open' } })) {
-    throw new AppError('CONFLICT', 'This workflow is under manual review; a new command cannot start.');
+    throw new AppError('MANUAL_REVIEW_HOLD', 'This workflow is under manual review; a new command cannot start.');
   }
 }
 

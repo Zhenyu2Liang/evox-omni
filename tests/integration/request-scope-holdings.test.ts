@@ -51,7 +51,7 @@ describe('raw wording and declared owned-resource workflows', () => {
   });
 
   it('binds an exact owned holding, requires MFA, credits once, then offers the saved transfer', async () => {
-    const nodes = [node('redeem', 'redeem_investment', { holdingId: 'holding_wenjiana' }),
+    const nodes = [node('redeem', 'redeem_investment', { holdingId: 'holding_wenjiana', mode: 'ALL' }),
       node('transfer', 'transfer_money', { contactId: 'contact_zhangwei', amount: '100.17' }, ['redeem'])];
     const script = scriptedProvider({ purpose: 'operation', operations: ['redeem_investment', 'transfer_money'] }, [
       call('submit_plan', { goal: 'Redemption then transfer', nodes }), fauxAssistantMessage('Review the holding and transfer.'),
@@ -59,7 +59,7 @@ describe('raw wording and declared owned-resource workflows', () => {
     await runTurn({ message: 'Redeem the selected holding and then transfer 100.17 CNY.' }, { config, provider: script.provider });
     const first = await getTestPrisma().pendingAction.findFirstOrThrow({ where: { nodeId: 'redeem' } });
     expect(first.status).toBe('awaiting_mfa');
-    expect(JSON.parse(first.argsJson)).toMatchObject({ holdingId: 'holding_wenjiana', expectedRedemptionAmount: '5050.00' });
+    expect(JSON.parse(first.argsJson)).toMatchObject({ holdingId: 'holding_wenjiana', mode: 'ALL', expectedShares: '5050', expectedNetValue: '1', expectedSettlementAmount: '5050.00' });
     await verifyAction(first.id, '000000', { deps: { config, provider: script.provider } });
     expect((await getTestPrisma().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor).toBe(2358000n);
     const callsBefore = script.calls();
@@ -75,7 +75,7 @@ describe('raw wording and declared owned-resource workflows', () => {
 
   it.each(['WJA001', 'Stable product name', 'unknown-holding'])('rejects selector %s in the holding ID field before an automatic budget', async holdingId => {
     const result = await submit([node('budget', 'reserve_budget', { name: 'must-not-land', amount: '2.22' }),
-      node('redeem', 'redeem_investment', { holdingId }, ['budget'])], ['reserve_budget', 'redeem_investment']);
+      node('redeem', 'redeem_investment', { holdingId, mode: 'ALL' }, ['budget'])], ['reserve_budget', 'redeem_investment']);
     expect(result.ok).toBe(false);
     expect(await getTestPrisma().budget.count({ where: { name: 'must-not-land' } })).toBe(0);
     await noEntry();
@@ -91,7 +91,7 @@ describe('raw wording and declared owned-resource workflows', () => {
     } else if (scenario === 'inactive') {
       await db.investmentHolding.update({ where: { id: holdingId }, data: { status: 'REDEEMED' } });
     }
-    const args = scenario === 'undeclared-product-field' ? { holdingId, productId: 'prod_huobi' } : { holdingId };
+    const args = scenario === 'undeclared-product-field' ? { holdingId, productId: 'prod_huobi', mode: 'ALL' } : { holdingId, mode: 'ALL' };
     const result = await submit([node('budget', 'reserve_budget', { name: 'must-not-land', amount: '2.22' }),
       node('redeem', 'redeem_investment', args, ['budget'])], ['reserve_budget', 'redeem_investment']);
     expect(result.ok).toBe(false);
@@ -101,8 +101,8 @@ describe('raw wording and declared owned-resource workflows', () => {
 
   it('keeps holdings of the same product distinct by their exact IDs and explicit dependency order', async () => {
     await getTestPrisma().investmentHolding.create({ data: { id: 'another_holding', userId: 'user_liming', productId: 'prod_wenjiana', principalAmountMinor: 100000n } });
-    const result = await submit([node('second', 'redeem_investment', { holdingId: 'another_holding' }, ['first']),
-      node('first', 'redeem_investment', { holdingId: 'holding_wenjiana' })], ['redeem_investment', 'redeem_investment']);
+    const result = await submit([node('second', 'redeem_investment', { holdingId: 'another_holding', mode: 'ALL' }, ['first']),
+      node('first', 'redeem_investment', { holdingId: 'holding_wenjiana', mode: 'ALL' })], ['redeem_investment', 'redeem_investment']);
     expect(result.ok).toBe(true);
     const action = await getTestPrisma().pendingAction.findFirstOrThrow();
     expect(action.nodeId).toBe('first');

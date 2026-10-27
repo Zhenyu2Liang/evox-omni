@@ -38,6 +38,7 @@ import type { ToolExecutionResult, ToolRunOptions } from './index';
 import { MoneyParameter } from './money-schema';
 import { toModelToolResult, toolFailure } from './result';
 import { SPENDING_CATEGORIES } from '@/lib/contracts/spending';
+import { buildCardClarifyMessage, resolveCardTarget } from '@/security/card-resolution';
 
 /** Chinese labels for a card type (for user-facing summaries). */
 const CARD_TYPE_LABELS: Record<CardType, string> = {
@@ -59,6 +60,48 @@ function describeCard(card: CardView): string {
   const type = CARD_TYPE_LABELS[card.type] ?? card.type;
   const status = CARD_STATUS_LABELS[card.status] ?? card.status;
   return `${type} ${card.numberMasked}（${status}）`;
+}
+
+/**
+ * OPTIONAL card SELECTOR slots shared by every card-target tool — an alternative to `cardId`.
+ *
+ * The model names the card the way the USER did ("我的借记卡", "尾号6688") and
+ * `security/card-resolution.ts` turns it into ONE owned `cardId` at park time. `cardId` is deliberately
+ * optional, and a tail or complete number placed in `cardId` is REFUSED rather than looked up, so a
+ * guessed tail can never hit an arbitrary card.
+ */
+function cardSelectorFields() {
+  return {
+    cardId: Type.Optional(Type.String({
+      description: '卡片 id，必须来自 get_cards 返回的确切 id。绝不能把尾号（如 6688）或完整卡号当作 cardId：'
+        + '用户说「尾号6688」请用 cardTail，说「我的借记卡」请用 cardType。',
+    })),
+    cardType: Type.Optional(Type.String({
+      description: '卡片类型选择器：DEBIT/CREDIT/VIRTUAL 或中文 借记卡/储蓄卡/信用卡/虚拟卡（大小写不敏感）。'
+        + '用户说「我的借记卡」时用它。',
+    })),
+    cardTail: Type.Optional(Type.String({
+      description: '卡片尾号选择器：4 位尾号，可写 6688、尾号6688、****6688。'
+        + '用户说「尾号6688」时用它，不要写进 cardId。',
+    })),
+    cardNumber: Type.Optional(Type.String({
+      description: '完整卡号选择器（12-19 位数字），仅在用户主动提供完整卡号时使用，服务端精确匹配。',
+    })),
+  };
+}
+
+/**
+ * Resolve the card a runner must operate on. The gateway already resolved selectors and canonicalized
+ * the args BEFORE parking, so a canonical `cardId` passes straight through; a caller that reaches a
+ * runner with SELECTORS ONLY is resolved through the SAME server-side resolver, and an unresolvable
+ * target fails with the masked Chinese clarification instead of guessing a card.
+ */
+async function cardTargetId(userId: string, args: Record<string, unknown>): Promise<string> {
+  const direct = args.cardId;
+  if (typeof direct === 'string' && direct !== '') return direct;
+  const resolved = await resolveCardTarget(userId, args);
+  if (resolved.status !== 'resolved') throw new AppError('VALIDATION', buildCardClarifyMessage(resolved));
+  return resolved.card.id;
 }
 
 /* ------------------------------------------------------------------ get_cards */
@@ -100,7 +143,7 @@ export async function runGetCards(
 
 /** `set_card_limit` params (SDK `SetCardLimitInput` minus nothing — all fields come from the model). */
 export const SetCardLimitParams = Type.Object({
-  cardId: Type.String({ description: '卡片 id' }),
+  ...cardSelectorFields(),
   category: Type.Union(SPENDING_CATEGORIES.map(category => Type.Literal(category)), { description: 'Supported spending category.' }),
   amount: MoneyParameter,
 });
@@ -128,7 +171,7 @@ export async function runSetCardLimit(
   try {
     const card = await banking.card.setCardLimit({
       userId,
-      cardId: input.cardId,
+      cardId: await cardTargetId(userId, args),
       category: input.category,
       amount: centsToMoney(moneyToCents(input.amount)),
     });
@@ -148,7 +191,7 @@ export async function runSetCardLimit(
 
 /** `freeze_card` params. */
 export const FreezeCardParams = Type.Object({
-  cardId: Type.String({ description: '卡片 id' }),
+  ...cardSelectorFields(),
 });
 export type FreezeCardArgs = Static<typeof FreezeCardParams>;
 
@@ -170,7 +213,7 @@ export async function runFreezeCard(
   userId: string,
   args: Record<string, unknown>,
 ): Promise<ToolExecutionResult> {
-  const { cardId } = args as unknown as FreezeCardArgs;
+  const cardId = await cardTargetId(userId, args);
   try {
     const card = await banking.card.freezeCard(cardId, userId);
     const status = CARD_STATUS_LABELS[card.status] ?? card.status;
@@ -184,7 +227,7 @@ export async function runFreezeCard(
 
 /** `unfreeze_card` params. */
 export const UnfreezeCardParams = Type.Object({
-  cardId: Type.String({ description: '卡片 id' }),
+  ...cardSelectorFields(),
 });
 export type UnfreezeCardArgs = Static<typeof UnfreezeCardParams>;
 
@@ -206,7 +249,7 @@ export async function runUnfreezeCard(
   userId: string,
   args: Record<string, unknown>,
 ): Promise<ToolExecutionResult> {
-  const { cardId } = args as unknown as UnfreezeCardArgs;
+  const cardId = await cardTargetId(userId, args);
   try {
     const card = await banking.card.unfreezeCard(cardId, userId);
     const status = CARD_STATUS_LABELS[card.status] ?? card.status;
@@ -220,7 +263,7 @@ export async function runUnfreezeCard(
 
 /** `report_lost_card` params (SDK `ReportLostCardInput` + `cardId`). */
 export const ReportLostCardParams = Type.Object({
-  cardId: Type.String({ description: '卡片 id' }),
+  ...cardSelectorFields(),
   reason: Type.Optional(Type.String({ description: '挂失原因' })),
 });
 export type ReportLostCardArgs = Static<typeof ReportLostCardParams>;
@@ -245,7 +288,7 @@ export async function runReportLostCard(
 ): Promise<ToolExecutionResult> {
   const input = args as unknown as ReportLostCardArgs;
   try {
-    const card = await banking.card.reportLostCard(input.cardId, userId, { reason: input.reason });
+    const card = await banking.card.reportLostCard(await cardTargetId(userId, args), userId, { reason: input.reason });
     const reason = input.reason ? `（原因：${input.reason}）` : '';
     return { ok: true, data: card, summary: `卡片 ${card.numberMasked} 已挂失${reason}` };
   } catch (e) {
@@ -305,7 +348,7 @@ export async function runApplyVirtualCard(
  * and minus any booking time: 消费入账时间由服务端业务时钟决定，参数表中没有日期/时间字段).
  */
 export const ConsumeVirtualCardParams = Type.Object({
-  cardId: Type.String({ description: '要消费的虚拟卡 id' }),
+  ...cardSelectorFields(),
   amount: MoneyParameter,
   category: Type.Optional(Type.String({ description: '消费类别：受支持的分类之一，缺省为「其他」；非法取值由 SDK 拒绝。' })),
   merchant: Type.Optional(Type.String({ description: '商户名称；缺省为本地模拟消费标签。' })),
@@ -335,7 +378,7 @@ export function rejectClientSuppliedTime(
   const forged = CLIENT_TIME_FIELDS.filter(field => Object.hasOwn(args, field));
   if (forged.length === 0) return;
   throw new AppError('VALIDATION',
-    `消费入账时间由服务端决定，consume_virtual_card 不接受时间参数（${forged.join(', ')}）。请只提交 cardId、amount、category、merchant。`,
+    `消费入账时间由服务端决定，consume_virtual_card 不接受时间参数（${forged.join(', ')}）。请只提交 cardId（或 cardType/cardTail/cardNumber 卡片选择器）、amount、category、merchant。`,
     { ...detail, fields: forged });
 }
 
@@ -370,7 +413,7 @@ export async function runConsumeVirtualCard(
     rejectClientSuppliedTime(args);
     const result = await banking.card.consumeCard({
       userId,
-      cardId: input.cardId,
+      cardId: await cardTargetId(userId, args),
       amount: input.amount,
       category: input.category,
       merchant: input.merchant,
@@ -392,7 +435,7 @@ export async function runConsumeVirtualCard(
 
 /** `replace_card` params. */
 export const ReplaceCardParams = Type.Object({
-  cardId: Type.String({ description: '原卡片 id' }),
+  ...cardSelectorFields(),
 });
 export type ReplaceCardArgs = Static<typeof ReplaceCardParams>;
 
@@ -416,7 +459,7 @@ export async function runReplaceCard(
   userId: string,
   args: Record<string, unknown>,
 ): Promise<ToolExecutionResult> {
-  const { cardId } = args as unknown as ReplaceCardArgs;
+  const cardId = await cardTargetId(userId, args);
   try {
     const card = await banking.card.replaceCard(cardId, userId);
     const status = CARD_STATUS_LABELS[card.status] ?? card.status;

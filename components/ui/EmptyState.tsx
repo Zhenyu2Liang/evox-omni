@@ -16,17 +16,17 @@ export function EmptyState({ title, description, icon, action, className }: Empt
   return (
     <div
       className={cn(
-        'flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-banking-light bg-white p-8 text-center',
+        'flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-banking-light bg-banking-surface p-8 text-center',
         className,
       )}
     >
       {icon ? (
-        <div className="text-3xl text-gray-400" aria-hidden="true">
+        <div className="text-3xl text-banking-navy" aria-hidden="true">
           {icon}
         </div>
       ) : null}
       <div className="text-banking-navy font-semibold">{title}</div>
-      {description ? <p className="text-sm text-gray-500">{description}</p> : null}
+      {description ? <p className="text-sm text-banking-navy">{description}</p> : null}
       {action ? <div className="mt-1">{action}</div> : null}
     </div>
   );

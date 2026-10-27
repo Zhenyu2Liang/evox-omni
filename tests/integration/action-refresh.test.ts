@@ -25,10 +25,11 @@
  *
  * Real app-entry layer: REAL Next.js route handlers, the REAL confirmation continuation, the REAL
  * Banking SDK and the REAL isolated test SQLite (`prisma/test.db`) run in-process; no model/LLM is
- * on this path. The ONLY mock is REAL fault injection (`setPendingActionStatus` rejects, so the
- * result+status transaction genuinely rolls back) plus ONE REAL barrier
- * (`securityGateway.authorizeAction` holds a request mid-flight) — never a fabricated return value.
- * Every assertion re-reads persisted DB state.
+ * on this path. The ONLY mock is REAL fault injection (the settlement compare-and-set
+ * `pendingActionRepo.claimPendingAction` rejects for its `confirmed` → terminal transition, so the
+ * result+status transaction in `agent/confirmation-recovery.ts#settlePendingAction` genuinely rolls
+ * back) plus ONE REAL barrier (`securityGateway.authorizeAction` holds a request mid-flight) — never
+ * a fabricated return value. Every assertion re-reads persisted DB state.
  */
 import { beforeEach, afterEach, afterAll, describe, it, expect, vi } from 'vitest';
 import { NextRequest } from 'next/server';
@@ -107,11 +108,39 @@ function holdNextAuthorizeAction() {
   };
 }
 
-/** The REAL fault injection: make the NEXT result+status transaction genuinely roll back. */
+/**
+ * The REAL fault injection: make the NEXT result+status transaction genuinely roll back.
+ *
+ * Production lands a decision through `agent/confirmation-recovery.ts#settlePendingAction`, whose
+ * `prisma.$transaction` FIRST claims the row
+ * (`pendingActionRepo.claimPendingAction({ from: ['confirmed'], to: '<terminal>' })`) and then writes
+ * the persisted result + the STRICT execution audit. A rejection there rolls the WHOLE transaction
+ * back, so the already-committed SDK side effect survives while the row is left `confirmed` with
+ * `resultJson === null` — a genuine WEDGE.
+ *
+ * `claimPendingAction` is ALSO the authorization CAS (`pending`/`awaiting_mfa` → `confirmed`) and the
+ * later `recordActionResult` notification, so the injection filters by ARGUMENTS: only the settlement
+ * transition (`from` contains `confirmed`, `to` is not `confirmed`) may reject, and only the FIRST
+ * such call. Every other call — above all the authorization claim, which must succeed for the side
+ * effect to happen at all — delegates to the REAL compare-and-set.
+ */
 function wedgeResultTransaction() {
-  return vi
-    .spyOn(pendingActionRepo, 'setPendingActionStatus')
-    .mockRejectedValueOnce(new Error('review: convergence result transaction failed'));
+  const original = pendingActionRepo.claimPendingAction;
+  let hits = 0;
+  const spy = vi.spyOn(pendingActionRepo, 'claimPendingAction').mockImplementation(async (input, client) => {
+    const isSettlement = input.to !== 'confirmed' && input.from.includes('confirmed');
+    if (isSettlement && hits === 0) {
+      hits += 1;
+      throw new Error('review: convergence result transaction failed');
+    }
+    return client === undefined ? original(input) : original(input, client);
+  });
+  return {
+    spy,
+    /** How often the injection actually HIT the settlement transition (never the authorization CAS). */
+    hits: () => hits,
+    restore: () => spy.mockRestore(),
+  };
 }
 
 /** POST `/api/actions/[id]/<path>` through a specific (possibly freshly imported) handler. */
@@ -361,8 +390,8 @@ describe('[integration] state convergence across a refresh / restart', () => {
 
     const wedge = wedgeResultTransaction();
     const first = await confirmRaw(id, s);
-    expect(wedge.mock.calls.length).toBe(1); // the injection HIT the target
-    wedge.mockRestore();
+    expect(wedge.hits()).toBe(1); // the injection HIT the settlement transition
+    wedge.restore();
 
     const wedged = await p.pendingAction.findUnique({ where: { id } });
     expect(first.status).toBe(500); // the result+status transaction really rolled back
@@ -460,8 +489,8 @@ describe('[integration] state convergence across a refresh / restart', () => {
 
     const wedge = wedgeResultTransaction();
     const first = await confirmRaw(id, s);
-    expect(wedge.mock.calls.length).toBe(1); // the injection HIT the target
-    wedge.mockRestore();
+    expect(wedge.hits()).toBe(1); // the injection HIT the settlement transition
+    wedge.restore();
 
     const wedged = await p.pendingAction.findUnique({ where: { id } });
     expect(first.status).toBe(500);

@@ -24,7 +24,7 @@ interface CardChangeDialogProps {
 const typeLabels: Record<CardType, MessageKey> = {
   DEBIT: 'business.cards.debit', CREDIT: 'business.cards.credit', VIRTUAL: 'business.cards.virtual',
 };
-const inputClass = 'mt-1 w-full rounded-xl border border-banking-navy/20 bg-white px-3 py-2.5 text-sm outline-hidden focus:border-banking-accent focus:ring-2 focus:ring-banking-accent/10';
+const inputClass = 'bank-input mt-1 w-full rounded-xl border border-banking-navy/20 bg-banking-surface px-3 py-2.5 text-base sm:text-sm outline-hidden focus:border-banking-accent focus:ring-2 focus:ring-banking-accent/10';
 
 /** A native modal keeps focus inside the reviewed operation and supports keyboard cancellation. */
 export default function CardChangeDialog(props: CardChangeDialogProps) {
@@ -70,7 +70,7 @@ export default function CardChangeDialog(props: CardChangeDialogProps) {
     <dialog ref={dialog} data-card-change-dialog data-card-change-id={change?.id} data-card-change-status={change?.status} aria-labelledby="card-change-title" onCancel={event => {
       event.preventDefault();
       if (!busy) props.onClose();
-    }} className="m-auto max-h-[calc(100dvh_-_2rem)] w-[calc(100%_-_2rem)] max-w-lg overflow-y-auto rounded-2xl border border-banking-navy/10 bg-white p-5 text-banking-deep shadow-xl backdrop:bg-banking-deep/40 sm:p-6">
+    }} className="m-auto max-h-[calc(100dvh_-_2rem)] w-[calc(100%_-_2rem)] max-w-lg overflow-y-auto rounded-2xl border border-banking-navy/10 bg-banking-surface p-5 text-banking-deep shadow-xl backdrop:bg-banking-ink/40 sm:p-6">
       <div className="flex items-start justify-between gap-3">
         <h2 id="card-change-title" className="text-lg font-semibold">{t(deleting ? 'pages.cards.reviewDelete' : change ? 'pages.cards.reviewAdd' : 'pages.cards.add')}</h2>
         <Button variant="ghost" size="sm" disabled={busy} onClick={props.onClose}>{t('pages.cards.close')}</Button>
@@ -100,7 +100,7 @@ export default function CardChangeDialog(props: CardChangeDialogProps) {
             <fieldset disabled={busy || change.status !== 'pending'} className="space-y-4 disabled:opacity-60">
               <label className="flex items-start gap-3 text-sm"><input name="confirmed" type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} className="mt-0.5 h-4 w-4 shrink-0 accent-banking-accent" />{t('pages.cards.confirmDetails')}</label>
               <label className="block text-sm">{t('cards.mfa.label')}<input name="code" value={code} onChange={event => setCode(event.target.value)} type="text" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} className={inputClass} /></label>
-              <p className="text-xs leading-5 text-banking-navy/70">{t('pages.cards.verificationHint')}</p>
+              <p className="text-banking-caption leading-5 text-banking-navy">{t('pages.cards.verificationHint')}</p>
             </fieldset>
             <div className="flex flex-wrap justify-end gap-3">
               <Button variant="secondary" disabled={busy} onClick={() => props.onCancel(change)}>{t('pages.cards.cancelChange')}</Button>

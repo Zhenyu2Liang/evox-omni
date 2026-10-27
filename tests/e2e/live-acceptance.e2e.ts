@@ -37,7 +37,7 @@ import nextEnv from '@next/env';
 
 const { loadEnvConfig } = nextEnv;
 import path from 'node:path';
-import type { Browser, Locator, Page } from 'playwright-core';
+import type { Browser, Page } from 'playwright-core';
 import {
   cliCommand,
   ensurePrismaClientGenerated,
@@ -45,7 +45,7 @@ import {
   resolveTsxBin,
   runCliStep as runCliStepShared,
 } from '../helpers/prisma-cli';
-import { addMoney, centsToMoney, formatCNY, moneyToCents, subtractMoney } from '../../lib/money';
+import { centsToMoney, formatCNY, moneyToCents, subtractMoney } from '../../lib/money';
 import { DEMO_NOW } from '../../lib/constants';
 import {
   NAV_TIMEOUT_MS,
@@ -86,7 +86,7 @@ import { journeySharedDemo } from './shared-demo.e2e-helper';
 import { journeyToolLifecycle } from './tool-lifecycle.e2e-helper';
 import { journeyMultiCardFreeze } from './card-freeze.e2e-helper';
 import { journeyCardManagement } from './card-management.e2e-helper';
-import { journeyNaturalConversation, journeyDialogueRegressions, journeySubscriptionAdvice, journeyCompleteFraudDiscussion } from './conversation.e2e-helper';
+import { journeyNaturalConversation, journeyDialogueRegressions, journeySubscriptionAdvice, journeyCompleteFraudDiscussion, journeyExplicitDraftResume } from './conversation.e2e-helper';
 import { journeyLiveCompaction } from './compaction.e2e-helper';
 // Virtual-card live scenarios (lD/lE) are built ON TOP of this shared helper module. Its read-model /
 // DB primitives (`LiveCardRecord`, `cardById`, `fetchLiveCards`, `readCardTileRows`, `readDialogRows`,
@@ -130,9 +130,23 @@ import {
   type LiveCardRecord,
   type RawCardRow,
 } from './live-virtual-card.e2e-helper';
+// The Chinese `CardTile` / `CardConsumeDialog` row labels are NOT hard-coded here: they come from the
+// single source module that derives them from the very catalogue those components render from.
+import { CARD_LABEL } from './card-labels.e2e-helper';
 // Card-loss / replace chain scenarios (lF: fresh-session credit lost->replace; lG: ONE session full chain).
 // The scenario bodies live in this module; the entry only registers them.
 import { scenarioCreditReplaceNewSession, scenarioFullCardChain } from './card-replace-chain.e2e-helper';
+// lH: LIVE MFA attempt limit → TERMINAL `locked` state (three wrong codes, refresh, security centre).
+// The scenario body lives in this module; the entry only registers it.
+import { scenarioMfaAttemptLimitLock } from './live-mfa-lock.e2e-helper';
+import { scenarioDebitCardLinkedAccount } from './live-debit-card.e2e-helper';
+// lI: identity-resolution-by-number (exact phone match, near-miss refusal, tail-only card resolution,
+// tail-never-as-cardId and masking). The scenario body lives in its own helper; the entry only registers it.
+import { scenarioIdentityResolution } from './live-identity.e2e-helper';
+// lB: 净值 + 份额 partial redemption (RED 追加申购 then 按金额部分赎回, /investments tiles, ledger).
+// The scenario body lives in this module; the entry only injects its drivers and registers it.
+import { scenarioInvestmentPartialRedemption } from './live-investment.e2e-helper';
+import { scenarioScheduleBusinessClock } from './live-schedule-clock.e2e-helper';
 
 // --- isolated LIVE database ---------------------------------------------------------------------
 
@@ -958,10 +972,11 @@ async function scenarioMultiTurn(ctx: Ctx): Promise<string> {
       // turn 3 — MFA a RED transfer (post-MFA model continuation)
       await submitChat(page, MSG.transferLarge);
       await awaitMfaCard(page, ctx.baseUrl);
+      const beforeRed = { balance: afterYellow.balance, ledger: await fetchLedger(ctx.baseUrl) };
       await submitMfa(page, '123456');
       const afterRed = await waitForTransferSettled(
         ctx.baseUrl,
-        { balance: afterYellow.balance, ledger: await fetchLedger(ctx.baseUrl) },
+        beforeRed,
         LARGE_AMOUNT,
       );
 
@@ -1149,9 +1164,8 @@ async function scenarioCommittedContinuationFailed(
   return `重启后在无效 key 下确认：HTTP ${res.status} ok=${body.ok} status=${body.data?.status}（statusOk=${statusOk}）；DB PendingAction.status=${row.status}，余额 ${before.balance}→${settled.balance}（DB=${afterDb}），-200 DEBIT 恰 1 条（${settled.txIds[0]}）；DB=${JSON.stringify(row.resultJson)?.slice(0, 80)}`;
 }
 
-// --- scenarios lA / lB: LIVE card replacement + partial investment redemption ---------------------
+// --- scenario lA: LIVE credit-card replacement (lB partial redemption now lives in live-investment.e2e-helper.ts) ---
 
-const HOLDING_WENJIANA_ID = 'holding_wenjiana';
 const CARD_REPLACE_PROMPT = '请为我挂失的信用卡补办一张新卡';
 
 /** The UNIQUE `CREDIT` + `ACTIVE` card, or `undefined` when there is none / more than one. */
@@ -1265,7 +1279,7 @@ async function scenarioCreditReplace(ctx: Ctx): Promise<string> {
       const newTileText = (await page.locator(`[data-card-id="${newId}"]`).first().innerText()).replace(/\s+/g, ' ');
       const sourceTileText = (await page.locator(`[data-card-id="${CREDIT_CARD_ID}"]`).first().innerText()).replace(/\s+/g, ' ');
       const cardsShot = await captureLive(page, 'lA-cards');
-      if (newRows['信用额度'] !== '¥18,000.00' || newRows['可用额度'] !== '¥18,000.00') {
+      if (newRows[CARD_LABEL.creditLimit] !== '¥18,000.00' || newRows[CARD_LABEL.availableLimit] !== '¥18,000.00') {
         throw new Error(`补办信用卡 ${newId} 应显示 信用额度=可用额度=¥18,000.00，实际 ${JSON.stringify(newRows)}`);
       }
       if (!newTileText.includes('正常')) {
@@ -1355,127 +1369,9 @@ async function scenarioCreditReplace(ctx: Ctx): Promise<string> {
         throw new Error(`重复补卡请求后「非 LOST 信用卡可用额度合计」仍须为 ${centsToMoney(totalAvailableBeforeMinor)}（不得重复发卡/放额度），实际 ${centsToMoney(totalAvailableAfterIdemMinor)}：${afterSecond.filter((card) => card.type === 'CREDIT').map((card) => `${card.id}:${card.status}:可用=${card.availableLimit ?? '无'}`).join(' ')}`);
       }
 
-      return `A1 实际发送：${sentA1.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → card_credit=LOST；A2 实际发送：${sentA2.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → 新卡 ${newId}（信用额度=${newRows['信用额度']}、可用额度=${newRows['可用额度']}，状态含「正常」）；/cards 上 ${CREDIT_CARD_ID} 显示「已挂失」+「已补卡」；GET /api/cards：共 ${cards.length} 张、唯一 ACTIVE 信用卡 id=${active.id}、creditLimit=${active.creditLimit}、availableLimit=${active.availableLimit}、card_credit.status=${source?.status}、replacedByCardId=${source?.replacedByCardId}；再次补卡实际发送：${sentIdem.map((t) => `「${t}」`).join(' → ')}（重复请求，允许重放/返回既有结果/显式拒绝，不要求二次 MFA/工具执行）后仍为 ${afterSecond.length} 张、ACTIVE id=${activeAfter?.id ?? '无'}（未新增第二张）；可用信用额度（非 LOST 信用卡合计）：补办前 ${centsToMoney(totalAvailableBeforeMinor)}（${CREDIT_CARD_ID}:ACTIVE:可用=${sourceBefore.availableLimit}）→ 补办后 ${centsToMoney(totalAvailableAfterMinor)}（唯一 ACTIVE 补办卡 ${newId}:可用=${active.availableLimit}；${CREDIT_CARD_ID}:LOST:可用=${source?.availableLimit ?? '无'}，已排除）；把 LOST 源卡也计入的朴素合计 ${centsToMoney(naiveAllCreditBeforeMinor)} → ${centsToMoney(naiveAllCreditAfterMinor)}（重复计额度，已被断言排除）；重复补卡后合计=${centsToMoney(totalAvailableAfterIdemMinor)}；截图 ${cardsShot ?? '未落盘'}`;
+      return `A1 实际发送：${sentA1.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → card_credit=LOST；A2 实际发送：${sentA2.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → 新卡 ${newId}（信用额度=${newRows[CARD_LABEL.creditLimit]}、可用额度=${newRows[CARD_LABEL.availableLimit]}，状态含「正常」）；/cards 上 ${CREDIT_CARD_ID} 显示「已挂失」+「已补卡」；GET /api/cards：共 ${cards.length} 张、唯一 ACTIVE 信用卡 id=${active.id}、creditLimit=${active.creditLimit}、availableLimit=${active.availableLimit}、card_credit.status=${source?.status}、replacedByCardId=${source?.replacedByCardId}；再次补卡实际发送：${sentIdem.map((t) => `「${t}」`).join(' → ')}（重复请求，允许重放/返回既有结果/显式拒绝，不要求二次 MFA/工具执行）后仍为 ${afterSecond.length} 张、ACTIVE id=${activeAfter?.id ?? '无'}（未新增第二张）；可用信用额度（非 LOST 信用卡合计）：补办前 ${centsToMoney(totalAvailableBeforeMinor)}（${CREDIT_CARD_ID}:ACTIVE:可用=${sourceBefore.availableLimit}）→ 补办后 ${centsToMoney(totalAvailableAfterMinor)}（唯一 ACTIVE 补办卡 ${newId}:可用=${active.availableLimit}；${CREDIT_CARD_ID}:LOST:可用=${source?.availableLimit ?? '无'}，已排除）；把 LOST 源卡也计入的朴素合计 ${centsToMoney(naiveAllCreditBeforeMinor)} → ${centsToMoney(naiveAllCreditAfterMinor)}（重复计额度，已被断言排除）；重复补卡后合计=${centsToMoney(totalAvailableAfterIdemMinor)}；截图 ${cardsShot ?? '未落盘'}`;
     },
     { label: 'lA-credit-report-lost-and-replace' },
-  );
-}
-
-/** The `holding_wenjiana` row subset the redemption scenario asserts on. */
-interface LiveHoldingRow {
-  principalAmountMinor: bigint;
-  estimatedMarketValue: string | null;
-}
-
-/** Poll SQLite for the `holding_wenjiana` row until `predicate` holds (a business condition). */
-function awaitHolding(
-  predicate: (row: LiveHoldingRow) => boolean,
-  description: string,
-  timeoutMs = 180_000,
-): Promise<LiveHoldingRow> {
-  return waitFor(
-    async () =>
-      withDb(async (db) => {
-        const row = await db.investmentHolding.findUnique({
-          where: { id: HOLDING_WENJIANA_ID },
-          select: { principalAmountMinor: true, estimatedMarketValue: true },
-        });
-        return row && predicate(row) ? row : false;
-      }),
-    { timeoutMs, intervalMs: 1_000, description },
-  );
-}
-
-/** Read one labelled `label → value` row (two adjacent spans) from a rendered investment tile. */
-async function readTileRow(tile: Locator, label: string): Promise<string> {
-  return tile.evaluate((el, wanted) => {
-    for (const span of Array.from(el.querySelectorAll('span'))) {
-      if ((span.textContent ?? '').trim() !== wanted) continue;
-      const cells = span.parentElement ? Array.from(span.parentElement.querySelectorAll('span')) : [];
-      if (cells.length >= 2) return (cells[1].textContent ?? '').trim();
-    }
-    return '';
-  }, label);
-}
-
-/**
- * SCENARIO lB (LIVE-LLM, REAL BROWSER): subscribe an extra ¥1,000 into 稳健理财A (RED) and then
- * PARTIALLY redeem ¥2,000 of principal (RED) through the `/agent` chat + MFA, then verify the EXACT
- * remaining principal / market value / profit on the REAL `/investments` page, the ledger + balance
- * and the full-precision valuation stored in SQLite.
- */
-async function scenarioPartialRedeem(ctx: Ctx): Promise<string> {
-  return withPage(
-    ctx.browser,
-    async (page) => {
-      attachCollectors(page);
-      const beforeBalance = (await fetchDashboardSummary(ctx.baseUrl)).checkingBalance;
-      const beforeLedger = (await fetchLedger(ctx.baseUrl)).transactions;
-      await gotoAgent(page, ctx.baseUrl);
-
-      // B1 — RED `subscribe_investment` (¥1,000 into 稳健理财A → principal 6,000.00): bounded natural
-      // turns; if the model insists on a failing plan/submission path, one mild natural rephrase.
-      const sentB1 = await driveRedTool(page, ctx.baseUrl, [
-        '追加申购稳健理财A 1000元',
-        '确认，请办理',
-        '界面上方没有出现确认面板，请重新发起这笔追加申购',
-        '现在就用我的账户追加申购稳健理财A 1000元',
-      ]);
-      await awaitHolding(
-        (row) => row.principalAmountMinor === 600_000n,
-        'B1 后 holding_wenjiana.principalAmountMinor === 600000（¥6,000.00）',
-      );
-
-      // B2 — RED `redeem_investment` (PARTIAL ¥2,000 principal → principal 4,000.00): bounded natural turns.
-      const sentB2 = await driveRedTool(page, ctx.baseUrl, [
-        '我持有的稳健理财A部分赎回2000元本金',
-        '确认，请办理',
-        '界面上方没有出现确认面板，请重新发起这笔部分赎回',
-      ]);
-      const holding = await awaitHolding(
-        (row) => row.principalAmountMinor === 400_000n && (row.estimatedMarketValue ?? '').startsWith('4118.90666'),
-        'B2 后 principalAmountMinor === 400000 且 estimatedMarketValue 以 4118.90666 开头（全精度存储）',
-      );
-
-      // REAL PAGE — exact remaining principal / market value / profit rendered on `/investments`.
-      await page.goto(`${ctx.baseUrl}/investments`, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
-      await waitForElementHydration(page, '[data-investment-holdings]');
-      const tiles = page.locator('[data-investment-holdings] div.rounded-2xl').filter({ hasText: '稳健理财A' });
-      const tileCount = await tiles.count();
-      if (tileCount !== 1) throw new Error(`/investments 持仓区「稳健理财A」卡片应恰 1 张，实际 ${tileCount}`);
-      const principal = await readTileRow(tiles.first(), '持有金额');
-      const marketValue = await readTileRow(tiles.first(), '市值');
-      const profit = await readTileRow(tiles.first(), '收益');
-      await captureLive(page, 'lB-investments');
-      const shown: Record<string, string> = { 持有金额: principal, 市值: marketValue, 收益: profit };
-      for (const [label, value] of Object.entries(shown)) {
-        if (value === '') throw new Error(`/investments 未渲染「${label}」行`);
-        if (/\.\d{6,}/.test(value)) throw new Error(`「${label}」展示了未结算的过高精度：${value}`);
-        if (!/^[+-]?¥[\d,]+\.\d{2}$/.test(value)) throw new Error(`「${label}」显示值格式不正确：${value}`);
-      }
-      if (principal !== '¥4,000.00') throw new Error(`持有金额应为 ¥4,000.00，实际 ${principal}`);
-      if (marketValue !== '¥4,118.91') throw new Error(`市值应为 ¥4,118.91，实际 ${marketValue}`);
-      if (profit !== '+¥118.91') throw new Error(`收益应为 +¥118.91，实际 ${profit}`);
-
-      // LEDGER + BALANCE — one investment DEBIT (认购) and one investment CREDIT (赎回).
-      const afterBalance = (await fetchDashboardSummary(ctx.baseUrl)).checkingBalance;
-      const afterLedger = (await fetchLedger(ctx.baseUrl)).transactions;
-      const added = diffLedger(beforeLedger, afterLedger).added;
-      const describe = added.map((tx) => `${tx.id}:${tx.amount}:${tx.direction}:${tx.merchant}/${tx.category}`).join(' ');
-      const debits = added.filter(
-        (tx) => tx.direction === 'DEBIT' && moneyToCents(tx.amount) === -100_000n && tx.merchant === '认购稳健理财A' && tx.category === '投资',
-      );
-      const credits = added.filter(
-        (tx) => tx.direction === 'CREDIT' && moneyToCents(tx.amount) === 205_945n && tx.merchant === '赎回' && tx.category === '投资',
-      );
-      if (debits.length !== 1) throw new Error(`账本应新增 1 条 -1000.00 的投资 DEBIT（认购稳健理财A），实际 ${debits.length}：${describe}`);
-      if (credits.length !== 1) throw new Error(`账本应新增 1 条 +2059.45 的投资 CREDIT（赎回），实际 ${credits.length}：${describe}`);
-      const expectedBalance = addMoney(subtractMoney(beforeBalance, '1000.00'), '2059.45');
-      if (afterBalance !== expectedBalance) throw new Error(`活期余额应为 ${expectedBalance}，实际 ${afterBalance}`);
-
-      return `B1 实际发送：${sentB1.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → DB principalAmountMinor=600000（¥6,000.00）；B2 实际发送：${sentB2.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → DB principalAmountMinor=${holding.principalAmountMinor}（¥4,000.00）、estimatedMarketValue=${holding.estimatedMarketValue}（全精度）；/investments 显示 持有金额=${principal}、市值=${marketValue}、收益=${profit}；账本新增 DEBIT ${debits[0].amount}（${debits[0].id}，${debits[0].merchant}/${debits[0].category}）与 CREDIT ${credits[0].amount}（${credits[0].id}，${credits[0].merchant}/${credits[0].category}）；活期余额 ${beforeBalance} → ${afterBalance}`;
-    },
-    { label: 'lB-investment-partial-redemption' },
   );
 }
 
@@ -1599,14 +1495,14 @@ async function scenarioVirtualCardConsume(ctx: Ctx): Promise<string> {
         throw new Error(`消费弹窗应绑定 ${VIRTUAL_CARD_ID}，实际 data-card-consume-card-id=${dialogCardId}`);
       }
       const summary = await readDialogRows(page, '[data-card-consume-summary]');
-      if (summary['月限额'] !== formatCNY(monthlyLimit)) {
-        throw new Error(`消费弹窗「月限额」应为 ${formatCNY(monthlyLimit)}，实际 ${summary['月限额']}（${JSON.stringify(summary)}）`);
+      if (summary[CARD_LABEL.monthlyLimit] !== formatCNY(monthlyLimit)) {
+        throw new Error(`消费弹窗「${CARD_LABEL.monthlyLimit}」应为 ${formatCNY(monthlyLimit)}，实际 ${summary[CARD_LABEL.monthlyLimit]}（${JSON.stringify(summary)}）`);
       }
-      if (summary['关联账户'] !== '****8821') {
-        throw new Error(`消费弹窗「关联账户」应为 ****8821，实际 ${summary['关联账户']}（${JSON.stringify(summary)}）`);
+      if (summary[CARD_LABEL.linkedAccount] !== '****8821') {
+        throw new Error(`消费弹窗「${CARD_LABEL.linkedAccount}」应为 ****8821，实际 ${summary[CARD_LABEL.linkedAccount]}（${JSON.stringify(summary)}）`);
       }
-      if (summary['当前可支付金额'] !== formatCNY(payableBefore)) {
-        throw new Error(`消费弹窗「当前可支付金额」应为 ${formatCNY(payableBefore)}，实际 ${summary['当前可支付金额']}（${JSON.stringify(summary)}）`);
+      if (summary[CARD_LABEL.usableBalance] !== formatCNY(payableBefore)) {
+        throw new Error(`消费弹窗「${CARD_LABEL.usableBalance}」应为 ${formatCNY(payableBefore)}，实际 ${summary[CARD_LABEL.usableBalance]}（${JSON.stringify(summary)}）`);
       }
       const form = page.locator('[data-card-consume-form]').first();
       // The dialog must offer NO time control at all: the booking instant is SERVER-owned.
@@ -1729,11 +1625,11 @@ async function scenarioVirtualCardConsume(ctx: Ctx): Promise<string> {
       await waitForElementHydration(page, `[data-card-id="${VIRTUAL_CARD_ID}"]`);
       const tileRows = await readCardTileRows(page, VIRTUAL_CARD_ID);
       const tileShot = await captureLive(page, 'lC-card-tile');
-      if (tileRows['当前可支付金额'] !== formatCNY(centsToMoney(expectedPayableAfterMinor))) {
-        throw new Error(`${VIRTUAL_CARD_ID} 卡片「当前可支付金额」应为 ${formatCNY(centsToMoney(expectedPayableAfterMinor))}，实际 ${tileRows['当前可支付金额']}（${JSON.stringify(tileRows)}）`);
+      if (tileRows[CARD_LABEL.usableBalance] !== formatCNY(centsToMoney(expectedPayableAfterMinor))) {
+        throw new Error(`${VIRTUAL_CARD_ID} 卡片「${CARD_LABEL.usableBalance}」应为 ${formatCNY(centsToMoney(expectedPayableAfterMinor))}，实际 ${tileRows[CARD_LABEL.usableBalance]}（${JSON.stringify(tileRows)}）`);
       }
 
-      return `C1 实际发送：${sentC1.map((t) => `「${t}」`).join(' → ')} → 仍恰 1 张 VIRTUAL 卡（${VIRTUAL_CARD_ID}，未被重复开通）；C2 前端消费弹窗（绑定 ${dialogCardId}，月限额 ${summary['月限额']}、关联账户 ${summary['关联账户']}、消费前当前可支付金额 ${summary['当前可支付金额']}）提交 ${formatCNY(VIRTUAL_CONSUME_AMOUNT)}（${VIRTUAL_CONSUME_CATEGORY}/${VIRTUAL_CONSUME_MERCHANT}）→ 消费成功；SQLite：新增 1 条 channel=CARD/DEBIT 流水 ${debitRow.amountMinor}（${debitRow.id}）、1 条 CardConsumption amountMinor=${consumptionRow.amountMinor}（${consumptionRow.id}）；活期余额 ${centsToMoney(before.balanceMinor)} → ${centsToMoney(after.balanceMinor)}（恰扣一次）；${VIRTUAL_CARD_ID}.payableAmount ${payableBefore} → ${virtualAfter?.payableAmount} = min(可用余额 ${virtualAfter?.accountAvailableBalance}、剩余月限额 ${centsToMoney(remainingAfterMinor)})；卡片「当前可支付金额」=${tileRows['当前可支付金额']}；记账时间由服务端拥有：弹窗请求体逐字 ${sentBodyText}（键=${sentKeys}，无 occurredAt），落账 Transaction.occurredAt 与 CardConsumption.occurredAt 均为 ${debitRow.occurredAt.toISOString()}（= DEMO_NOW 服务端业务时钟 2026-09-25T12:00:00+08:00）；截图 ${formShot ?? '未落盘'} / ${successShot ?? '未落盘'} / ${tileShot ?? '未落盘'}`;
+      return `C1 实际发送：${sentC1.map((t) => `「${t}」`).join(' → ')} → 仍恰 1 张 VIRTUAL 卡（${VIRTUAL_CARD_ID}，未被重复开通）；C2 前端消费弹窗（绑定 ${dialogCardId}，月限额 ${summary[CARD_LABEL.monthlyLimit]}、关联账户 ${summary[CARD_LABEL.linkedAccount]}、消费前可用余额 ${summary[CARD_LABEL.usableBalance]}）提交 ${formatCNY(VIRTUAL_CONSUME_AMOUNT)}（${VIRTUAL_CONSUME_CATEGORY}/${VIRTUAL_CONSUME_MERCHANT}）→ 消费成功；SQLite：新增 1 条 channel=CARD/DEBIT 流水 ${debitRow.amountMinor}（${debitRow.id}）、1 条 CardConsumption amountMinor=${consumptionRow.amountMinor}（${consumptionRow.id}）；活期余额 ${centsToMoney(before.balanceMinor)} → ${centsToMoney(after.balanceMinor)}（恰扣一次）；${VIRTUAL_CARD_ID}.payableAmount ${payableBefore} → ${virtualAfter?.payableAmount} = min(可用余额 ${virtualAfter?.accountAvailableBalance}、剩余月限额 ${centsToMoney(remainingAfterMinor)})；卡片「可用余额」=${tileRows[CARD_LABEL.usableBalance]}；记账时间由服务端拥有：弹窗请求体逐字 ${sentBodyText}（键=${sentKeys}，无 occurredAt），落账 Transaction.occurredAt 与 CardConsumption.occurredAt 均为 ${debitRow.occurredAt.toISOString()}（= DEMO_NOW 服务端业务时钟 2026-09-25T12:00:00+08:00）；截图 ${formShot ?? '未落盘'} / ${successShot ?? '未落盘'} / ${tileShot ?? '未落盘'}`;
     },
     { label: 'lC-virtual-card-consumption' },
   );
@@ -1813,7 +1709,7 @@ function awaitPayable(baseUrl: string, cardId: string, expected: string): Promis
     {
       timeoutMs: 180_000,
       intervalMs: 1_000,
-      description: `${cardId}.payableAmount === ${expected}（min(账户可用余额, 剩余月限额)）`,
+      description: `${cardId}.payableAmount === ${expected}（min(账户余额, 剩余月限额)）`,
     },
   );
 }
@@ -1863,11 +1759,11 @@ async function scenarioVirtualCardApplyAndLimit(ctx: Ctx): Promise<string> {
 
       // WITHIN-LIMIT SPEND through the REAL consume dialog (`POST /api/cards/[id]/consume`).
       const summary = await openConsumeDialog(page, cardId);
-      if (summary['月限额'] !== formatCNY(VC_MONTHLY_LIMIT)) {
-        throw new Error(`消费弹窗「月限额」应为 ${formatCNY(VC_MONTHLY_LIMIT)}，实际 ${summary['月限额']}（${JSON.stringify(summary)}）`);
+      if (summary[CARD_LABEL.monthlyLimit] !== formatCNY(VC_MONTHLY_LIMIT)) {
+        throw new Error(`消费弹窗「${CARD_LABEL.monthlyLimit}」应为 ${formatCNY(VC_MONTHLY_LIMIT)}，实际 ${summary[CARD_LABEL.monthlyLimit]}（${JSON.stringify(summary)}）`);
       }
-      if (summary['当前可支付金额'] !== formatCNY(VC_MONTHLY_LIMIT)) {
-        throw new Error(`消费弹窗「当前可支付金额」应为 ${formatCNY(VC_MONTHLY_LIMIT)}，实际 ${summary['当前可支付金额']}（${JSON.stringify(summary)}）`);
+      if (summary[CARD_LABEL.usableBalance] !== formatCNY(VC_MONTHLY_LIMIT)) {
+        throw new Error(`消费弹窗「${CARD_LABEL.usableBalance}」应为 ${formatCNY(VC_MONTHLY_LIMIT)}，实际 ${summary[CARD_LABEL.usableBalance]}（${JSON.stringify(summary)}）`);
       }
       const spend = await consumeSuccessfully(
         page,
@@ -1947,7 +1843,7 @@ async function scenarioVirtualCardApplyAndLimit(ctx: Ctx): Promise<string> {
         screenshots: { applyShot, spendShot, refusalShot },
       });
 
-      return `lD 实际发送：${leg.sent.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → 新虚拟卡 ${cardId}（RAW：type=VIRTUAL、status=ACTIVE、monthlyLimitMinor=${leg.raw.monthlyLimitMinor}（${VC_MONTHLY_LIMIT}）、linkedAccountId=${leg.raw.linkedAccountId}、creditLimitMinor=${leg.raw.creditLimitMinor}、availableLimitMinor=${leg.raw.availableLimitMinor}、卡号 ${leg.raw.numberMasked} 与既有卡片均不同）；payableAmount=${VC_MONTHLY_LIMIT}（月限额绑定，账户可用余额 ${cashBefore}）；/cards 渲染 ${JSON.stringify(applyTileRows)}（无「信用额度」/「可用额度」）；消费 ${VC_FIRST_SPEND}（${VC_SPEND_CATEGORY}/${VC_MERCHANT_APPLY}）→ ${spend.notice}：新增 CARD/DEBIT 流水 ${delta.debit.amountMinor}（${delta.debit.id}）+ 1 条 CardConsumption amountMinor=${delta.consumption.amountMinor}（${delta.consumption.id}），活期余额 ${centsToMoney(delta.balanceBeforeMinor)} → ${centsToMoney(delta.balanceAfterMinor)}（恰扣一次）；payableAmount → ${payableAfterSpend}，刷新后卡片「当前可支付金额」=${spendTileRows['当前可支付金额']}；超限 ${VC_OVER_LIMIT_SPEND}（${VC_MERCHANT_REFUSED}）被拒绝：「${refusalText}」，流水/余额/CardConsumption 零变化，payableAmount 仍 ${payableAfterRefusal}；截图 ${applyShot ?? '未落盘'} / ${spendShot ?? '未落盘'} / ${refusalShot ?? '未落盘'}；证据 JSON ${evidenceFile ?? '未落盘'}`;
+      return `lD 实际发送：${leg.sent.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → 新虚拟卡 ${cardId}（RAW：type=VIRTUAL、status=ACTIVE、monthlyLimitMinor=${leg.raw.monthlyLimitMinor}（${VC_MONTHLY_LIMIT}）、linkedAccountId=${leg.raw.linkedAccountId}、creditLimitMinor=${leg.raw.creditLimitMinor}、availableLimitMinor=${leg.raw.availableLimitMinor}、卡号 ${leg.raw.numberMasked} 与既有卡片均不同）；payableAmount=${VC_MONTHLY_LIMIT}（月限额绑定，账户余额 ${cashBefore}）；/cards 渲染 ${JSON.stringify(applyTileRows)}（无「信用额度」/「可用额度」）；消费 ${VC_FIRST_SPEND}（${VC_SPEND_CATEGORY}/${VC_MERCHANT_APPLY}）→ ${spend.notice}：新增 CARD/DEBIT 流水 ${delta.debit.amountMinor}（${delta.debit.id}）+ 1 条 CardConsumption amountMinor=${delta.consumption.amountMinor}（${delta.consumption.id}），活期余额 ${centsToMoney(delta.balanceBeforeMinor)} → ${centsToMoney(delta.balanceAfterMinor)}（恰扣一次）；payableAmount → ${payableAfterSpend}，刷新后卡片「可用余额」=${spendTileRows[CARD_LABEL.usableBalance]}；超限 ${VC_OVER_LIMIT_SPEND}（${VC_MERCHANT_REFUSED}）被拒绝：「${refusalText}」，流水/余额/CardConsumption 零变化，payableAmount 仍 ${payableAfterRefusal}；截图 ${applyShot ?? '未落盘'} / ${spendShot ?? '未落盘'} / ${refusalShot ?? '未落盘'}；证据 JSON ${evidenceFile ?? '未落盘'}`;
     },
     { label: 'lD-virtual-card-apply-and-limit' },
   );
@@ -2050,7 +1946,7 @@ async function scenarioVirtualCardReplaceContinuity(ctx: Ctx): Promise<string> {
         .reduce((sum, row) => sum + row.amountMinor, 0n);
       const familyPayable = centsToMoney(expectedPayableMinor(limitMinor, familySpentMinor, afterLost.balanceMinor));
       if (familyPayable !== '70.00') {
-        throw new Error(`补办卡的家庭剩余月限额应为 ${VC_MONTHLY_LIMIT} − ${VC_FIRST_SPEND} = 70.00，实际 ${familyPayable}（家庭已用 ${familySpentMinor}、账户可用余额 ${centsToMoney(afterLost.balanceMinor)}）`);
+        throw new Error(`补办卡的家庭剩余月限额应为 ${VC_MONTHLY_LIMIT} − ${VC_FIRST_SPEND} = 70.00，实际 ${familyPayable}（家庭已用 ${familySpentMinor}、账户余额 ${centsToMoney(afterLost.balanceMinor)}）`);
       }
       const cardsAfterReplace = await awaitPayable(ctx.baseUrl, replacementId, familyPayable);
       const replacementView = cardById(cardsAfterReplace, replacementId);
@@ -2093,7 +1989,7 @@ async function scenarioVirtualCardReplaceContinuity(ctx: Ctx): Promise<string> {
         expectedPayableMinor(limitMinor, familySpentMinor + moneyToCents(VC_SECOND_SPEND), afterSecondSpend.balanceMinor),
       );
       if (exhaustedPayable !== '0.00') {
-        throw new Error(`家庭月限额用尽后 payableAmount 应为 0.00，实际 ${exhaustedPayable}（账户可用余额 ${centsToMoney(afterSecondSpend.balanceMinor)}）`);
+        throw new Error(`家庭月限额用尽后 payableAmount 应为 0.00，实际 ${exhaustedPayable}（账户余额 ${centsToMoney(afterSecondSpend.balanceMinor)}）`);
       }
       const cardsExhausted = await awaitPayable(ctx.baseUrl, replacementId, exhaustedPayable);
       assertVirtualCardView(cardById(cardsExhausted, replacementId), {
@@ -2187,6 +2083,11 @@ async function verifyProviderCompletionEvidence(): Promise<string> {
 }
 
 const SCENARIOS: readonly Scenario[] = [
+  { id: 'lL', name: 'lL-live-explicit-draft-resumption', run: ctx => journeyExplicitDraftResume(ctx.browser, ctx.baseUrl) },
+  { id: 'lK', name: 'lK-live-scheduled-reminder-business-clock', run: ctx => withPage(ctx.browser, async page => {
+    attachCollectors(page);
+    return scenarioScheduleBusinessClock({ page, baseUrl: ctx.baseUrl, captureShot: captureLive });
+  }, { label: 'lK-live-scheduled-reminder-business-clock' }) },
   { id: '15', name: '15-live-complete-fraud-choice-discussion', run: async ctx => {
     const result = await journeyCompleteFraudDiscussion(ctx.browser, ctx.baseUrl);
     return `${result} ${await verifyProviderCompletionEvidence()}`;
@@ -2207,12 +2108,15 @@ const SCENARIOS: readonly Scenario[] = [
   { id: '6', name: '6-live-multiturn-and-continuations', run: scenarioMultiTurn },
   { id: '4', name: '4-live-large-transfer-mfa', run: scenarioLargeTransferMfa },
   { id: 'lA', name: 'lA-live-credit-card-report-lost-and-replace', run: scenarioCreditReplace },
-  { id: 'lB', name: 'lB-live-investment-partial-redemption', run: scenarioPartialRedeem },
+  { id: 'lB', name: 'lB-live-investment-partial-redemption', run: (ctx) => withPage(ctx.browser, async (page) => { attachCollectors(page); return scenarioInvestmentPartialRedemption({ page, baseUrl: ctx.baseUrl, drive: (turns) => driveRedTool(page, ctx.baseUrl, turns), captureShot: captureLive, pageErrors: netLog.pageErrors }); }, { label: 'lB-live-investment-partial-redemption' }) },
   { id: 'lC', name: 'lC-live-virtual-card-consumption', run: scenarioVirtualCardConsume },
   { id: 'lD', name: 'lD-live-virtual-card-apply-and-limit', run: scenarioVirtualCardApplyAndLimit },
   { id: 'lE', name: 'lE-live-virtual-card-replace-continuity', run: scenarioVirtualCardReplaceContinuity },
   { id: 'lF', name: 'lF-live-credit-report-lost-and-replace-new-session', run: (ctx) => withPage(ctx.browser, async (page) => { attachCollectors(page); return scenarioCreditReplaceNewSession({ page, baseUrl: ctx.baseUrl, drive: (turns) => driveRedTool(page, ctx.baseUrl, turns), captureShot: captureLive }); }, { label: 'lF-live-credit-report-lost-and-replace-new-session' }) },
   { id: 'lG', name: 'lG-live-full-card-loss-replace-chain-single-session', run: (ctx) => withPage(ctx.browser, async (page) => { attachCollectors(page); return scenarioFullCardChain({ page, baseUrl: ctx.baseUrl, drive: (turns) => driveRedTool(page, ctx.baseUrl, turns), captureShot: captureLive }); }, { label: 'lG-live-full-card-loss-replace-chain-single-session' }) },
+  { id: 'lH', name: 'lH-live-mfa-attempt-limit-lock-terminal', run: (ctx) => withPage(ctx.browser, async (page) => { attachCollectors(page); return scenarioMfaAttemptLimitLock({ page, baseUrl: ctx.baseUrl, captureShot: captureLive }); }, { label: 'lH-live-mfa-attempt-limit-lock-terminal' }) },
+  { id: 'lJ', name: 'lJ-live-debit-card-linked-account-balance', run: (ctx) => withPage(ctx.browser, async (page) => { attachCollectors(page); return scenarioDebitCardLinkedAccount({ page, baseUrl: ctx.baseUrl, drive: (turns) => driveRedTool(page, ctx.baseUrl, turns), captureShot: captureLive }); }, { label: 'lJ-live-debit-card-linked-account-balance' }) },
+  { id: 'lI', name: 'lI-live-identity-resolution-by-number', run: (ctx) => withPage(ctx.browser, async (page) => { attachCollectors(page); return scenarioIdentityResolution({ page, baseUrl: ctx.baseUrl, captureShot: captureLive }); }, { label: 'lI-live-identity-resolution-by-number' }) },
 ];
 
 /** `LIVE_SCENARIOS=1,3` (comma separated) runs only those scenario ids (plus scenario 7 if `7`). */
@@ -2336,7 +2240,8 @@ async function main(): Promise<void> {
     );
     devServer = await bootDevServer({ timeoutMs: NAV_TIMEOUT_MS, attempts: 2 });
     const baseUrl = devServer.baseUrl;
-    console.log(`· next dev (pid=${devServer.pid}) → ${baseUrl}（/api/health 与 /agent 均已就绪）`);
+    const serverCommand = process.env.E2E_SERVER_MODE === 'production' ? 'start' : 'dev';
+    console.log(`· next ${serverCommand} (pid=${devServer.pid}) → ${baseUrl}（/api/health 与 /agent 均已就绪）`);
 
     // LIVE-mode confirmation: read the RESOLVED config the app actually serves (mock vs live) and,
     // when running scenario 1, observe a narration the scripted mock cannot produce.

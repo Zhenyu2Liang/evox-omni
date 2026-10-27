@@ -9,6 +9,7 @@ import { useI18n } from '@/lib/i18n/LocaleProvider';
 import type { MessageKey } from '@/lib/i18n/shared';
 import CardChangeDialog, { type CardDialogSelection } from './CardChangeDialog';
 import CardConsumeDialog from './CardConsumeDialog';
+import { cardCanConsume, cardSupportsConsumption, cardUnavailableNoticeKey, linkedAccountNoticeKey } from '@/components/banking/card-account-display';
 
 interface Envelope<T> { ok: boolean; data?: T; error?: { code: string } }
 interface Notice { key: MessageKey; error: boolean; attempts?: number }
@@ -77,6 +78,18 @@ export default function CardManager({ initialCards }: { initialCards: CardView[]
   }
 
   function openConsume(card: CardView) {
+    if (!cardSupportsConsumption(card)) {
+      setNotice({ key: 'pages.cards.creditConsumeUnsupported', error: true });
+      return;
+    }
+    // A card that is not usable keeps its balances visible, but must never open a spend form.
+    if (!cardCanConsume(card)) {
+      setNotice({
+        key: cardUnavailableNoticeKey(card) ?? linkedAccountNoticeKey(card.linkedAccountStatus) ?? 'pages.cards.consumeUnavailable',
+        error: true,
+      });
+      return;
+    }
     setNotice(null);
     setConsume(card);
   }
@@ -167,16 +180,29 @@ export default function CardManager({ initialCards }: { initialCards: CardView[]
   }
 
   const disabled = busy || refreshing || !loaded;
+  const currentCards = cards.filter(card => card.status !== 'LOST' && !card.replacedByCardId)
+    .sort((left, right) => Number(right.status === 'ACTIVE') - Number(left.status === 'ACTIVE'));
+  const historicalCards = cards.filter(card => card.status === 'LOST' || Boolean(card.replacedByCardId));
+  const renderCard = (card: CardView) => <div key={card.id} data-card-id={card.id}><CardTile card={card} footer={<div className="flex flex-wrap items-center justify-end gap-2 [&_button]:whitespace-nowrap">{cardSupportsConsumption(card) ? <span data-card-consume><Button variant="secondary" size="sm" disabled={disabled || !cardCanConsume(card)} onClick={() => openConsume(card)}>{t('pages.cards.consume')}</Button></span> : <span data-card-consume-unavailable className="basis-full self-center text-right text-banking-caption text-banking-navy sm:basis-auto">{t('pages.cards.creditConsumeUnsupported')}</span>}<span data-card-delete><Button variant="ghost" size="sm" disabled={disabled || changes.some(change => change.kind === 'delete' && change.card?.id === card.id)} onClick={() => open({ kind: 'delete', card })}>{t('pages.cards.delete')}</Button></span></div>} /></div>;
+
   return (
     <main className="mx-auto flex w-full min-w-0 max-w-6xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
       <header className="flex flex-wrap items-start justify-between gap-3">
-        <div><h1 className="text-2xl font-semibold tracking-tight text-banking-deep">{t('pages.cards.title')}</h1><p className="mt-1 text-sm text-banking-navy">{t('pages.cards.summary', { count: cards.length })}</p></div>
+        <div><h1 className="bank-page-heading text-2xl font-semibold tracking-tight text-banking-deep">{t('pages.cards.title')}</h1><p className="mt-1 text-sm text-banking-navy">{t('pages.cards.summary', { count: cards.length })}</p></div>
         <div className="flex flex-wrap gap-2"><span data-card-refresh><Button variant="secondary" loading={refreshing} disabled={busy} onClick={() => { setNotice(null); void refresh(); }}>{t('pages.cards.refresh')}</Button></span><span data-card-add><Button disabled={disabled} onClick={() => open({ kind: 'add' })}>{t('pages.cards.add')}</Button></span></div>
       </header>
       <p className="rounded-xl bg-banking-light p-4 text-sm leading-6 text-banking-navy">{t('pages.cards.demoDescription')}</p>
       {notice ? <p role={notice.error ? 'alert' : 'status'} className={`rounded-xl border p-3 text-sm ${notice.error ? 'border-banking-danger/20 bg-red-50 text-banking-danger' : 'border-banking-success/20 bg-green-50 text-banking-success'}`}>{t(notice.key, notice.attempts === undefined ? {} : { attempts: notice.attempts })}</p> : null}
-      {changes.length ? <section data-card-pending-changes className="rounded-2xl border border-banking-navy/10 bg-white p-5"><h2 className="font-semibold text-banking-deep">{t('pages.cards.pending')}</h2><ul className="mt-3 space-y-3">{changes.map(change => <li key={change.id} data-card-pending-change-id={change.id} className="flex flex-wrap items-center justify-between gap-3 border-t border-banking-light pt-3"><div className="text-sm text-banking-navy">{t(change.kind === 'add' ? 'pages.cards.reviewAdd' : 'pages.cards.reviewDelete')}{change.card ? <span className="ml-2 font-mono">{change.card.numberMasked}</span> : null}{change.status === 'locked' ? <p className="mt-1 text-banking-danger">{t('pages.cards.locked')}</p> : null}</div><Button variant="secondary" disabled={disabled} onClick={() => open({ kind: 'change', change })}>{t('pages.cards.resume')}</Button></li>)}</ul></section> : null}
-      {cards.length ? <section data-card-list className="grid min-w-0 gap-4 sm:grid-cols-2">{cards.map(card => <div key={card.id} data-card-id={card.id}><CardTile card={card} footer={<div className="flex justify-end gap-1"><span data-card-consume><Button variant="secondary" size="sm" disabled={disabled} onClick={() => openConsume(card)}>{t('pages.cards.consume')}</Button></span><span data-card-delete><Button variant="ghost" size="sm" disabled={disabled || changes.some(change => change.kind === 'delete' && change.card?.id === card.id)} onClick={() => open({ kind: 'delete', card })}>{t('pages.cards.delete')}</Button></span></div>} /></div>)}</section> : <EmptyState title={t('pages.cards.emptyTitle')} description={t('pages.cards.emptyDescription')} />}
+      {changes.length ? <section data-card-pending-changes className="rounded-2xl border border-banking-navy/10 bg-banking-surface p-5"><h2 className="font-semibold text-banking-deep">{t('pages.cards.pending')}</h2><ul className="mt-3 space-y-3">{changes.map(change => <li key={change.id} data-card-pending-change-id={change.id} className="flex flex-wrap items-center justify-between gap-3 border-t border-banking-light pt-3"><div className="text-sm text-banking-navy">{t(change.kind === 'add' ? 'pages.cards.reviewAdd' : 'pages.cards.reviewDelete')}{change.card ? <span className="ml-2 font-mono">{change.card.numberMasked}</span> : null}{change.status === 'locked' ? <p className="mt-1 text-banking-danger">{t('pages.cards.locked')}</p> : null}</div><Button variant="secondary" disabled={disabled} onClick={() => open({ kind: 'change', change })}>{t('pages.cards.resume')}</Button></li>)}</ul></section> : null}
+      {cards.length ? <section data-card-list className="space-y-5">
+        <section data-current-cards className="space-y-3"><h2 className="text-lg font-semibold text-banking-deep">{t('pages.cards.current')}</h2>
+          {currentCards.length ? <div className="grid min-w-0 gap-4 sm:grid-cols-2">{currentCards.map(renderCard)}</div> : <p className="text-sm text-banking-navy">{t('pages.cards.emptyCurrent')}</p>}
+        </section>
+        {historicalCards.length ? <details data-card-history className="rounded-2xl border border-banking-border bg-banking-surface p-4">
+          <summary className="cursor-pointer text-sm font-medium text-banking-interactive">{t('pages.cards.history', { count: historicalCards.length })}</summary>
+          <div className="mt-4 grid min-w-0 gap-4 sm:grid-cols-2">{historicalCards.map(renderCard)}</div>
+        </details> : null}
+      </section> : <EmptyState title={t('pages.cards.emptyTitle')} description={t('pages.cards.emptyDescription')} />}
       {selection ? <CardChangeDialog
         key={selection.kind === 'change' ? selection.change.id : selection.kind === 'delete' ? selection.card.id : 'add'}
         selection={selection}

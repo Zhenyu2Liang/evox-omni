@@ -11,27 +11,24 @@ import { useI18n } from '@/lib/i18n/LocaleProvider';
  * NOT part of the public barrel (`./index.ts`) — internal to this node only, so the four
  * chart files reuse one source of truth instead of copy-pasting palette/tooltip logic.
  *
- * The colour literals below mirror the CSS theme in `app/globals.css` and are the ONLY
- * colours the charts are allowed to use.
+ * Brand and status colours mirror the CSS theme in `app/globals.css`. Chart labels and series
+ * combine warm and cool supporting colours; categories never borrow success/failure semantics.
  */
 export const BANKING_PALETTE = {
-  deep: '#142C36',
-  navy: '#4B6370',
-  accent: '#087F8C',
+  deep: 'var(--color-banking-deep)',
+  navy: 'var(--color-banking-navy)',
+  plot: '#5E8988',
+  accent: '#C8383C',
   success: '#16A34A',
   warn: '#F59E0B',
-  danger: '#DC2626',
-  light: '#F6F8F8',
+  danger: '#B42318',
+  light: 'var(--color-banking-light)',
 } as const;
 
-/** Ordered series colours, cycled to colour pie slices / multi-series charts. */
+/** Descriptive category colours; separate from brand emphasis and security status colours. */
 export const SERIES_COLORS: readonly string[] = [
-  BANKING_PALETTE.accent,
-  BANKING_PALETTE.navy,
-  BANKING_PALETTE.success,
-  BANKING_PALETTE.warn,
-  BANKING_PALETTE.danger,
-  BANKING_PALETTE.deep,
+  '#6F9E9A', '#D5A069', '#A294B5', '#C68D87', '#9DAF91',
+  '#8CABC0', '#CAB680', '#AD9984', '#B5A7BF', '#D7B79F',
 ];
 
 /** Deterministic slice/series colour for a given index (wraps, tolerates negatives). */
@@ -176,14 +173,14 @@ export function ChartTooltip(p: ChartTooltipProps) {
   if (!p.active || p.entries.length === 0) return null;
 
   return (
-    <div role="tooltip" className="rounded-lg border border-banking-navy/10 bg-white px-3 py-2 shadow-md">
+    <div role="tooltip" className="rounded-lg border border-banking-navy/10 bg-banking-surface px-3 py-2 shadow-md">
       {p.label !== undefined && p.label !== null && p.label !== '' ? (
-        <p className="mb-1 text-xs font-semibold text-banking-deep">{p.label}</p>
+        <p className="mb-1 text-banking-caption font-semibold text-banking-deep">{p.label}</p>
       ) : null}
       <ul className="space-y-0.5">
         {p.entries.map((item, i) => {
           return (
-            <li key={i} className="flex items-center gap-2 text-xs text-banking-navy">
+            <li key={i} className="flex items-center gap-2 text-banking-caption text-banking-navy">
               <span
                 className="inline-block h-2 w-2 shrink-0 rounded-full"
                 style={{ background: item.color ?? BANKING_PALETTE.accent }}

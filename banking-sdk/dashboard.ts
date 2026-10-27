@@ -3,13 +3,13 @@
  * Aggregates account/card/transaction/anomaly data into a single summary.
  * READ-ONLY: it persists nothing and makes no permission/risk decision.
  */
-import { accounts, cards } from '../lib/db/repositories';
+import { accounts, cards, investments } from '../lib/db/repositories';
 import { demoNow } from '../lib/clock';
 import { centsToMoney } from '../lib/money';
 import { addDecimal } from '../lib/decimal';
 import { analyzeSpending, listAnomalies, listTransactions } from './transaction';
 import type { DashboardSummary } from './types';
-import { listHoldings } from './investment';
+import { holdingMarketValue } from './investment';
 import { runInTransaction } from './tx';
 
 /** How many recent transactions the dashboard surfaces. */
@@ -20,14 +20,14 @@ export async function getDashboardSummary(userId: string): Promise<DashboardSumm
   const asOf = demoNow();
 
   return runInTransaction(async () => {
-  const [totalAssets, checking, cardRows, analysis, recentTransactions, anomalies, holdings] = await Promise.all([
+  const [totalAssets, checking, cardRows, analysis, recentTransactions, anomalies, holdingRows] = await Promise.all([
     accounts.getTotalBalance(userId),
     accounts.getCheckingAccount(userId),
     cards.listCards(userId),
     analyzeSpending(userId),
     listTransactions(userId, { limit: RECENT_TRANSACTION_LIMIT }),
     listAnomalies(userId),
-    listHoldings(userId),
+    investments.listHoldings(userId, 'HOLDING'),
   ]);
 
   // Only UNREPLACED credit counts. `replaceCard` leaves the `LOST` source card (with its
@@ -38,7 +38,10 @@ export async function getDashboardSummary(userId: string): Promise<DashboardSumm
     .reduce((total, card) => total + (card.availableLimitMinor ?? 0n), 0n);
 
   return {
-    totalAssets: holdings.reduce((total, holding) => addDecimal(total, holding.marketValue ?? holding.amount), centsToMoney(totalAssets)),
+    // Holdings are valued with the SAME derivation the holdings list shows (`holdingMarketValue`:
+    // shares × the product's latest net value, falling back to the remaining cost for 历史数据不足),
+    // so the dashboard total and the holdings page can never disagree.
+    totalAssets: holdingRows.reduce((total, row) => addDecimal(total, holdingMarketValue(row)), centsToMoney(totalAssets)),
     checkingBalance: centsToMoney(checking?.balanceMinor ?? 0n),
     creditAvailable: centsToMoney(creditAvailable),
     monthSpend: analysis.total,

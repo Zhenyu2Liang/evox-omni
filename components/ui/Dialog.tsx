@@ -46,7 +46,7 @@ export function Dialog({ open, onClose, title, footer, className, children }: Di
         role="dialog"
         aria-modal="true"
         onClick={(event) => event.stopPropagation()}
-        className={cn('w-full max-w-lg rounded-2xl bg-white shadow-xl', className)}
+        className={cn('w-full max-w-lg rounded-2xl bg-banking-surface shadow-xl', className)}
       >
         {title ? (
           <div className="border-b border-banking-light px-5 py-4">

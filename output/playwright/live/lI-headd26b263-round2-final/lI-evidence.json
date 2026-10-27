@@ -1,0 +1,74 @@
+{
+  "contact": {
+    "id": "contact_zhangwei",
+    "name": "张伟",
+    "phoneMasked": "139****0002"
+  },
+  "card": {
+    "id": "card_credit",
+    "numberMasked": "****6688"
+  },
+  "nearMiss": {
+    "phone": "13911110002",
+    "callArgs": [],
+    "refused": false
+  },
+  "leg1": {
+    "prompt": "给13900000002转200.00元",
+    "confirmFields": {
+      "收款人": "张伟",
+      "收款手机号": "139****0002",
+      "金额": "¥200.00",
+      "账户": "默认活期账户",
+      "风险等级": "🟡 黄色"
+    },
+    "balanceBefore": "23580.00",
+    "balanceAfter": "23580.00",
+    "newTransferActions": "[]"
+  },
+  "leg2": {
+    "promptNearMiss": "给13911110002转200.00元",
+    "prose": "我还没有给之前的转账执行任何操作。您这次说的是一个新号码 13911110002，我需要先确认收款人是谁。\n先说明一下上一条：那笔转给张伟（139****0002）200.00 元已经进入待确认状态，但还没有执行。您刚才没有提供这个新号码对应的收款人，我不能直接沿用张伟。\n请确认这次是要转给 13911110002 对应的联系人吗？我先查一下这个号码是否在您的联系人里。",
+    "proseMentionsPanel": false,
+    "renderedCardCount": 0,
+    "newTransferActions": "[]",
+    "balanceBefore": "23580.00",
+    "balanceAfter": "23580.00"
+  },
+  "leg3": {
+    "prompt": "把我尾号6688的信用卡的餐饮消费限额设为1000.00元",
+    "confirmFields": {
+      "卡片": "信用卡 ****6688",
+      "操作": "设置卡片分类限额。",
+      "金额": "¥1,000.00",
+      "风险等级": "🟡 黄色",
+      "限额类型": "分类消费限额（不影响授信额度）",
+      "新分类消费限额": "¥1,000.00",
+      "类别": "餐饮"
+    },
+    "setLimitArgs": {
+      "cardTail": "6688",
+      "category": "餐饮",
+      "amount": "1000.00"
+    },
+    "cardStatusBefore": "ACTIVE",
+    "cardStatusAfter": "ACTIVE"
+  },
+  "masking": {
+    "fullPhoneInApproval": false,
+    "fullPhoneInAssistant": false,
+    "fullCardInBody": false
+  },
+  "model": {
+    "llmMode": "live",
+    "modelId": "deepseek-flash",
+    "requestCount": 7,
+    "completedStream": false
+  },
+  "screenshots": {
+    "shot1": "D:\\projects\\banking-agent\\.genesis\\workers\\worker_T7_A701\\output\\playwright\\live\\01-lI-leg1-exact-phone-confirm.png",
+    "shot2": "D:\\projects\\banking-agent\\.genesis\\workers\\worker_T7_A701\\output\\playwright\\live\\03-lI-leg2-near-miss-refused.png",
+    "shot3": "D:\\projects\\banking-agent\\.genesis\\workers\\worker_T7_A701\\output\\playwright\\live\\04-lI-leg3-card-tail-resolved.png",
+    "shot4": "D:\\projects\\banking-agent\\.genesis\\workers\\worker_T7_A701\\output\\playwright\\live\\02-lI-leg4-masked-phone-rendering.png"
+  }
+}

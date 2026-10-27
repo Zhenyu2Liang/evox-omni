@@ -8,6 +8,17 @@
 export * as dag from './dag';
 export * as executor from './executor';
 export * as lifecycle from './lifecycle';
+export * as failure from './failure';
+
+export {
+  isLockedRefusal,
+  mayDriveNode,
+  mayResetNode,
+  publicFailureText,
+  sealReason,
+  toPlanFailure,
+} from './failure';
+export type { PlanFailure, PlanNodeResult, SealReason } from './failure';
 
 export { buildPlan, transitiveDependents } from './dag';
 export type { BuildPlanInput } from './dag';

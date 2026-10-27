@@ -39,7 +39,8 @@ import { demoNow } from '../lib/clock';
 import { executionReceiptId, idempotentTransferTxId, requestDigest } from '@/lib/ledger';
 import { accounts, contacts, executionReceipts, transactions } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
-import { maskAwarePhoneMatch, maskPhone } from '../lib/phone';
+import { contactPhoneFacets } from '../lib/db/repositories/contact';
+import { isMaskedPhone, maskPhone, phoneCandidateMatches, phoneIdentityMatches } from '../lib/phone';
 import { safeParse, toJson } from '../lib/json';
 import { centsToMoney, moneyToCents, normalizeMoney, normalizeTransferAmount, type MoneyAmount } from '../lib/money';
 import { toContactView } from './contact';
@@ -156,9 +157,14 @@ async function resolveRecipient(userId: string, input: TransferInput): Promise<C
 
   if (input.phone !== undefined && input.phone !== '') {
     const phone = input.phone;
-    const matches = await contacts.searchContacts(userId, phone);
-    const exact = matches.filter((c) => c.phone === phone);
-    const pool = exact.length > 0 ? exact : matches.filter((c) => maskAwarePhoneMatch(phone, c.phone));
+    // EXECUTION uses the SAME rules as park time (`security/recipient-resolution.ts`): a complete
+    // number must equal the contact's stored complete number — the middle four digits participate —
+    // and a MASKED selector only NARROWS by visible ends. Several candidates are never arbitrated.
+    const owned = await contacts.listContacts(userId);
+    const identified = owned.filter((c) => phoneIdentityMatches(phone, contactPhoneFacets(c)));
+    const pool = identified.length === 0 && isMaskedPhone(phone)
+      ? owned.filter((c) => phoneCandidateMatches(phone, contactPhoneFacets(c)))
+      : identified;
     if (pool.length === 0) throw new AppError('NOT_FOUND', `No contact matches phone ${phone}`);
     if (pool.length > 1) {
       throw new AppError('CONFLICT', `Multiple contacts match phone ${phone}`, {
