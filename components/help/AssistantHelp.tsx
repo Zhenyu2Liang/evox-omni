@@ -18,7 +18,7 @@ export function AssistantHelpButton() {
   const { t } = useI18n();
   if (!help) return null;
   return <button type="button" data-assistant-help-trigger aria-haspopup="dialog" onClick={help.openHelp}
-    className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl px-3 text-sm font-medium text-banking-accent hover:bg-banking-accent/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-banking-accent">
+    className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl px-3 text-sm font-medium text-banking-interactive hover:bg-banking-neutral hover:text-banking-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-banking-accent">
     <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="12" cy="12" r="9" /><path d="M9.7 9a2.4 2.4 0 0 1 4.6 1c0 1.5-2.3 1.7-2.3 3.3M12 17h.01" /></svg>
     {t('help.open')}
   </button>;
@@ -109,7 +109,7 @@ export function AssistantHelpProvider({ active, children }: { active: boolean; c
             <h3 id="guide-start-title" className="font-semibold">{t('help.startTitle')}</h3>
             <ol className="mt-3 grid gap-3 text-sm sm:grid-cols-3">
               {(['describe', 'review', 'result'] as const).map((step, index) => <li key={step} className="rounded-2xl bg-banking-light p-3">
-                <span className="mb-2 inline-flex h-6 w-6 items-center justify-center rounded-full bg-white text-xs font-semibold text-banking-accent">{index + 1}</span>
+                <span className="mb-2 inline-flex h-6 w-6 items-center justify-center rounded-full bg-white text-xs font-semibold text-banking-interactive">{index + 1}</span>
                 <p className="font-medium">{t(`help.step.${step}.title`)}</p>
                 <p className="mt-1 text-xs leading-5 text-banking-navy">{t(`help.step.${step}.body`)}</p>
               </li>)}
@@ -123,7 +123,7 @@ export function AssistantHelpProvider({ active, children }: { active: boolean; c
                 <h4 className="text-sm font-semibold">{t(`help.feature.${feature}.title`)}</h4>
                 <p className="mt-1.5 flex-1 text-xs leading-5 text-banking-navy">{t(`help.feature.${feature}.body`)}</p>
                 <button type="button" data-help-example={feature} disabled={!canSelect} onClick={() => selectExample(t(`help.feature.${feature}.example`))}
-                  className="mt-3 min-h-11 rounded-xl bg-banking-accent/5 px-3 py-2 text-left text-xs leading-5 text-banking-accent hover:bg-banking-accent/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-banking-accent disabled:cursor-not-allowed disabled:opacity-50">
+                  className="mt-3 min-h-11 rounded-xl bg-banking-neutral px-3 py-2 text-left text-xs leading-5 text-banking-interactive hover:bg-banking-accent/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-banking-accent disabled:cursor-not-allowed disabled:opacity-50">
                   <span className="block font-semibold">{t('help.tryExample')}</span>{t(`help.feature.${feature}.example`)}
                 </button>
               </article>)}

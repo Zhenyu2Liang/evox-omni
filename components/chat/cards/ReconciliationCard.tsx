@@ -33,7 +33,7 @@ interface AttentionCopy {
 const COPY: Record<OutOfBandAttention, AttentionCopy> = {
   processing: {
     tone: 'info',
-    bannerClass: 'bg-banking-accent/5 text-banking-accent',
+    bannerClass: 'bg-banking-neutral text-banking-interactive',
   },
   recoverable: {
     tone: 'warn',
@@ -117,7 +117,7 @@ export function ReconciliationCard(p: ReconciliationCardProps) {
         <div className={`rounded-xl px-3 py-2 text-sm ${copy.bannerClass}`}>{t(`cards.reconciliation.${attention}.body`)}</div>
 
         <p className="text-sm text-banking-navy/70">{t(`cards.reconciliation.${attention}.help`)}</p>
-        {developerMode && attention === 'reconciliation' && <Link href="/manual" className="text-sm text-banking-accent underline">{t('cards.manualReview')}</Link>}
+        {developerMode && attention === 'reconciliation' && <Link href="/manual" className="text-sm text-banking-interactive underline">{t('cards.manualReview')}</Link>}
 
         <dl className="flex flex-col gap-2">
           {action.fields.map((field, index) => (

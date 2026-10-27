@@ -55,6 +55,12 @@ describe('system prompt policy catalog alignment', () => {
 });
 
 describe('system prompt forbids a fabricated confirmation/verification panel', () => {
+  it('identifies the assistant as Rongxu while retaining its financial evidence rules', () => {
+    const prompt = promptFor(['get_balance']);
+    expect(prompt).toContain('融序 (RONGXU)');
+    expect(prompt).toContain('When introducing yourself, use 融序 or RONGXU');
+    expect(prompt).toContain(HALLUCINATION_RULE);
+  });
   it('ties a real gate to a parked controlled-write tool result and forbids claiming one without it', () => {
     const prompt = promptFor(['transfer_money']);
     // A panel exists only because the gateway parked a real tool call into a pending state.

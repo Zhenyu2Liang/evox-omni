@@ -24,8 +24,8 @@ const STATUS_KEYS: Record<ToolEventView['status'], MessageKey> = {
 };
 
 const STATUS_STYLE: Record<ToolEventView['status'], { glyph: string; colour: string }> = {
-  started: { glyph: '…', colour: 'bg-banking-accent/10 text-banking-accent' },
-  updated: { glyph: '…', colour: 'bg-banking-accent/10 text-banking-accent' },
+  started: { glyph: '…', colour: 'bg-banking-neutral text-banking-interactive' },
+  updated: { glyph: '…', colour: 'bg-banking-neutral text-banking-interactive' },
   success: { glyph: '✓', colour: 'bg-emerald-50 text-banking-success' },
   error: { glyph: '×', colour: 'bg-red-50 text-banking-danger' },
   blocked: { glyph: '!', colour: 'bg-amber-50 text-banking-warn' },
@@ -55,7 +55,7 @@ export function ToolEventList({ events, className, compact = false }: ToolEventL
           aria-label={t(ACTIVITY_CATEGORY_KEYS[group.category])}
           className="overflow-hidden rounded-xl border border-slate-200/80 bg-banking-light/60">
           <div className="flex items-center gap-2 border-b border-slate-200/60 px-3 py-2 text-banking-navy">
-            <svg aria-hidden="true" className="h-4 w-4 shrink-0 text-banking-accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+            <svg aria-hidden="true" className="h-4 w-4 shrink-0 text-banking-interactive" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
               <path d={CATEGORY_PATH[group.category]} />
             </svg>
             <h3 className="font-semibold">{t(ACTIVITY_CATEGORY_KEYS[group.category])}</h3>
@@ -78,7 +78,7 @@ export function ToolEventList({ events, className, compact = false }: ToolEventL
                   <div className="min-w-0 flex-1 space-y-1">
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                       <span className="font-medium text-banking-deep">{label}</span>
-                      <span className={active ? 'text-banking-accent' : 'text-banking-navy'}>{t(event.status === 'blocked' && !event.actionId
+                      <span className={active ? 'text-banking-interactive' : 'text-banking-navy'}>{t(event.status === 'blocked' && !event.actionId
                         ? 'chat.activity.status.notExecuted' : STATUS_KEYS[event.status])}</span>
                       {event.tier && (event.status === 'blocked' || developerMode) ? <StatusBadge tier={event.tier} /> : null}
                     </div>

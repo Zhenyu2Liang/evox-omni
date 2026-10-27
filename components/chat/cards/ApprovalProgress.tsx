@@ -10,7 +10,7 @@ export function ApprovalProgress({ status, requiresMfa }: { status: string; requ
   const keys = ['business.presentation.checkDetails', 'business.presentation.verifyIdentity', 'business.presentation.result'] as const;
   return <ol data-approval-progress data-current-step={current + 1} className="grid grid-cols-3 gap-2 text-xs">
     {keys.map((key, index) => <li key={key} aria-current={index === current ? 'step' : undefined}
-      className={`flex min-w-0 items-center gap-1.5 rounded-lg px-2 py-2 ${index === current ? 'bg-banking-accent/10 font-semibold text-banking-accent' : 'text-banking-navy/55'}`}>
+      className={`flex min-w-0 items-center gap-1.5 rounded-lg px-2 py-2 ${index === current ? 'bg-banking-neutral font-semibold text-banking-interactive' : 'text-banking-navy/55'}`}>
       <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-current">{index + 1}</span>
       <span>{t(index === 1 && !requiresMfa ? 'business.presentation.noVerification' : key)}</span>
     </li>)}

@@ -70,7 +70,7 @@ export default async function BillsPage({ searchParams }: BillsPageProps) {
         <form className="flex items-center gap-2" method="get">
           <label htmlFor="month" className="text-sm text-banking-navy">{t('pages.bills.selectMonth')}</label>
           <input id="month" type="month" name="month" defaultValue={analysis.month} className="rounded-lg border border-banking-light px-2 py-1 text-sm text-banking-navy" />
-          <button type="submit" className="rounded-lg bg-banking-accent px-3 py-1 text-sm text-white">{t('pages.bills.view')}</button>
+          <button type="submit" className="rounded-lg bg-banking-deep px-3 py-1 text-sm text-white hover:bg-banking-interactive">{t('pages.bills.view')}</button>
         </form>
       </header>
 

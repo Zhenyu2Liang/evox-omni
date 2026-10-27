@@ -102,11 +102,11 @@ function ManualReviewInboxPage() {
       <h1 className="text-2xl font-semibold tracking-tight text-banking-deep">{t('tasks.manual.title')}</h1>
       <p className="mt-1 text-sm text-banking-navy">{t('tasks.manual.description', { operator: inbox?.operatorName ?? t('tasks.manual.checkingSession') })}</p>
     </header>
-    <div className="flex flex-wrap gap-4 text-sm"><Link href="/agent" className="text-banking-accent underline">{t('tasks.manual.returnToAssistant')}</Link>
-      <Link href="/audit" className="text-banking-accent underline">{t('tasks.manual.viewAudit')}</Link>
+    <div className="flex flex-wrap gap-4 text-sm"><Link href="/agent" className="text-banking-interactive underline">{t('tasks.manual.returnToAssistant')}</Link>
+      <Link href="/audit" className="text-banking-interactive underline">{t('tasks.manual.viewAudit')}</Link>
       <Button variant="ghost" disabled={busy} onClick={() => void act(async () => { await load(); })}>{t('tasks.approvals.refresh')}</Button></div>
     {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-red-700">{isMessageKey(error) ? t(error) : error}</p>}
-    {notice && <p role="status" className="rounded-xl bg-banking-accent/5 p-3 text-banking-accent">{t(notice)}</p>}
+    {notice && <p role="status" className="rounded-xl bg-banking-neutral p-3 text-banking-interactive">{t(notice)}</p>}
     {!inbox && !error && <p>{t('tasks.approvals.loading')}</p>}
     {inbox && inbox.candidates.length === 0 && inbox.reviews.length === 0 && <p>{t('tasks.manual.empty')}</p>}
     {inbox?.reviews.map((review) => <section key={review.id} data-review-id={review.id}>

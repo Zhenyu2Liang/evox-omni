@@ -25,7 +25,7 @@ function ResultIcon({ kind }: { kind: ResultIconKind }) {
 }
 
 function Header({ icon, title, subtitle }: { icon: ReactNode; title: string; subtitle?: string }) {
-  return <div className="flex items-start gap-3"><span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-banking-accent/5 text-banking-accent">{icon}</span>
+  return <div className="flex items-start gap-3"><span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-banking-neutral text-banking-interactive">{icon}</span>
     <div><h3 className="font-semibold text-banking-deep">{title}</h3>{subtitle ? <p className="mt-1 text-xs font-normal text-banking-navy/65">{subtitle}</p> : null}</div></div>;
 }
 
@@ -78,7 +78,7 @@ export function BusinessReceiptCard({ data, className }: { data: BusinessReceipt
   const { t } = useI18n();
   if (data.kind === 'budget') {
     return <Card className={className} title={<Header icon={<ResultIcon kind="budget" />} title={t('business.receipt.budget')} subtitle={t('business.receipt.budgetScope')} />}>
-      <div className="rounded-xl bg-banking-accent/5 p-4"><p className="text-sm text-banking-navy/70">{data.name}</p>
+      <div className="rounded-xl bg-banking-neutral p-4"><p className="text-sm text-banking-navy/70">{data.name}</p>
         <p className="mt-2 break-all text-2xl font-semibold text-banking-deep"><Money amount={data.amount} /></p></div>
       <dl className="mt-3"><Field label={t('business.receipt.status')}>{t(`business.receipt.budgetStatus.${data.status}`)}</Field>
         {data.purpose ? <Field label={t('business.receipt.purpose')}>{data.purpose}</Field> : null}
@@ -92,7 +92,7 @@ export function BusinessReceiptCard({ data, className }: { data: BusinessReceipt
       <Badge tone={data.success ? 'success' : 'danger'}>{t(data.success ? 'cards.success' : 'cards.failed')}</Badge></div>
     {data.remainingShares === undefined ? null : <dl className="mt-2"><Field label={t('business.presentation.remainingShares')}>{formatDecimalFixed(data.remainingShares, 6)} {t('business.investments.units.shares')}</Field></dl>}
     <details data-receipt-details className="mt-3 border-t border-banking-light pt-3">
-      <summary className="cursor-pointer text-sm font-medium text-banking-accent">{t('business.presentation.details')}</summary>
+      <summary className="cursor-pointer text-sm font-medium text-banking-interactive hover:text-banking-accent">{t('business.presentation.details')}</summary>
       <dl className="mt-2"><Field label={t('business.presentation.balanceAfter')}><Money amount={data.newBalance} /></Field>
       <Field label={t('business.receipt.time')}>{formatDateTime(data.occurredAt)}</Field>
       {data.redeemedShares === undefined ? null : <Field label={t('business.presentation.redeemedShares')}>{formatDecimalFixed(data.redeemedShares, 6)} {t('business.investments.units.shares')}</Field>}

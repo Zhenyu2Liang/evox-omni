@@ -97,7 +97,7 @@ export function PlanCard({ plan, onControl, busy, className }: PlanCardProps) {
   const footer =
     controls.length > 0 ? (
       <div className="flex flex-wrap items-center justify-end gap-2">
-        {developerMode && plan.status === 'failed' && <Link href="/manual" className="text-sm text-banking-accent underline">{t('cards.manualReview')}</Link>}
+        {developerMode && plan.status === 'failed' && <Link href="/manual" className="text-sm text-banking-interactive underline">{t('cards.manualReview')}</Link>}
         {controls.map((action) => (
           <Button
             key={action}

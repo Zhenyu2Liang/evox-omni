@@ -37,7 +37,7 @@ interface StatusMeta {
  */
 const STATUS_META: Record<TaskNodeStatus, StatusMeta> = {
   pending: { icon: '○', label: 'tasks.timeline.pending', tone: 'neutral', text: 'text-gray-400' },
-  running: { icon: '●', label: 'tasks.timeline.running', tone: 'info', text: 'text-banking-accent' },
+  running: { icon: '●', label: 'tasks.timeline.running', tone: 'info', text: 'text-banking-interactive' },
   waiting_confirmation: { icon: '⏳', label: 'tasks.timeline.waitingConfirmation', tone: 'warn', text: 'text-banking-warn' },
   waiting_verification: { icon: '⏳', label: 'tasks.timeline.waitingVerification', tone: 'warn', text: 'text-banking-warn' },
   success: { icon: '✓', label: 'tasks.timeline.success', tone: 'success', text: 'text-banking-success' },

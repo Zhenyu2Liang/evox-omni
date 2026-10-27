@@ -87,12 +87,12 @@ export function RunHistory() {
       <button className="rounded-sm border border-slate-200 px-3 py-2 text-sm" disabled={busy} onClick={() => void loadRuns()}>{t('tasks.approvals.refresh')}</button>
     </header>
     {error && <p role="alert" className="rounded-sm bg-red-50 p-3 text-sm text-red-800">{label(error, error)}</p>}
-    {notice && <p role="status" className="rounded-sm bg-banking-accent/5 p-3 text-sm">{notice}</p>}
+    {notice && <p role="status" className="rounded-sm bg-banking-neutral p-3 text-sm">{notice}</p>}
     <div className="grid gap-5 lg:grid-cols-[18rem_1fr]">
       <section className="flex flex-col gap-2" aria-label={t('runs.list')}>
         {runs.length === 0 && <p className="text-sm">{t('runs.empty')}</p>}
         {runs.map(run => <button key={run.id} disabled={busy} onClick={() => void inspect(run.id)}
-          className={`rounded-lg border p-3 text-left ${selected === run.id ? 'border-banking-accent bg-banking-accent/5' : 'border-slate-200 bg-white'}`}>
+          className={`rounded-lg border p-3 text-left ${selected === run.id ? 'border-banking-accent bg-banking-neutral' : 'border-slate-200 bg-white'}`}>
           <span className="block font-medium">{label(`runs.status.${run.status}`, run.status)}</span>
           <time className="block text-xs">{new Date(run.startedAt).toLocaleString(locale)}</time>
           <span className="block text-xs">{t('runs.count', { calls: run._count.invocations, events: run.nextSequence })}</span>

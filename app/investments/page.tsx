@@ -19,9 +19,9 @@ export default async function InvestmentsPage() {
           <h1 className="text-2xl font-semibold text-banking-deep">{t('pages.investments.title')}</h1>
           <p className="mt-1 text-sm text-banking-navy">{t('pages.investments.summary', { products: products.length, holdings: holdings.length })}</p>
         </div>
-        <Link href="/agent" className="rounded-xl bg-banking-accent px-4 py-2 text-sm font-medium text-white">{t('pages.investments.manage')}</Link>
+        <Link href="/agent" className="rounded-xl bg-banking-deep px-4 py-2 text-sm font-medium text-white hover:bg-banking-interactive">{t('pages.investments.manage')}</Link>
       </header>
-      <div className="space-y-2 rounded-2xl border border-banking-accent/15 bg-white p-4 text-sm text-banking-navy">
+      <div className="space-y-2 rounded-2xl border border-slate-200 bg-white p-4 text-sm text-banking-navy">
         <p>{t('pages.investments.description')}</p>
         <p className="text-xs text-banking-navy/60">{t('business.investments.profitScope')}</p>
         <p className="text-xs text-banking-navy/60">{t('business.investments.disclaimer')}</p>

@@ -72,7 +72,7 @@ export function ApprovalRecord({ action, actionId, verification = false, status,
     {current === 'locked' ? <div className="flex flex-col items-start gap-1 px-4 pb-3" data-approval-locked="true">
       <p className="text-sm text-banking-danger">{securityNotice(LOCKED_NOTICE, t)}</p>
       <p className="text-xs text-banking-navy/70">{t('pages.security.unlockDescription')}</p>
-      <Link href="/security" className="text-sm text-banking-accent underline">{t('pages.security.title')}</Link>
+      <Link href="/security" className="text-sm text-banking-interactive underline">{t('pages.security.title')}</Link>
     </div> : null}
     {current === 'needs_reconciliation' ? <p className="px-4 pb-3 text-sm text-banking-navy">{t('cards.terminal.reconciliationExplanation')}</p> : null}
     {developerMode && message ? <details className="px-4 pb-3 text-xs text-banking-navy">

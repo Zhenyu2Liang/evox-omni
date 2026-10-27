@@ -33,7 +33,7 @@ export function IssuedCardNumber({ actionId, cardId }: { actionId: string; cardI
     catch { setCopied(false); }
   }
 
-  return <section data-issued-card-number data-issued-card-id={cardId} className="space-y-2 rounded-xl bg-banking-accent/5 p-3">
+  return <section data-issued-card-number data-issued-card-id={cardId} className="space-y-2 rounded-xl bg-banking-neutral p-3">
     <p className="text-sm font-semibold text-banking-deep">{t('business.cards.issuedNumber')}</p>
     {!revealed ? <Button size="sm" onClick={() => setRevealed(true)}>{t('business.presentation.showNumber')}</Button> : number ? <>
       <p data-full-card-number className="break-all font-mono text-lg tracking-wider text-banking-deep">{number}</p>

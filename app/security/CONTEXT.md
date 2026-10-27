@@ -11,7 +11,7 @@
 | 文件 | 类型 | 职责 |
 | --- | --- | --- |
 | `page.tsx` | Server Component | 读取熔断状态、安全状态、事件与已锁定操作，组合全部区块；负责事件文案清洗 |
-| `UnlockPanel.tsx` | Client Component | 运行时解锁：6 位验证码 → `POST /api/security/reset`，任何身份（含非开发者）可见；同屏呈现解锁语义四要素 |
+| `UnlockPanel.tsx` | Client Component | 显示当前限制状态，区分历史锁定记录；提供 6 位验证码到 `POST /api/security/reset` 的受控解除限制入口 |
 | `ResetBreakerButton.tsx` | Client Component | 仅开发者可见的演示维护入口：无凭证 `POST /api/developer/security/reset` |
 
 `ResetBreakerButton` 与运行时解锁是两条独立路径：前者是演示维护，后者是用户的受控解锁。
@@ -30,13 +30,17 @@
 
 ## 解锁面板渲染契约（`UnlockPanel`）
 
-- 面板依次渲染：`pages.security.unlockDescription` → `chat.error.actionLocked`（这两段既有散文恒定保留，
-  不得删除或改写）→ 四个 `security.reset.*` 事实 → 锁定影响块 → 验证码表单 → 实时状态区。
+- 面板先显示服务端确认的当前账户状态，再显示锁定操作记录的数量。
+  当前受限时显示锁定原因与 `chat.error.actionLocked`；账户正常时不显示当前已锁定的断言。
+  历史操作仍为锁定时，使用 `security.reset.historicalImpact` 说明账户未受限、原操作不会恢复。
+  解除限制说明与验证码表单位于 `data-unlock-guidance` 折叠区。
+  当前受限或失败计数大于 0 时默认展开；正常且计数为 0 时默认收起。
 - 四个 `security.reset.*` 键的职责（键集与 `business.en.json` 对称，增删键走共享 i18n 文件，不在本层新建）：
   - `security.reset.lockReason`（参数 `{count}` `{max}`）：**只在 `locked=true` 时**渲染，用权威 `failures`/`maxAttempts`
     插值；无锁定时渲染锁定原因即为假事实。模板占位符不得出现在 DOM 中。
   - `security.reset.lockedActionState`：已锁定的操作保持终态，解锁不会把它变回待确认操作。
-  - `security.reset.reinitiate`：解锁后必须重新发起并重新确认，原操作不会自动执行——强制提示，两种态都渲染。
+  - `security.reset.reinitiate`：解锁后必须重新发起并重新确认，原操作不会自动执行。
+    两种状态都保留这条说明；正常时随帮助内容收起，只有当前受限时使用错误色。
   - `security.reset.recovery`：解锁方式（输入 6 位验证码并提交「重置失败计数」）与它实际清除的范围。
 - 面板根节点 `data-*` 钩子（两种态恒在，浏览器套件据此定位）：`data-unlock-panel`、`data-unlock-locked`、
   `data-unlock-failures`、`data-unlock-max-attempts`、`data-unlock-locked-actions`、`data-unlock-status`，
@@ -44,7 +48,7 @@
   原操作不会自动执行。」）。
   `data-unlock-impact` 仅在 `lockedActionCount > 0` 时出现，值即锁定操作数量。
 - 恒为**单一**验证码输入（`name="verificationCode"`，`aria-label` 等于 `security.reset.codeLabel`）+ 单一提交按钮；
-  验证码不写入 cookie / `localStorage`，页面不硬编码也不显示 mock 码。
+  正常且计数为 0 时随帮助收起。验证码不写入 cookie / `localStorage`，页面不硬编码也不显示 mock 码。
 - 开发者维护入口：wrapper 带 `data-developer-breaker-reset-panel`，按钮带 `data-developer-breaker-reset`；
   非开发者模式下整块返回 `null`，两个钩子都不出现——因此 e2e 断言「此处没有开发者重置」必须限定在该面板内。
 

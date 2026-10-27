@@ -7,7 +7,7 @@
   "engines": {
     "node": ">=22.19.0"
   },
-  "description": "AI Banking Agent competition demo — Pi Agent + custom Banking Tools + Security Gateway",
+  "description": "融序 RONGXU competition demo — Pi Agent + custom Banking Tools + Security Gateway",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

@@ -98,7 +98,7 @@ export default function ContactManager({ initialContacts }: { initialContacts: C
             <article key={contact.id} data-contact-id={contact.id} className="min-w-0 rounded-2xl border border-banking-navy/10 bg-white p-5 shadow-xs">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-3">
-                  <span aria-hidden="true" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-banking-accent/10 font-semibold text-banking-accent">{Array.from(contact.name)[0]}</span>
+                  <span aria-hidden="true" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-banking-neutral font-semibold text-banking-interactive">{Array.from(contact.name)[0]}</span>
                   <div className="min-w-0"><h2 className="break-words font-semibold text-banking-deep">{contact.name}</h2><p className="mt-1 text-sm text-banking-navy/70">{contact.phone}</p></div>
                 </div>
                 <Button variant="ghost" size="sm" disabled={busy} onClick={() => { setNotice(null); setDeleting(contact); }}>{t('pages.contacts.delete')}</Button>

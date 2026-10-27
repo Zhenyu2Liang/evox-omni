@@ -113,7 +113,7 @@ export function InvestmentProductTile({ product, holding, className }: Investmen
           </div> : null}
           <HoldingFacts holding={holding} layout="tile" section="summary" />
           <details data-holding-details className="mt-3 border-t border-banking-light pt-3">
-            <summary className="cursor-pointer text-sm font-medium text-banking-accent">{t('business.presentation.holdingDetails')}</summary>
+            <summary className="cursor-pointer text-sm font-medium text-banking-interactive hover:text-banking-accent">{t('business.presentation.holdingDetails')}</summary>
             <div className="mt-3 space-y-2">
           <HoldingFacts holding={holding} layout="tile" section="details" />
           {lastPurchaseAt !== undefined ? (

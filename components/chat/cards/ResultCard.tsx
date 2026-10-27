@@ -17,7 +17,7 @@ export function ResultCard({ title, children, className, description, marker }: 
       className={className}
       title={(
         <div className="flex items-center gap-2.5">
-          {marker ? <span aria-hidden="true" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-banking-light text-banking-accent">{marker}</span> : null}
+          {marker ? <span aria-hidden="true" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-banking-light text-banking-interactive">{marker}</span> : null}
           <span className="text-sm font-semibold">{title}</span>
         </div>
       )}

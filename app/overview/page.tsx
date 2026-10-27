@@ -19,7 +19,7 @@ export default async function OverviewPage() {
             {t('pages.overview.summary', { month: summary.month, count: summary.recentTransactions.length })}
           </p>
         </div>
-        <Link href="/agent" className="rounded-xl bg-banking-accent px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-banking-accent/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-banking-accent">
+        <Link href="/agent" className="rounded-xl bg-banking-deep px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-banking-interactive focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-banking-accent">
           {t('pages.overview.askAssistant')}
         </Link>
       </header>

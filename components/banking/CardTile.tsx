@@ -101,7 +101,7 @@ export function CardTile({ card, className, footer }: CardTileProps) {
 
       <CardPrimaryAmount card={card} />
       <details data-card-details className="border-t border-banking-light pt-3">
-        <summary className="cursor-pointer text-sm font-medium text-banking-accent">{t('business.presentation.cardDetails')}</summary>
+        <summary className="cursor-pointer text-sm font-medium text-banking-interactive hover:text-banking-accent">{t('business.presentation.cardDetails')}</summary>
         <div className="mt-3 space-y-3">
       {card.type === 'CREDIT' &&
       (card.creditLimit !== undefined || card.availableLimit !== undefined) ? (

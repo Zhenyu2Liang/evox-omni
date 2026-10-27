@@ -22,9 +22,9 @@ export function MiniSparkline(p: MiniSparklineProps) {
       <svg width="100%" height="100%" viewBox="0 0 200 40" preserveAspectRatio="none" role="img" aria-label={t('chart.sparkline')}>
         <title>{p.data.map(amount => formatCNY(amount)).join(' → ')}</title>
         {values.length === 1
-          ? <circle cx="100" cy={scale.y(values[0])} r="3" fill={p.color ?? BANKING_PALETTE.accent} />
+          ? <circle cx="100" cy={scale.y(values[0])} r="3" fill={p.color ?? BANKING_PALETTE.deep} />
           : <polyline points={values.map((value, index) => `${x(index)},${scale.y(value)}`).join(' ')}
-              fill="none" stroke={p.color ?? BANKING_PALETTE.accent} strokeWidth="2" vectorEffect="non-scaling-stroke" />}
+              fill="none" stroke={p.color ?? BANKING_PALETTE.deep} strokeWidth="2" vectorEffect="non-scaling-stroke" />}
       </svg>
     </ChartFrame>
   );

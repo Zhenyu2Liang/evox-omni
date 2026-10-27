@@ -145,48 +145,34 @@ export function UnlockPanel({
         .filter(Boolean)
         .join(' ')}
     >
-      <h3 className="text-sm font-semibold text-banking-deep">{t('security.reset.unlock')}</h3>
-
-      {/*
-        Static explanation, always visible: the unlock description states that high-risk operations
-        stay locked after repeated failures, and `chat.error.actionLocked` carries the "lift it in the
-        security center and start the operation again" half.
-      */}
-      <p className="text-sm leading-5 text-banking-navy">{t('pages.security.unlockDescription')}</p>
-      <p className="text-sm leading-5 text-banking-navy">{t('chat.error.actionLocked')}</p>
-
-      {/*
-        Unlock semantics, rendered from the four `security.reset.*` facts:
-          - `lockReason` — WHY the breaker tripped, with `{count}` / `{max}` interpolated from the
-            authoritative state. Rendered only while `locked`: a lock reason without a lock would be
-            a false fact.
-          - `lockedActionState` — an already-locked operation stays terminal across the unlock.
-          - `reinitiate` — the user must start the request again and confirm it again; the original
-            operation is never executed automatically. `data-unlock-reinitiate` is the browser suite's
-            anchor and carries the whole sentence, in BOTH breaker states.
-          - `recovery` — what the security center's reset actually clears (the breaker state and the
-            failure counter), and nothing more.
-      */}
+      <h3 className="text-sm font-semibold text-banking-deep">{t('security.reset.panelTitle')}</h3>
+      <p data-security-current-state className={`text-sm leading-5 ${locked ? 'text-banking-danger' : 'text-banking-navy'}`}>
+        {t(locked ? 'security.reset.currentLocked' : 'security.reset.currentNormal')}
+      </p>
       {locked ? (
         <p className="text-sm leading-5 text-banking-navy">
           {t('security.reset.lockReason', { count: failures, max: maxAttempts })}
         </p>
       ) : null}
-      <p className="text-sm leading-5 text-banking-navy">{t('security.reset.lockedActionState')}</p>
-      <p data-unlock-reinitiate className="text-sm leading-5 text-banking-danger">
-        {t('security.reset.reinitiate')}
-      </p>
-      <p className="text-sm leading-5 text-banking-navy">{t('security.reset.recovery')}</p>
-
       {lockedActionCount > 0 ? (
-        <p className="text-sm leading-5 text-banking-danger" data-unlock-impact={lockedActionCount}>
-          {t('security.breaker.lockedDescription')}
-          <span className="ml-2 whitespace-nowrap rounded-lg bg-banking-danger/10 px-2 py-0.5 text-xs font-medium">
+        <p className="text-sm leading-5 text-banking-navy" data-unlock-impact={lockedActionCount}>
+          {locked ? t('security.breaker.lockedDescription') : t('security.reset.historicalImpact', { count: lockedActionCount })}
+          <span className="ml-2 whitespace-nowrap rounded-lg bg-banking-neutral px-2 py-0.5 text-xs font-medium">
             {t('pages.activity.status.locked')} · {lockedActionCount}
           </span>
         </p>
       ) : null}
 
+      <details data-unlock-guidance open={locked || failures > 0} className="rounded-xl border border-slate-200 p-3">
+        <summary className="cursor-pointer text-sm font-medium text-banking-interactive hover:text-banking-accent">{t('security.reset.helpTitle')}</summary>
+        <div className="mt-3 space-y-3">
+          <p className="text-sm leading-5 text-banking-navy">{t('pages.security.unlockDescription')}</p>
+          {locked ? <p className="text-sm leading-5 text-banking-navy">{t('chat.error.actionLocked')}</p> : null}
+          <p className="text-sm leading-5 text-banking-navy">{t('security.reset.lockedActionState')}</p>
+          <p data-unlock-reinitiate className={`text-sm leading-5 ${locked ? 'text-banking-danger' : 'text-banking-navy'}`}>
+            {t('security.reset.reinitiate')}
+          </p>
+          <p className="text-sm leading-5 text-banking-navy">{t('security.reset.recovery')}</p>
       <form onSubmit={handleSubmit} className="flex flex-col gap-3 sm:flex-row sm:items-end">
         <label className="block flex-1 text-sm text-banking-navy">
           {t('security.reset.codeLabel')}
@@ -208,6 +194,8 @@ export function UnlockPanel({
           {t(busy ? 'security.reset.busy' : 'security.reset.unlock')}
         </button>
       </form>
+        </div>
+      </details>
 
       {/* One persistent live region, so a result is announced even though the text starts empty. */}
       <p

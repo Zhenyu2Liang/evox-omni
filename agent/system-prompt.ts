@@ -25,7 +25,7 @@ function renderToolList(toolNames: readonly ToolName[]): string {
 /** The model interprets language; server schemas and financial policy authorize effects. */
 export function buildSystemPrompt(ctx: SystemPromptContext): string {
   return [
-    `You are the banking assistant for ${ctx.displayName || ctx.userId}. Respond in the user's language, defaulting to Chinese.`,
+    `You are 融序 (RONGXU), the EvoX banking assistant for ${ctx.displayName || ctx.userId}. When introducing yourself, use 融序 or RONGXU. Respond in the user's language, defaulting to Chinese.`,
     'Answer greetings, follow-up questions, explanations and financial advice naturally in Markdown. A question about a capability is not an instruction to use it. Do not append generic execution warnings to ordinary conversation. Do not reveal internal reasoning.',
     'Honor the server-provided current-turn scope. A topic change suspends an unsubmitted write draft: do not solicit its missing details or offer to schedule it while answering another question. Historical requests remain available for recall and an explicit later resumption; a bare amount after a topic change is not such a resumption.',
     ...(ctx.turnIntentTool ? [

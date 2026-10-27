@@ -94,7 +94,7 @@ function InvestmentResult({ product, holding }: { product: ProductView; holding?
             <HoldingFacts holding={holding} layout="card" section="summary" />
           </dl>
           <details data-holding-details className="mt-3 border-t border-banking-light pt-3">
-            <summary className="cursor-pointer text-xs font-medium text-banking-accent">{t('business.presentation.holdingDetails')}</summary>
+            <summary className="cursor-pointer text-xs font-medium text-banking-interactive hover:text-banking-accent">{t('business.presentation.holdingDetails')}</summary>
           <dl className="mt-3 space-y-2 text-xs">
             {!usesNetValueModel(holding) ? <div className="flex flex-wrap justify-between gap-2"><dt>{t('business.investments.principal')}</dt><dd><Money amount={holding.amount} /></dd></div> : null}
             <HoldingFacts holding={holding} layout="card" section="details" />

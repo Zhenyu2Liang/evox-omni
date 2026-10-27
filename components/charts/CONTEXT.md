@@ -19,6 +19,10 @@ color. Each interactive leaf is a client component; the barrel remains neutral.
 
 ## Invariants
 
+- Chart category series have a separate muted palette; they do not reuse brand red or risk colours.
+  Default bars and trend lines are charcoal. Hovering or focusing a point highlights it in brand red.
+  Values, exact labels and keyboard tooltip behaviour are independent of the colour change.
+
 - Only geometry uses moneyToChartNumber. Tooltip, legend, SVG title and accessible labels retain
   the original exact amounts through formatCNY. Never derive financial labels from coordinates.
 - chartTheme.tsx owns colors, scale, empty state and tooltip. Scale includes a zero baseline and

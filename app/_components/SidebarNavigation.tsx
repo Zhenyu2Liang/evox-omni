@@ -36,7 +36,7 @@ export default function SidebarNavigation({ pathname, onNavigate }: { pathname: 
                 const active = isNavigationActive(pathname, item.href);
                 return (
                   <li key={item.href}>
-                    <Link href={item.href} onClick={onNavigate} aria-current={active ? 'page' : undefined} className={`flex min-h-11 items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-banking-accent ${active ? 'bg-banking-accent/10 font-semibold text-banking-accent' : 'font-medium text-banking-navy hover:bg-slate-100 hover:text-banking-deep'}`}>
+                    <Link href={item.href} onClick={onNavigate} aria-current={active ? 'page' : undefined} className={`flex min-h-11 items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-banking-accent ${active ? 'bg-banking-neutral font-semibold text-banking-interactive' : 'font-medium text-banking-navy hover:bg-slate-100 hover:text-banking-deep'}`}>
                       <NavigationIcon name={item.icon} />
                       <span>{t(item.labelKey)}</span>
                       {active && <span aria-hidden="true" className="ml-auto h-1.5 w-1.5 rounded-full bg-banking-accent" />}
@@ -51,7 +51,7 @@ export default function SidebarNavigation({ pathname, onNavigate }: { pathname: 
       </nav>
       <div className="space-y-2 border-t border-slate-200 px-5 pt-3"><LanguageSwitcher /><DeveloperModeToggle /></div>
       <div className="m-4 rounded-2xl border border-slate-200 bg-banking-light p-3.5">
-        <p className="flex items-center gap-2 text-xs font-semibold text-banking-deep"><span aria-hidden="true" className="h-2 w-2 rounded-full bg-banking-accent" />{t('app.demoWorkspace')}</p>
+        <p className="flex items-center gap-2 text-xs font-semibold text-banking-deep"><span aria-hidden="true" className="h-2 w-2 rounded-full bg-banking-navy" />{t('app.demoWorkspace')}</p>
         <p className="mt-1.5 text-xs leading-5 text-banking-navy">{t('app.demoDescription')}</p>
       </div>
     </>

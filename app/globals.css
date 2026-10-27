@@ -7,9 +7,11 @@
   --color-banking-deep: #373435;
   --color-banking-navy: #70666a;
   --color-banking-accent: #c8383c;
+  --color-banking-interactive: #514c4f;
+  --color-banking-neutral: #f1efee;
   --color-banking-success: #16a34a;
   --color-banking-warn: #f59e0b;
-  --color-banking-danger: #dc2626;
+  --color-banking-danger: #b42318;
   --color-banking-light: #faf8f7;
   --radius-xl: 1rem;
   --radius-2xl: 1.25rem;

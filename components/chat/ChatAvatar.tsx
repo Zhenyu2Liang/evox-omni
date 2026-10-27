@@ -14,8 +14,8 @@ export function ChatAvatar({ role }: { role: 'assistant' | 'user' }) {
     <svg viewBox="0 0 48 48" fill="none" className="h-full w-full">
       <defs>
         <linearGradient id={background} x1="4" y1="0" x2="44" y2="48" gradientUnits="userSpaceOnUse">
-          <stop stopColor={assistant ? '#EF9A9C' : '#FFE5C5'} />
-          <stop offset="1" stopColor={assistant ? '#C8383C' : '#EFAF8B'} />
+          <stop stopColor={assistant ? '#A69C9F' : '#FFE5C5'} />
+          <stop offset="1" stopColor={assistant ? '#51494C' : '#EFAF8B'} />
         </linearGradient>
         <linearGradient id={face} x1="14" y1="15" x2="34" y2="36" gradientUnits="userSpaceOnUse">
           <stop stopColor={assistant ? '#FFFFFF' : '#FFE0BA'} />

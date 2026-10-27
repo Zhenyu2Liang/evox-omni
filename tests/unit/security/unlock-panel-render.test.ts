@@ -65,6 +65,17 @@ function text(markup: string): string {
 }
 
 describe('security-center unlock panel render contract', () => {
+  it('separates an unrestricted account from earlier locked operation records', () => {
+    const markup = render({ ...UNLOCKED, lockedActionCount: 2 });
+    expect(markup).toContain(t('security.reset.currentNormal'));
+    expect(markup).toContain(t('security.reset.historicalImpact', { count: 2 }));
+    expect(markup).not.toContain(t('chat.error.actionLocked'));
+    expect(markup).not.toContain(t('security.breaker.lockedDescription'));
+    expect(markup).toContain('data-unlock-impact="2"');
+    const helpTag = markup.match(/<details[^>]*data-unlock-guidance[^>]*>/)?.[0];
+    expect(helpTag).toBeDefined();
+    expect(helpTag).not.toMatch(/\bopen[ =>]/);
+  });
   it('renders the authoritative lock attributes and the locked-action impact block', () => {
     const markup = render(LOCKED);
 

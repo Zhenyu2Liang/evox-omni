@@ -23,7 +23,7 @@ export function ApprovalRequest({ pending, action, busy, error, attempts, maxAtt
   }, [pending.actionId, pending.kind]);
   return <section ref={panel} tabIndex={-1} aria-label={t(pending.kind === 'mfa' ? 'chat.approval.verification' : 'chat.approval.confirmation')}
     data-approval-request="true" data-action-id={pending.actionId} data-kind={pending.kind}
-    className="mb-3 flex max-h-[min(45cqh,28rem)] flex-col overflow-hidden rounded-2xl border border-banking-accent/25 bg-white p-2 shadow-lg shadow-banking-deep/10 outline-hidden focus-visible:ring-2 focus-visible:ring-banking-accent">
+    className="mb-3 flex max-h-[min(45cqh,28rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-2 shadow-lg shadow-banking-deep/10 outline-hidden focus-visible:ring-2 focus-visible:ring-banking-accent">
     <div className="shrink-0 px-1 pb-2 [@media(max-height:600px)]:hidden">
       <ApprovalProgress status={pending.kind === 'mfa' ? 'awaiting_mfa' : 'pending'} requiresMfa={pending.summary.requiresMfa} />
     </div>

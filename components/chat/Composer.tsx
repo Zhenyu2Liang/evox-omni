@@ -104,7 +104,7 @@ export function Composer({
 
   return (
     <form
-      className={['flex items-end gap-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_4px_24px_-12px_rgba(20,44,54,0.25)] transition focus-within:border-banking-accent focus-within:ring-2 focus-within:ring-banking-accent/10', className].filter(Boolean).join(' ')}
+      className={['flex items-end gap-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_4px_24px_-12px_rgba(55,52,53,0.2)] transition focus-within:border-banking-accent focus-within:ring-2 focus-within:ring-banking-accent/10', className].filter(Boolean).join(' ')}
       onSubmit={(event) => {
         event.preventDefault();
         submit();

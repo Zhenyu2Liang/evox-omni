@@ -233,12 +233,12 @@ export function ChatWindow({
       <div data-chat-composer-dock="true" className="shrink-0 border-t border-slate-200/60 bg-banking-light px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:px-8 sm:pt-4">
         <div className="mx-auto w-full max-w-6xl">
         {!followingLatest && !pending && <button type="button" data-chat-latest="true" onClick={showLatest}
-          className="mb-3 min-h-11 rounded-xl border border-banking-accent/30 bg-white px-4 py-2 text-sm font-medium text-banking-accent">
+          className="mb-3 min-h-11 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-banking-interactive">
           {t(hasNewMessages ? 'chat.history.newMessages' : 'chat.history.latest')}
         </button>}
         {retryRequest && !pending && stream.pendingReconciliations.length === 0 && (
           <button type="button" disabled={stream.busy || stream.restoring}
-            className="mb-3 rounded-xl border border-banking-accent/30 bg-white px-3 py-2 text-sm text-banking-accent disabled:opacity-50"
+            className="mb-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-banking-interactive disabled:opacity-50"
             onClick={() => send(retryRequest)}>{t('chat.retryPlanning')}</button>
         )}
         {pending && <ApprovalRequest key={pending.actionId} pending={pending} action={action} busy={stream.busy}

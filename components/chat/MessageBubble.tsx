@@ -86,7 +86,7 @@ export function MessageBubble({ message, action, className }: MessageBubbleProps
               message.financialSummary ? <div data-financial-summary="true" className="space-y-3">
                 <AssistantMarkdown text={message.financialSummary} />
                 <details data-result-explanation className="border-t border-slate-100 pt-2">
-                  <summary className="cursor-pointer text-xs font-medium text-banking-accent">{t('business.presentation.resultExplanation')}</summary>
+                  <summary className="cursor-pointer text-xs font-medium text-banking-interactive hover:text-banking-accent">{t('business.presentation.resultExplanation')}</summary>
                   <div className="mt-3"><AssistantMarkdown text={message.content} /></div>
                 </details>
               </div> : <AssistantMarkdown text={message.content} />

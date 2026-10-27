@@ -76,7 +76,7 @@ export function MfaCard(p: MfaCardProps) {
         {terminal === 'locked' ? <div className="flex flex-col items-start gap-1" data-mfa-locked="true">
           <p className="text-sm text-banking-danger">{securityNotice(LOCKED_NOTICE, t)}</p>
           <p className="text-xs text-banking-navy/70">{t('pages.security.unlockDescription')}</p>
-          <Link href="/security" className="text-sm text-banking-accent underline">{t('pages.security.title')}</Link>
+          <Link href="/security" className="text-sm text-banking-interactive underline">{t('pages.security.title')}</Link>
         </div> : null}
         {developerMode && p.statusMessage ? <details className="text-xs text-banking-navy">
           <summary>{t('chat.diagnostics.detail')}</summary>

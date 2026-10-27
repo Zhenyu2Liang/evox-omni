@@ -32,7 +32,7 @@ export function ChatWelcome({ onSelect, disabled }: { onSelect: (prompt: string)
       <div className="mt-6 grid w-full grid-cols-2 gap-3 sm:mt-8">
         {SUGGESTIONS.map(suggestion => (
           <button key={suggestion.symbol} type="button" disabled={disabled} onClick={() => onSelect(t(suggestion.prompt))} className="group flex items-center gap-2 rounded-2xl border border-slate-200/80 bg-white p-3 text-left transition hover:border-banking-accent/40 hover:shadow-xs disabled:opacity-50 sm:block sm:p-4">
-            <span className="inline-flex shrink-0 rounded-xl bg-slate-50 p-1.5 text-banking-accent transition group-hover:bg-banking-accent/10 sm:mb-3 sm:p-2"><SuggestionIcon symbol={suggestion.symbol} /></span>
+            <span className="inline-flex shrink-0 rounded-xl bg-slate-50 p-1.5 text-banking-interactive transition group-hover:bg-banking-accent/10 sm:mb-3 sm:p-2"><SuggestionIcon symbol={suggestion.symbol} /></span>
             <span className="block text-xs font-semibold leading-5 text-banking-deep sm:text-sm">{t(suggestion.title)}</span>
             <span className="mt-1 hidden text-xs leading-5 text-banking-navy sm:block">{t(suggestion.description)}</span>
           </button>

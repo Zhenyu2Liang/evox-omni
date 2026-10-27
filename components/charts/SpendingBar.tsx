@@ -41,10 +41,11 @@ export function SpendingBar(p: SpendingBarProps) {
           const x = left + slotWidth * (index + 0.5);
           const y = Math.min(scale.y(0), scale.y(point.value));
           return (
-            <g key={point.category} {...tooltip.point(point.category, point.amount, BANKING_PALETTE.accent)}>
+            <g key={point.category} className="group" {...tooltip.point(point.category, point.amount, BANKING_PALETTE.accent)}>
               <title>{`${point.category}: ${formatCNY(point.amount)}`}</title>
               <rect x={x - barWidth / 2} y={y} width={barWidth}
-                height={Math.max(1, Math.abs(scale.y(0) - scale.y(point.value)))} rx="4" fill={BANKING_PALETTE.accent} />
+                height={Math.max(1, Math.abs(scale.y(0) - scale.y(point.value)))} rx="4" fill={BANKING_PALETTE.deep}
+                className="transition-colors group-hover:fill-banking-accent group-focus:fill-banking-accent" />
               <text x={x} y={height - 14} textAnchor="middle" fontSize="11" fill={BANKING_PALETTE.navy}>
                 {point.category.slice(0, Math.max(1, Math.min(6, Math.floor(slotWidth / 11))))}
               </text>

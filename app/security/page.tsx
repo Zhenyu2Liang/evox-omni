@@ -42,6 +42,7 @@ import { MFA_MAX_ATTEMPTS } from '@/lib/constants';
 import { safeParse } from '@/lib/json';
 import { isInternalDiagnostic } from '@/lib/public-text';
 import { isMessageKey, type Translator } from '@/lib/i18n/shared';
+import { localizeActionFieldLabel, localizeActionFieldValue, localizeActionTitle } from '@/lib/i18n/display';
 import { listPendingActions } from '@/lib/db/repositories/pendingAction';
 import { requireIdentity } from '@/app/api/_lib/session';
 import {
@@ -123,7 +124,7 @@ function toLockedAction(row: PendingAction, t: Translator): LockedActionView {
         const fieldLabel = safeField(field?.label);
         const fieldValue = safeField(field?.value);
         return fieldLabel !== undefined && fieldValue !== undefined
-          ? [{ label: fieldLabel, value: fieldValue }]
+          ? [{ label: localizeActionFieldLabel(fieldLabel, t), value: localizeActionFieldValue({ label: fieldLabel, value: fieldValue }, t) }]
           : [];
       })
     : [];
@@ -131,7 +132,7 @@ function toLockedAction(row: PendingAction, t: Translator): LockedActionView {
     id: row.id,
     toolName: row.toolName,
     toolLabel: label,
-    title: safeField(summary?.title) ?? label,
+    title: localizeActionTitle(safeField(summary?.title) ?? label, t),
     fields,
     createdAt: row.createdAt.getTime(),
   };
@@ -224,14 +225,15 @@ export default async function SecurityPage() {
       {/* Locked terminal actions — the impact of the lock, read-only, hidden when there are none. */}
       {lockedActions.length > 0 ? (
         <section className="flex flex-col gap-3" data-locked-actions={lockedActions.length}>
-          <h2 className="text-lg font-medium text-banking-deep">{t('pages.activity.status.locked')}</h2>
+          <h2 className="text-lg font-medium text-banking-deep">{t('pages.security.lockedRecords')}</h2>
+          <p className="text-sm leading-6 text-banking-navy">{t('pages.security.lockedRecordsDescription')}</p>
           <ol className="space-y-3">
             {lockedActions.map(action => (
               <li
                 key={action.id}
                 data-locked-action-id={action.id}
                 data-locked-action-tool={action.toolName}
-                className="rounded-2xl border border-banking-danger/30 bg-white p-4 shadow-xs sm:p-5"
+                className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs sm:p-5"
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <h3 className="font-semibold text-banking-deep">{action.title}</h3>
