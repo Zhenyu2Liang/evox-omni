@@ -11,6 +11,7 @@
 | `executor-claim-scope`、`executor-execution-right` | 数据库认领与失去执行权 |
 | `intent-context`、`plan-compiler`、`plan-parameters` | 目的声明、参数与完整任务图 |
 | `chat-stream`、`chat-transport-validation` | 流状态与传输校验 |
+| `live-chat-turn-wait` | 本轮请求关联、响应结束、运行权释放与历史消息隔离 |
 | `approval-record`、`action-attention-state` | 历史授权与待处理状态 |
 | `chat-plan-history`、`plan-history-page` | 计划的历史归属 |
 | `financial-display`、`chart-presentation` | 精确金额与图表显示 |

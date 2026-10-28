@@ -147,6 +147,7 @@ import { scenarioIdentityResolution } from './live-identity.e2e-helper';
 // The scenario body lives in this module; the entry only injects its drivers and registers it.
 import { scenarioInvestmentPartialRedemption } from './live-investment.e2e-helper';
 import { scenarioScheduleBusinessClock } from './live-schedule-clock.e2e-helper';
+import { submitCompletedLiveChatTurn, waitForLiveResponseCompletion, waitForLiveSessionIdle } from './chat-turn.e2e-helper';
 
 // --- isolated LIVE database ---------------------------------------------------------------------
 
@@ -723,12 +724,15 @@ async function scenarioBalance(ctx: Ctx): Promise<string> {
         throw new Error(`/api/dashboard 余额 ${apiBalance} 与 SQLite Account.balance ${dbBalance} 不一致`);
       }
       const expected = formatCNY(dbBalance);
-      await submitChat(page, MSG.balance);
-      await waitFor(async () => ((await bodyText(page)).includes(expected) ? true : false), {
+      const turn = await submitCompletedLiveChatTurn(page, MSG.balance);
+      const currentBalance = turn.messages.find(message => message.cards?.some(card => card.type === 'balance'));
+      if (!currentBalance) throw new Error('The current balance request did not produce a balance card');
+      const balanceCard = page.locator(`[data-message-id="${currentBalance.id}"] [data-chat-card-type="balance"]`);
+      await waitFor(async () => (await balanceCard.innerText()).includes(expected), {
         timeoutMs: 120_000,
         description: `页面渲染余额 ${expected}`,
       });
-      const texts = await assistantTexts(page);
+      const texts = turn.messages.filter(message => message.role === 'assistant').map(message => message.content);
       const narration = texts.find((t) => t.includes(expected)) ?? texts[texts.length - 1] ?? '';
       await captureLive(page, 's1-balance');
       const inNarration = narration.includes(expected);
@@ -957,23 +961,31 @@ async function scenarioMultiTurn(ctx: Ctx): Promise<string> {
       const before = await snapshot(ctx.baseUrl);
 
       // turn 1 — GREEN read
-      await submitChat(page, MSG.balance);
-      await waitFor(async () => ((await assistantTexts(page)).length >= 1 ? true : false), {
-        timeoutMs: 120_000,
-        description: '第 1 轮助手回复',
-      });
+      await submitCompletedLiveChatTurn(page, MSG.balance);
 
       // turn 2 — confirm a YELLOW transfer (post-confirm model continuation)
-      await submitChat(page, MSG.transferByName);
+      await submitCompletedLiveChatTurn(page, MSG.transferByName);
       await awaitConfirmCard(page, ctx.baseUrl);
-      await page.getByRole('button', { name: '确认', exact: true }).first().click();
+      const [confirmation] = await Promise.all([
+        page.waitForResponse(response => response.request().method() === 'POST' &&
+          /^\/api\/actions\/[^/]+\/confirm$/.test(new URL(response.url()).pathname)),
+        clickConfirm(page),
+      ]);
+      await waitForLiveResponseCompletion(confirmation);
+      await waitForLiveSessionIdle(page);
       const afterYellow = await waitForTransferSettled(ctx.baseUrl, before, TRANSFER_AMOUNT);
 
       // turn 3 — MFA a RED transfer (post-MFA model continuation)
-      await submitChat(page, MSG.transferLarge);
+      await submitCompletedLiveChatTurn(page, MSG.transferLarge);
       await awaitMfaCard(page, ctx.baseUrl);
       const beforeRed = { balance: afterYellow.balance, ledger: await fetchLedger(ctx.baseUrl) };
-      await submitMfa(page, '123456');
+      const [verification] = await Promise.all([
+        page.waitForResponse(response => response.request().method() === 'POST' &&
+          /^\/api\/actions\/[^/]+\/verify$/.test(new URL(response.url()).pathname)),
+        submitMfa(page, '123456'),
+      ]);
+      await waitForLiveResponseCompletion(verification);
+      await waitForLiveSessionIdle(page);
       const afterRed = await waitForTransferSettled(
         ctx.baseUrl,
         beforeRed,
@@ -981,18 +993,13 @@ async function scenarioMultiTurn(ctx: Ctx): Promise<string> {
       );
 
       // turn 4 — a follow-up read in the SAME session
-      await submitChat(page, MSG.cardLimit);
-      await waitFor(async () => ((await assistantTexts(page)).length >= 4 ? true : false), {
-        timeoutMs: 120_000,
-        description: '第 4 轮助手回复',
-      });
-      const texts = await assistantTexts(page);
+      await submitCompletedLiveChatTurn(page, MSG.cardLimit);
       await captureLive(page, 's6-multiturn');
       const violation = findToolOrderViolation();
       if (violation) {
         throw new Error(`出现 tool/tool_calls 400：${violation.method} ${violation.url} — ${violation.body.slice(0, 300)}`);
       }
-      return `同一会话 4 轮（余额 → 转账200确认 → 转账5000验证码 → 信用卡额度），助手消息 ${texts.length} 条；确认后余额 ${afterYellow.balance}、验证码后 ${afterRed.balance}；全程无 "tool message must answer tool_calls" 400（累计网络 4xx/5xx：${netLog.issues.length}）`;
+      return `同一会话 4 轮（余额 → 转账200确认 → 转账5000验证码 → 信用卡额度），各轮响应与原运行均已结束；确认后余额 ${afterYellow.balance}、验证码后 ${afterRed.balance}；全程无 "tool message must answer tool_calls" 400（累计网络 4xx/5xx：${netLog.issues.length}）`;
     },
     { label: 's6-multiturn' },
   );

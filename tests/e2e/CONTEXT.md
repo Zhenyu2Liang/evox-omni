@@ -77,6 +77,12 @@ live 数据库文件为 `prisma/live-acceptance.db`（含 `-wal`/`-shm`/`-journa
 
 ## 运行
 
+live 余额场景 `1` 与多轮场景 `6` 使用 `chat-turn.e2e-helper.ts` 等待本轮完成。
+辅助模块从实际 POST 读取 `requestId`，核对原运行、完整响应和已结束消息。
+服务端释放运行权且对应消息显示后，才允许下一轮。
+余额仅在本轮结果卡内核对；历史金额、历史消息数量不作为完成条件。
+确认和验证也需等待响应结束与运行权释放，再发起后续请求。
+
 `pnpm exec tsx tests/e2e/acceptance.e2e.ts`
 运行离线浏览器场景。
 `E2E_JOURNEYS` 可指定场景名称列表。
