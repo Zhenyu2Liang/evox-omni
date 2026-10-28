@@ -31,6 +31,7 @@ import { executeGatedTool } from './confirmation';
 import { buildAutomaticWriteFence } from './execution-fence';
 import { resolveProvider } from './providers';
 import { withModelAudit } from './providers/model-audit';
+import { withRequiredDeclaration } from './providers/required-declaration';
 import type { ModelRuntime } from './providers/types';
 import { buildSystemPrompt } from './system-prompt';
 import { normalizeToolResultMessages, validateToolCallIdentities } from './message-normalize';
@@ -49,11 +50,13 @@ import { prisma } from '@/lib/db/client';
 import { newId } from '@/lib/ids';
 import { restoreConversationUserMemory } from './conversation-context';
 import { currentTurnFocus, withCurrentTurnFocus } from './current-turn-focus';
+import { withModelBudget } from './model-budget';
+import { runtimeRequestDigest } from './durable/serialization';
 import { CONVERSATION_TOOL_REJECTION } from '@/lib/tool-feedback';
 import { createContextCompactor, type ContextCompactionState } from './context-compaction';
 import { estimateContextTokens } from './context-compaction/projection';
 import type { ReplyContext, ReplyRepairState, WriteContinuationState } from './reply-repair';
-import type { WorkflowStatusEvidence } from './workflow-context';
+import { loadActionContext, withCurrentActionStatuses, type WorkflowStatusEvidence } from './workflow-context';
 
 /**
  * The security gateway's runtime surface.
@@ -164,7 +167,8 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
 
   const readTurnIntent = (): ConversationIntent => {
     const user = agent.state.messages.findLast(message => message.role === 'user');
-    if (!turnIntent || user !== currentUser) {
+    if (!turnIntent || user !== currentUser && (user?.timestamp !== currentUser?.timestamp ||
+        runtimeRequestDigest('turn_user', user) !== runtimeRequestDigest('turn_user', currentUser))) {
       currentUser = user;
       turnIntent = advanceConversationIntent(undefined, latestUserText(agent.state.messages));
       if (options.snapshot) options.snapshot.intent = turnIntent;
@@ -217,7 +221,16 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
     },
   });
 
-  const { model, streamFn } = options.provider ?? resolveProvider(config);
+  const provider = options.provider ?? resolveProvider(config);
+  const model = provider.model;
+  let modelBudget = options.snapshot?.modelBudget;
+  const streamFn = withModelBudget(provider.streamFn, { config,
+    state: () => modelBudget, intentId: () => readTurnIntent().id,
+    save: async state => {
+      modelBudget = state;
+      if (options.snapshot) options.snapshot.modelBudget = state;
+      await options.journal?.checkpoint('model_budget_reserved');
+    } });
   const initialMessages = options.preserveSystemMessages ? restored?.messages ?? []
     : restoreConversationUserMemory(restored?.messages ?? [], options.snapshot?.transcript ?? []).filter(message => message.role !== 'system');
   let compactionState: ContextCompactionState | undefined = options.snapshot?.contextCompaction;
@@ -270,6 +283,12 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
       }
     }
     const intent = readTurnIntent();
+    if (intent.needsInput && (isWriteTool(toolName) || toolName === 'submit_plan')) {
+      const rejection = modelToolError(new AppError('VALIDATION', '请先补充本次办理所缺少的信息，不能代替用户选择。'));
+      planningRejections.set(context.toolCall.id, rejection);
+      stopAfterDecision = true;
+      return { block: true, reason: rejection };
+    }
 
     // A greeting or correction cannot revive an old financial operation from model memory.
     // Automatic reads may clarify the user's objects. Gated reads, writes and workflows cannot
@@ -349,7 +368,8 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
 
   const agent = new Agent({
     sessionId,
-    streamFn: options.journal ? withModelAudit(streamFn, options.journal) : streamFn,
+    streamFn: withRequiredDeclaration(options.journal ? withModelAudit(streamFn, options.journal) : streamFn,
+      () => writeContinuation?.phase === 'requested' && writeContinuation.declaredTools.length === 0 && readTurnIntent().purpose === 'undecided'),
     initialState: {
       systemPrompt,
       model,
@@ -362,15 +382,18 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
     afterToolCall,
     finishTurn,
     prepareRequest: async (request, signal) => {
-      const focus = currentTurnFocus(readTurnIntent());
-      const projection = normalizeToolResultMessages(request.context.messages);
+      const replay = options.journal?.hasOriginalModelInput();
+      const actions = options.journal && !replay
+        ? await loadActionContext(userId, sessionId, registry.list().map(tool => tool.name)) : [];
+      const focus = currentTurnFocus(readTurnIntent(), actions);
+      const projection = withCurrentActionStatuses(normalizeToolResultMessages(request.context.messages), actions);
       const systems = projection.filter(message => message.role === 'system');
       const declared = new Set(getCurrentTools(projection).map(tool => tool.name));
       const missingTools = (request.context.tools ?? []).filter(tool => !declared.has(tool.name)).map(toToolDeclaration);
       const overhead = estimateContextTokens([focus]) + (missingTools.length || systems.length === 0 ? estimateContextTokens([{
         role: 'system', timestamp: 0, content: systems.length ? '' : systemPrompt, toolsAdded: missingTools,
       }]) : 0);
-      const messages = options.journal?.hasOriginalModelInput()
+      const messages = replay
         ? request.context.messages : withCurrentTurnFocus(await compactor.project(projection, signal, overhead), focus);
       const recorded = await options.journal?.prepareModelRequest({ ...request, context: { ...request.context, messages } });
       preparedModelMessages = recorded?.context?.messages ?? messages;
@@ -385,7 +408,7 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
   function runtimeSnapshot(): SessionSnapshot {
     return { sessionId, userId, agentState: agent.state, transcript: options.snapshot?.transcript ?? [],
       createdAt: options.snapshot?.createdAt ?? Date.now(), updatedAt: Date.now(), revision: options.snapshot?.revision ?? 0,
-      intent: turnIntent, contextCompaction: compactionState,
+      intent: turnIntent, contextCompaction: compactionState, modelBudget,
       historyGeneration: options.snapshot?.historyGeneration, historyStartedAt: options.snapshot?.historyStartedAt, replyRepair, replyContext, writeContinuation };
   }
 

@@ -2,6 +2,10 @@
 
 ## Intent
 
+预算与纠错声明的适配测试位于 `agent/model-budget.test.ts` 和
+`agent/providers/required-declaration.test.ts`，不在本目录。
+传输完整性通过只证明响应结束，不证明其办理状态或余额正确。
+展示事实的检查见 `agent/reply-safety.test.ts`。
 覆盖 `@/agent/providers`：离线 mock "大脑"(`mock-responder` 的 `respond` 与 `respondWithGuidance`)、live 模型解析与 Pi 传输层完成语义。
 多数用例纯内存、无数据库、不发起真实网络请求。
 `provider-live`/`provider-runtime` 只校验 pi-ai 注册表与密钥解析，不证明真实模型稳定性。

@@ -124,17 +124,22 @@ describe('structured turn purposes through Pi, persistence and authorization', (
     await expectNoAuthorization();
   });
 
-  it.each([fixtures.fabricatedBalance, fixtures.fabricatedSuccess, retiredDraft.candidate,
-    '**Scheduled tasks** (REMINDER/PAYMENT/TRANSFER) use sourceAccountId. Please provide an amount.',
-    'A complete reply whose final word is for'])
-  ('does not rewrite ordinary prose or trigger extra generation because of wording: %s', async reply => {
+  it.each([
+    [fixtures.fabricatedBalance, '尚未取得本轮账户余额，请重新查询。'],
+    [fixtures.fabricatedSuccess, '本轮尚未创建待确认操作，也未执行任何新的银行操作。'],
+    [retiredDraft.candidate, retiredDraft.candidate],
+    ['**Scheduled tasks** (REMINDER/PAYMENT/TRANSFER) use sourceAccountId. Please provide an amount.',
+      '**Scheduled tasks** (提醒/缴费/转账) use 付款账户. Please provide an amount.'],
+    ['A complete reply whose final word is for', 'A complete reply whose final word is for'],
+  ])
+  ('preserves explanation and projects business facts without extra generation: %s', async (reply, expected) => {
     const script = scriptedProvider({ purpose: 'conversation', operations: [] }, [fauxAssistantMessage(reply)]);
     const response = await runTurn({ message: fixtures.casualRequest }, { config, provider: script.provider });
-    expect(finalContent(response)).toBe(reply);
+    expect(finalContent(response)).toBe(expected);
     expect(script.calls()).toBe(2);
     const saved = await loadSession(response.sessionId);
     expect(saved?.replyRepair).toBeUndefined();
-    expect(saved?.transcript.at(-1)?.content).toBe(reply);
+    expect(saved?.transcript.at(-1)?.content).toBe(expected);
     await expectNoAuthorization();
   });
 
@@ -262,16 +267,16 @@ describe('structured turn purposes through Pi, persistence and authorization', (
     await expectNoAuthorization();
   });
 
-  it('keeps query results and later financial analysis in separate messages without replacing the prose', async () => {
+  it('keeps the query result separate and replaces a fabricated balance with the recorded balance', async () => {
     const script = scriptedProvider({ purpose: 'query', operations: ['get_balance'] }, [toolCall('get_balance'), fauxAssistantMessage(fixtures.fabricatedBalance)]);
     const response = await runTurn({ message: fixtures.balanceRequest }, { config, provider: script.provider });
     expect(script.calls()).toBe(3);
-    expect(finalContent(response)).toBe(fixtures.fabricatedBalance);
+    expect(finalContent(response)).toBe(fixtures.balanceResult);
     const saved = await loadSession(response.sessionId);
     const tool = saved?.transcript.find(message => message.role === 'tool' && message.toolEvents?.[0].toolName === 'get_balance');
     expect(tool?.toolEvents?.[0].status).toBe('success');
     expect(tool?.cards?.find(card => card.type === 'balance')).toMatchObject({ type: 'balance', data: { totalAvailable: '73580.00' } });
-    expect(saved?.transcript.at(-1)?.content).toBe(fixtures.fabricatedBalance);
+    expect(saved?.transcript.at(-1)?.content).toBe(fixtures.balanceResult);
     expect(saved?.transcript.findIndex(message => message.id === tool?.id)).toBeLessThan(saved!.transcript.length - 1);
     expect(saved?.replyRepair).toBeUndefined();
     await expectNoAuthorization();

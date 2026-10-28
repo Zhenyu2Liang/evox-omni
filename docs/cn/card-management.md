@@ -21,8 +21,11 @@
 可用余额是本卡当前可消费的金额，即账户现金与剩余月限额的较小值。
 
 月限额（`monthlyLimit`）限制该类卡的当月累计消费。
-月限额为空时，消费上限只受账户余额限制。
+月限额为空时，仍检查账户余额与适用的分类限额。
 当月累计消费按补办前后各卡合并计算。
+补办卡继承原卡的分类消费限额，包括 0 元限额。
+分类的当月累计消费也按补办前后各卡合并计算。
+重复补办返回原补办卡，不覆盖补办后调整的限额。
 具体扣款与记账规则见[消费结算](#消费结算)。
 
 ## 结算账户绑定
@@ -93,7 +96,8 @@
 1. 按 `executionKey` 读取已提交的消费记录；命中则原样重放保存的结果，不再次扣款。
 2. 读取卡片并确认属于本人且状态为 `ACTIVE`；卡片不存在返回 `NOT_FOUND`，状态不是 `ACTIVE` 返回 `CONFLICT`。
 3. 重新校验结算账户；`MISSING` 与 `UNTRUSTED` 都返回 `CONFLICT`，并在 `detail.linkedAccountStatus` 标明状态。
-4. 卡片带月限额时，在同一个服务端时刻读取补办前后各卡的当月累计消费；本次消费会超出限额时返回 `LIMIT_EXCEEDED`。
+4. 在同一个服务端时刻读取补办前后各卡的当月累计消费。
+   分别检查月限额和本次类别的分类限额，超出任一上限时返回 `LIMIT_EXCEEDED`。
 5. 以带余额下限的原子扣减写账户余额；没有任何行被更新时返回 `INSUFFICIENT_FUNDS`。
 6. 写入 `channel='CARD'` 的交易流水和 1 条 `CardConsumption` 记录，再把本次结果快照写进该记录的 `resultJson`。
 
@@ -108,13 +112,13 @@
 | `VALIDATION` | 提交了时间字段、金额不大于零、类别不受支持，或缺用户 id、卡片 id |
 | `NOT_FOUND` | 卡片不存在或不属于本人 |
 | `CONFLICT` | 卡片状态不是 `ACTIVE`、结算账户 `MISSING` 或 `UNTRUSTED`、重放身份不属于本次消费 |
-| `LIMIT_EXCEEDED` | 本次消费会使补办前后各卡的当月累计消费超过月限额 |
+| `LIMIT_EXCEEDED` | 本次消费会使同一卡片链的当月消费超过月限额或对应分类限额 |
 | `INSUFFICIENT_FUNDS` | 结算账户现金不足 |
 
 SDK 对借记卡与虚拟卡使用同一套消费规则，Agent 只注册 `consume_virtual_card` 这 1 个消费工具。
 消费入口有 2 个：
 
-- 接口 `POST /api/cards/[id]/consume`：请求体为 `{ amount, category?, merchant?, executionKey? }`，成功返回 `200` 与 `ConsumeCardResult`。
+- 接口 `POST /api/cards/[id]/consume`：首次提交消费参数只创建待验证操作，不扣款。再次提交原参数、`actionId`、`confirmed:true` 与 `code` 后验证执行。返回 `CardConsumptionResponse`，成功时 `result` 包含 `ConsumeCardResult`。
 - Agent 工具 `consume_virtual_card`：RED 操作，参数表没有日期或时间字段。
 
 接口判断原始请求体是否出现 `occurredAt` 键，出现即返回 `VALIDATION`，与取值无关。

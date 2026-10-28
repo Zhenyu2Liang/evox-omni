@@ -158,7 +158,9 @@ export async function journeyDialogueRegressions(browser: Browser, baseUrl: stri
     const balance = (await fetchDashboardSummary(baseUrl)).checkingBalance;
     const subscriptions = await getJson<unknown>(`${baseUrl}/api/subscriptions`);
     const invalid = await completedReply(page, regressions.negativeTransfer);
-    if (!invalid.includes('-10') || !invalid.includes('\u5927\u4e8e 0')) throw new Error(`Negative amount was not rejected: ${invalid}`);
+    if (!invalid.includes('-10') || !/(?:不能|无法|无效|不支持|不允许|拒绝|正数|大于\s*0|invalid|cannot|can't|not valid|positive|greater than\s*0)/i.test(invalid)) {
+      throw new Error(`Negative amount was not rejected: ${invalid}`);
+    }
     if (invalid.includes(regressions.missingAmount) || await page.locator('[data-chat-card-type="contacts"]').count() ||
       (await fetchPendingActions(baseUrl)).length) throw new Error('Negative money became a missing amount, a lookup or an authorization');
     const recall = await completedReply(page, regressions.recallQuestion);

@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import type { CardConsumptionView, CardView, ConsumeCardResult } from '@/banking-sdk';
+import type { CardConsumptionView, CardView } from '@/banking-sdk';
+import type { CardConsumptionResponse } from '@/lib/contracts/card-consumption';
 import { Button, CardTile, Money } from '@/components';
 import { createRequestId } from '@/components/chat/request-id';
 import { formatDateTime } from '@/lib/date';
@@ -12,12 +13,14 @@ import { cardCanConsume, cardSupportsConsumption } from '@/components/banking/ca
 
 interface Envelope<T> { ok: boolean; data?: T; error?: { code: string; message?: string } }
 interface Notice { key: MessageKey; error: boolean; detail?: string }
+interface SpendInput { amount: string; category: string; merchant: string }
 
 const AMOUNT_PATTERN = /^\d+(?:\.\d{1,2})?$/;
 const inputClass = 'bank-input mt-1 w-full rounded-xl border border-banking-navy/20 bg-banking-surface px-3 py-2.5 text-base sm:text-sm outline-hidden focus:border-banking-accent focus:ring-2 focus:ring-banking-accent/10';
 
 /** Map a spend failure code to its localized message key. */
 function failureKey(code: string | undefined): MessageKey {
+  if (code === 'CIRCUIT_OPEN' || code === 'MFA_LOCKED') return 'pages.cards.locked';
   if (code === 'INSUFFICIENT_FUNDS') return 'pages.cards.consumeInsufficient';
   if (code === 'LIMIT_EXCEEDED') return 'pages.cards.consumeLimitExceeded';
   if (code === 'CONFLICT') return 'pages.cards.consumeUnavailable';
@@ -51,6 +54,9 @@ export default function CardConsumeDialog({ card, onClose, onConsumed }: {
   const [busy, setBusy] = useState(false);
   const [validationFailed, setValidationFailed] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [pending, setPending] = useState<{ input: SpendInput; actionId: string; status: string } | null>(null);
+  const [code, setCode] = useState('');
+  const [confirmed, setConfirmed] = useState(false);
 
   useEffect(() => {
     const element = dialog.current;
@@ -87,7 +93,7 @@ export default function CardConsumeDialog({ card, onClose, onConsumed }: {
     return attempt.current.executionKey;
   }
 
-  async function consume(input: { amount: string; category: string; merchant: string }) {
+  async function consume(input: SpendInput, verification?: { actionId: string; code: string; confirmed: true }) {
     if (busyRef.current || !cardCanConsume(card)) return;
     busyRef.current = true;
     setBusy(true);
@@ -102,19 +108,37 @@ export default function CardConsumeDialog({ card, onClose, onConsumed }: {
           ...(input.category ? { category: input.category } : {}),
           ...(input.merchant ? { merchant: input.merchant } : {}),
           executionKey: executionKey(signature),
+          ...verification,
         }),
       });
-      const envelope = await response.json() as Envelope<ConsumeCardResult>;
+      const envelope = await response.json() as Envelope<CardConsumptionResponse>;
       if (!mounted.current) return;
       if (!response.ok || !envelope.ok || !envelope.data) {
         const code = envelope.error?.code;
         const detail = envelope.error?.message;
+        if (response.status === 422) {
+          // The server rolled back this business refusal; corrections require a fresh proposal.
+          attempt.current = null;
+          setPending(null);
+          setCode('');
+          setConfirmed(false);
+        } else if (code === 'CIRCUIT_OPEN' || code === 'MFA_LOCKED') {
+          setPending(current => current ? { ...current, status: 'locked' } : current);
+        }
         // `VALIDATION` also covers a body naming a server-owned field (the booking time), so show
         // the server's own reason instead of folding every refusal into a generic failure.
         setNotice(code === 'VALIDATION' && detail ? { key: failureKey(code), error: true, detail } : { key: failureKey(code), error: true });
         return;
       }
+      if (!envelope.data.ok || envelope.data.status !== 'executed') {
+        setPending({ input, actionId: envelope.data.actionId, status: envelope.data.status });
+        if (envelope.data.message) setNotice({ key: 'pages.cards.verificationFailed', error: true, detail: envelope.data.message });
+        return;
+      }
       attempt.current = null;
+      setPending(null);
+      setCode('');
+      setConfirmed(false);
       setNotice({ key: 'pages.cards.consumeSuccess', error: false });
       onConsumed();
       await loadConsumptions();
@@ -185,13 +209,27 @@ export default function CardConsumeDialog({ card, onClose, onConsumed }: {
       </section>
 
       <form onSubmit={submit} data-card-consume-form className="mt-5">
-        <fieldset disabled={busy || blocked} className="space-y-4 disabled:opacity-60">
+        <fieldset disabled={busy || blocked || pending !== null} className="space-y-4 disabled:opacity-60">
           <label className="block text-sm">{t('pages.cards.consumeAmount')}<input name="amount" type="text" inputMode="decimal" required maxLength={24} className={inputClass} /></label>
           <label className="block text-sm">{t('pages.cards.consumeCategory')}<input name="category" type="text" maxLength={32} className={inputClass} /></label>
           <label className="block text-sm">{t('pages.cards.consumeMerchant')}<input name="merchant" type="text" maxLength={64} className={inputClass} /></label>
           <Button type="submit" loading={busy} disabled={blocked} className="w-full">{t('pages.cards.consumeSubmit')}</Button>
         </fieldset>
       </form>
+      {pending ? <form data-card-consume-verification onSubmit={event => {
+        event.preventDefault();
+        if (confirmed && /^\d{6}$/.test(code.trim()) && pending.status === 'awaiting_mfa') {
+          void consume(pending.input, { actionId: pending.actionId, code: code.trim(), confirmed: true });
+        }
+      }} className="mt-4 space-y-4">
+        {pending.status === 'locked' ? <p role="status">{t('pages.cards.locked')}</p> : null}
+        <fieldset disabled={busy || pending.status !== 'awaiting_mfa'} className="space-y-4 disabled:opacity-60">
+          <label className="flex items-start gap-3 text-sm"><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} />{t('pages.cards.confirmDetails')}</label>
+          <label className="block text-sm">{t('cards.mfa.label')}<input name="code" value={code} onChange={event => setCode(event.target.value)} inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} className={inputClass} /></label>
+          <p className="text-sm text-banking-navy">{t('pages.cards.verificationHint')}</p>
+          <Button type="submit" loading={busy} disabled={!confirmed || !/^\d{6}$/.test(code.trim())}>{t('pages.cards.verify')}</Button>
+        </fieldset>
+      </form> : null}
     </dialog>
   );
 }

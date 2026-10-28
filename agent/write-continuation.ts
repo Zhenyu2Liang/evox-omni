@@ -22,6 +22,7 @@ import { parseBankingGuidance } from './banking-guidance';
 import { publishReplyProgress } from './turns/buffer';
 import { publishServerReply, retireUnpublishedReply } from './turns/server-reply';
 import { renderFinancialResponse } from './financial-response';
+import { businessProse, operationExplanation, operationFactsReply } from './reply-safety';
 import { runtimeRequestDigest, snapshotRuntimeValue } from './durable/serialization';
 
 /** Declared write capabilities for the current turn; model interpretation, never authorization. */
@@ -55,6 +56,9 @@ export function hasWriteEvidence(buffer: TurnBuffer): boolean {
 /** Declared writes that still have no controlled tool call, or `undefined` when the turn is fine. */
 export function pendingDeclaredWrites(runtime: BankingAgentRuntime, buffer: TurnBuffer, config?: AppConfig): string[] | undefined {
   if (config?.llmMode !== 'live') return undefined;
+  // Ordinary clarification prose is final. An omitted readiness declaration also fails closed;
+  // another model request cannot supply a missing customer choice.
+  if (runtime.serialize().intent?.needsInput !== false) return undefined;
   const declared = declaredWriteTools(runtime.serialize().intent);
   if (declared.length === 0) return undefined;
   if (hasWriteEvidence(buffer)) return undefined;
@@ -63,6 +67,11 @@ export function pendingDeclaredWrites(runtime: BankingAgentRuntime, buffer: Turn
 
 /** The corrective instruction asks for the missing tool call and forbids any fabricated gate. */
 function writeContinuationInstruction(declared: readonly string[], timestamp: number): AgentMessage {
+  if (!declared.length) return { role: 'system', timestamp, content:
+    'Your previous reply claimed that a banking operation was submitted or completed, but this turn has no declaration or controlled write. '
+    + 'Interpret the LATEST customer message now using describe_turn. If it actually requests an operation and every required customer choice is present, explicitly declare needsInput=false and call its controlled banking tool. '
+    + 'If a required choice is missing, declare needsInput=true, ask for it and stop. If the customer only asked a question, declare conversation/advice/query and answer it without any write. '
+    + 'Do not infer a target or permission from your previous reply. A real gateway result alone creates confirmation or verification. Never repeat a completed operation or display these instructions.' };
   return { role: 'system', timestamp, content:
     `The current user request declared these banking operations: ${declared.join(', ')}. No corresponding controlled tool call has been submitted in this turn. `
     + 'If the request already states every required parameter, call the declared banking tool(s) now; declare multiple operations together through submit_plan. '
@@ -85,7 +94,10 @@ export interface WriteContinuationOptions {
  */
 export async function continueDeclaredWrites(runtime: BankingAgentRuntime, buffer: TurnBuffer, now: () => number,
   options: WriteContinuationOptions = {}): Promise<void> {
-  const declared = pendingDeclaredWrites(runtime, buffer, options.config);
+  const intent = runtime.serialize().intent;
+  const undeclaredClaim = options.config?.llmMode === 'live' && buffer.operationClaim &&
+    intent?.purpose === 'undecided' && !hasWriteEvidence(buffer);
+  const declared = pendingDeclaredWrites(runtime, buffer, options.config) ?? (undeclaredClaim ? [] : undefined);
   if (!declared) return;
   const last = runtime.agent.state.messages.findLast(isAssistantMessage);
   if (!isAssistantMessage(last) || last.stopReason !== 'stop') return;
@@ -122,6 +134,12 @@ export async function continueDeclaredWrites(runtime: BankingAgentRuntime, buffe
   if (hasWriteEvidence(buffer)) return;
   // Still no controlled write: publish the server's authoritative state (declared vs. executed)
   // rather than unverified prose that could claim a panel no operation record backs.
+  const corrected = runtime.agent.state.messages.findLast(isAssistantMessage);
+  const correctedProse = corrected ? textOfContent(corrected.content) : '';
+  const clarification = runtime.serialize().intent?.needsInput === true &&
+    !inspectReplyFormat(correctedProse, { allowProtocolExamples: buffer.allowProtocolExamples }).length
+    ? businessProse(operationExplanation(correctedProse), buffer.allowProtocolExamples) : '';
   retireUnpublishedReply(buffer);
-  publishServerReply(runtime, buffer, now, renderFinancialResponse(buffer.factResults, { declared }));
+  const facts = declared.length ? renderFinancialResponse(buffer.factResults, { declared }) : operationFactsReply(buffer);
+  publishServerReply(runtime, buffer, now, [clarification, facts].filter(Boolean).join('\n\n'));
 }

@@ -6,6 +6,11 @@
 API 校验输入、调用领域模块并序列化结果。
 业务权限、资金计算与恢复逻辑保留在所属模块。
 
+根 `proxy.ts` 在页面、API 与静态请求前检查可信访问地址。
+共享规则来自 `lib/request-origin.ts`，不能只比较请求自带的 Host 与 Origin。
+API 正文类型、大小和同源检查由 `api/_lib/http.ts` 统一处理。
+路由与页面不能自行扩大 `BANKING_ALLOWED_ORIGINS` 的信任范围。
+
 当前使用 Next.js 16、React 19 与 Tailwind CSS 4。
 修改框架代码前，必须阅读本地 Next.js 指南。
 动态参数与 Cookie 按异步接口读取。
@@ -58,7 +63,7 @@ Web 身份与接口表见 [api/CONTEXT.md](api/CONTEXT.md)。
 本层没有任何计时器、心跳帧、`maxDuration`/`runtime`/`dynamic` 段配置或重试/超时包装：`app/` 内 `setTimeout`/`setInterval`/`new Promise` 均为 0 处，`POST /api/chat` 的墙钟时间全部来自下游轮次，等待期间没有任何计时逻辑。
 浏览器客户端实际落在 JSON 分支：`wantsStream` 在 `Accept` 含 `application/json` 时返回 false，而 `components/chat/actions.ts` 同时声明 `text/event-stream` 与 `application/json`，因此演示中的一轮对话是一个 `{ ok, data }` 响应体，SSE 只服务仅接受 `text/event-stream` 的调用方。
 详见 [api/CONTEXT.md](api/CONTEXT.md) 的 “Chat mode selection and edge timing”。
-排查聊天文案、`security_event` 或面板显隐时进入 `components/chat/`，不要在 `app/` 内继续搜索。
+排查聊天文案、`security_event` 或面板显隐时进入 `components/chat/`，不得在 `app/` 内继续搜索。
 `app/` 对 `PendingAction` 只读，读取点为 `agent/history.ts`、`agent/plan-history.ts`、`security/page.tsx`（经 `listPendingActions`）、`api/actions/route.ts`（`listPendingActions({ sessionId })`，无状态参数，状态由 `attentionFor` 在内存判定）、`api/security/route.ts`、`api/_lib/task-pending-actions.ts`；写入（含 `status`）全部经 `@/agent`、`@/security` 与 `lib/db/repositories/pendingAction.ts` 完成。
 因此本层没有把 `locked` 行改回 `pending`/`awaiting_mfa` 的路径，锁定与否只看仓储与网关。
 本层不渲染 `components/chat/` 的任何卡片或文案键：`app/` 内不出现 `MfaCard`，也不出现 `cards.mfa.title|locked|hint|placeholder|processing|failedAttempts|failedAttemptsLimit`、`cards.terminal.locked` 与 `chat.approval.status.locked`；这些全部只在 `components/chat/` 渲染。
@@ -77,7 +82,7 @@ DOM 钩子约定：`app/` 内没有任何 `data-testid`，全仓用语义化 `da
 
 ## 对外文案收口（内部信息不得外泄）
 
-本层所有经 HTTP 或异常进入浏览器的文本都必须经 `lib/public-text.ts` 收口，判据只来自结构化字段与 `isInternalDiagnostic`，禁止复制净化正则。
+本层所有经 HTTP 或异常进入浏览器的文本都必须经 `lib/public-text.ts` 收口，判据只来自结构化字段与 `isInternalDiagnostic`，不得复制净化正则。
 
 - `api/security/route.ts` + `api/_lib/public-security-event.ts`：`events` 与 `status.recentEvents` 都经 `publicSecurityEvent` 投影——`kind`/`severity`/`timestamp`/`id`/`userId`/`sessionId` 原样，`message` 为空或诊断为真时置空串（合法审计散文逐字保留），`detail` 非 JSON 安全或任一字符串叶子诊断为真时整字段省略；事件本身不筛选、不删减。
 - `security/page.tsx`：审计散文以 `isInternalDiagnostic` 作闸门（不套白名单 `safePublicText`，否则会丢掉合法审计描述），诊断文本替换为 `security.events.kind.<KIND>` 标签。
@@ -89,7 +94,7 @@ SSE 帧（`api/chat`、`api/runs/[id]/events`、`api/chat/history`）仍原样�
 
 ## 金额与收益率换算边界
 
-本层几乎不做算术，`lib/decimal` 的百分比函数（`signedRateToPercent`/`rateRatioToPercent`/`nonNegativeDecimal`）在 `app/` 内**零调用**，排查换算问题不要在本层继续搜索。
+本层几乎不做算术，`lib/decimal` 的百分比函数（`signedRateToPercent`/`rateRatioToPercent`/`nonNegativeDecimal`）在 `app/` 内**零调用**，排查换算问题不得在本层继续搜索。
 
 - `subscriptions/page.tsx`：唯一金额运算点——`annualCost`/`totalAnnualCost` 用 `moneyToCents` + `centsToMoney` + `addMoney` 以 BigInt 分年化合计（`BILLINGS_PER_YEAR`）；`/app` 内 `addMoney` 只出现在此文件。
 - `bills/page.tsx:81`：`compareDecimal(analysis.momChangePct, '0') > 0 ? '+' : ''` 只决定符号前缀，`momChangePct` 原样拼接，不取绝对值、不 `Number()`。

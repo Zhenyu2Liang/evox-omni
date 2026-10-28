@@ -903,7 +903,7 @@ export async function scenarioInvestmentPartialRedemption(params: InvestmentScen
   await captureShot(page, 'lB-compact-result');
   await receiptDetails.locator('summary').click();
   if (!(await receiptDetails.innerText()).includes('操作后余额')) throw new Error('Expanded receipt lost the balance');
-  const explanation = page.locator('[data-financial-summary="true"]').last().locator('[data-result-explanation]');
+  const explanation = page.locator('[data-message-role="assistant"]').last().locator('[data-result-explanation]');
   if (await explanation.getAttribute('open') !== null) throw new Error('The full financial explanation must start collapsed');
   await explanation.locator('summary').click();
   if (!(await explanation.innerText()).includes('已按份额赎回')) throw new Error('Expanding the explanation lost the original redemption facts');

@@ -10,6 +10,12 @@
 `CardManager.tsx` 承载卡片列表、手动申请恢复、刷新、消费入口与消费弹窗。
 `CardChangeDialog.tsx` 展示新增、删除、验证与取消。
 `CardConsumeDialog.tsx` 展示单卡消费表单与该卡消费记录。
+消费预览、验证与重放共用 `lib/contracts/card-consumption.ts` 的响应类型。
+验证提交绑定原 `actionId`、消费参数、确认标记与验证码。
+前端不能改变金额或类别后继续使用原挑战。
+冻结、挂失、账户锁定与限额检查仍由服务端在执行前复核。
+提交表单只创建待验证操作；核对原参数并通过 MFA 后才扣款。
+验证期间锁定原表单；错误验证码保留原操作身份，终态不再提供验证。
 
 ## 数据来源
 
@@ -43,14 +49,14 @@
 - 通知段按需渲染一个 `<p>`，`role` 为 `alert`（错误）或 `status`（成功）。
 - 未完成操作 `<section data-card-pending-changes>`，`<h2>` 取 `pages.cards.pending`，每项 `<li data-card-pending-change-id={id}>` 内含 `pages.cards.reviewAdd`/`reviewDelete` 文案、`card.numberMasked`（font-mono）与 `pages.cards.resume` 按钮。
 - 卡片网格 `<section data-card-list className="grid min-w-0 gap-4 sm:grid-cols-2">`：是网格 `<div>`，不是 `<ul>/<li>`；每张卡是 `<div data-card-id={id}>` 包一个 `<CardTile card footer />`。
-- `footer` 是右对齐 `<div>`，内含 `data-card-consume`、`data-card-delete` 两个 `<span>` 包 `Button`。
+- `footer` 是靠右排列的 `<div>`，内含 `data-card-consume`、`data-card-delete` 两个 `<span>` 包 `Button`。
 卡片列表为空时渲染 `EmptyState`：标题/描述分别落在 `<div>` 与 `<p>`，既不是 heading 角色也没有 data 钩子，只能按文本定位。
 `EmptyState` 自身没有 `role`/`data-*`；`CardTile` 内部除 `data-card-*` 之外没有任何 `data-*`、`aria-*`、`role`、`id` 属性，标题用的是 `<div>` 而非 heading。
-`CardTile` 的段落依次为：卡类型+`card.network`（`text-sm` 的 `<div>`，形如「借记卡 · UnionPay」）、`numberMasked`（font-mono `<div>`）、状态 `Badge`（可加「已补卡」`Badge`）、不可用提示 `Badge`、CREDIT 的 `<dl>`（`business.cards.limit`/`business.cards.available`）、关联账户行（label `<span>` + 值 `<span>`，非 `<dt>`）、账户余额 `<dl>`（`business.cards.accountBalance`/`business.cards.usableBalance`）、绑定异常提示 `<p>`、月限额行（label `<span>`）、分类限额 `<ul>/<li>`（`business.cards.categoryLimits` 标题为 `<div>`）。
+`CardTile` 的段落依次为：卡类型+`card.network`（`text-sm` 的 `<div>`，形如“借记卡 · UnionPay”）、`numberMasked`（font-mono `<div>`）、状态 `Badge`（可加“已补卡”`Badge`）、不可用提示 `Badge`、CREDIT 的 `<dl>`（`business.cards.limit`/`business.cards.available`）、关联账户行（label `<span>` + 值 `<span>`，非 `<dt>`）、账户余额 `<dl>`（`business.cards.accountBalance`/`business.cards.usableBalance`）、绑定异常提示 `<p>`、月限额行（label `<span>`）、分类限额 `<ul>/<li>`（`business.cards.categoryLimits` 标题为 `<div>`）。
 金额一律经 `ui/Money` 渲染成 `¥1,800.00` 形式（千分位 + `¥`，`lib/money.ts#formatCNY`），断言金额必须含该格式。
 `CardConsumeDialog` 打开时在 `data-card-consume-dialog` 内**再渲染一个 `CardTile`（仅传 `card`，无 `footer`/`className`）**，因此同一张卡的卡号与限额文本在页面上会同时存在两份（网格内 + 弹窗内）。
 弹窗标题为 `<h2 id="card-change-title">` / `<h2 id="card-consume-title">`，`dialog` 用 `aria-labelledby` 指向它们；字段名固定为 `type`、`creditLimit`、`monthlyLimit`、`confirmed`、`code`、`amount`、`category`、`merchant`。
-`AppShell` 侧栏导航链接也渲染 `app.cards`＝「卡片」，与页面 `<h1>` 同文本，故按文本定位必须限定 `main h1` 或 `[data-card-list]`。
+`AppShell` 侧栏导航链接也渲染 `app.cards`＝“卡片”，与页面 `<h1>` 同文本，故按文本定位必须限定 `main h1` 或 `[data-card-list]`。
 
 ## 命令边界
 
@@ -105,7 +111,7 @@
 `/cards` 没有自己的 `metadata`，`<title>` 来自 `app/layout.tsx` 的 `app.brandTitle`（`万象柜坊 EvoX Omni`）；侧栏与移动端标题用 `app.cards`（`卡片`）。
 语言链为 `app/layout.tsx:25` `getServerI18n()` → `LocaleProvider initialLocale` → 组件 `useI18n().t`；`resolveLocale` 只认 Cookie `banking_locale`（`lib/i18n/shared.ts:13`）的 `'en'`，其余一律 `zh-CN`，`Accept-Language` 与 `localStorage` 不参与。
 
-### 非目录文本（不在 i18n 表里的可见文本）
+### 非目录文本
 
 卡片行的 `{类型} · {network}`（`components/banking/CardTile.tsx:82-84`）里 `network` 是 DTO 原始值，种子为 `UnionPay`（`prisma/seed.ts:295,307,320`）。
 卡号是 `card.numberMasked` 原样输出（`CardTile.tsx:85-87`），种子为 `****6688` / `****8821` / `****7788`（`prisma/seed.ts:296,308,321`），4 星 4 位、无空格。
@@ -184,7 +190,7 @@
 
 ### 断言要点
 
-`role` 与 `data-*` 钩子是稳定契约；中文字面量属于目录文件，断言应读取目录文本或整句匹配，不要在测试里另抄一份。
+`role` 与 `data-*` 钩子是稳定契约；中文字面量属于目录文件，断言必须读取目录文本或整句匹配，不得在测试里另抄一份。
 含插值的键（`pages.cards.summary`、`pages.cards.verificationFailed`）必须按插值后的整句匹配。
 `/cards` 上 `p[role="alert"]` 可能同时命中页面通知与弹窗错误段且文本相同，断言时用 `dialog p[role="alert"]` 或 `main > p[role="alert"]` 区分。
 成功提示一律是 `role="status"`，`p[role="alert"]` 只覆盖失败与本地校验失败；不可用原因块虽用 `role="status"` 也不得改成 `alert`。
@@ -198,10 +204,10 @@ e2e 场景在 `tests/e2e/live-virtual-card.e2e-helper.ts` 与 `tests/e2e/card-ma
 测试钩子：data-card-consume（入口）、data-card-consume-dialog、data-card-consume-card-id、data-card-consume-summary、data-card-consume-form、data-card-consumptions、data-card-consumption（记录行）、data-card-id（单个卡片容器）。
 卡片变更钩子：data-card-change-dialog（含 data-card-change-id / data-card-change-status）、data-card-add-form、data-card-verification-form（`CardChangeDialog.tsx:99` 的验证表单，内含 `input[name="confirmed"]` 复选框与 `input[name="code"]`），以及列表侧 data-card-pending-changes / data-card-pending-change-id。
 验证表单的验证码输入没有 `aria-label`、没有 `placeholder`，可见标签与无障碍名都来自外层 `<label>` 包裹的 `t('cards.mfa.label')`；`cards.mfa.label` 是本目录唯一的 `cards.mfa.*` 键，不渲染 `MfaCard`。
-每个钩子与文案键的对应关系见上文「文案与测试钩子」三张表，本节不再重复列举。
+每个钩子与文案键的对应关系见上文“文案与测试钩子”三张表，本节不再重复列举。
 消费相关 e2e 断言以 data-card-* 钩子定位，改动这些属性名会破坏 tests/e2e 下的场景。
 `data-card-id`（值为 `card.id`）是列表里唯一的单卡定位钩子；`components/banking/CardTile` 内部没有任何 `data-*`/`aria-*`，关联账户名（`linkedAccountName · linkedAccountNumber` 合成一串）、账户余额与可用余额只能按 `dt`/`span` 标签文本在该作用域内定位。
-`POST /api/cards/[id]/consume` 拒绝任何携带 `occurredAt` 的请求体（400 `VALIDATION`）：入账时间归服务端所有，界面不发送该字段，也不要补充任何客户端时间。
+`POST /api/cards/[id]/consume` 拒绝任何携带 `occurredAt` 的请求体（400 `VALIDATION`）：入账时间归服务端所有，界面不发送该字段，也不得补充任何客户端时间。
 手动卡片验证是本目录唯一自带错误码的 MFA 面：`security/manual-card-management.ts` 熔断时抛 `AppError('CIRCUIT_OPEN')`，`_lib/http.ts` 映射为 HTTP 423 失败信封，`CardManager.tsx` 84-100 行据此把申请置为 `locked` 并显示 `pages.cards.locked`。
 同一处检查的 `'LOCKED'` 不在 `ErrorCode`（`lib/errors.ts:1`）里，服务端不可能返回，属不可达分支。
 助手侧 `POST /api/actions/[id]/verify` 是 200 `ok:false` + `status:'locked'`、信封无 `code`，故这套按码提示无法复用于操作卡片。

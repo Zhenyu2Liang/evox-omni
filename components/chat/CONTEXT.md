@@ -13,6 +13,11 @@
 
 ## 职责与入口
 
+本层展示服务端校验后的公开消息，不重新拼回被扣留的模型候选。
+“查看结果说明”中的原文指公开消息正文，供应商候选留在运行日志中。
+办理状态与余额的事实检查属于 `agent/reply-safety.ts`，不由前端词语判断代替。
+`Composer.tsx` 与服务端共同限制 4000 字符；客户端限制不代替接口检查。
+授权面板移入底部后，历史消息的可见性由展示投影决定。
 成功业务的助手回复可携带服务端生成的 `financialSummary`。
 默认显示该摘要，完整原文保留在“查看结果说明”中。
 失败和待核对结果不生成成功摘要。
@@ -74,9 +79,9 @@
 
 终态失败时实时弹窗关闭且不再重开：`settleAction` 在终态或 `confirmed` 时清除 `pendingAction`，并把该 `actionId` 记入内存态 `settledActions`。
 `controlTask` 与 `restoreActionAttention` 均经 `visibleRefs` 过滤，跳过 `hasSettledAction` 为真的行（命中 `settledActions` 或存在终态内联卡片），`pickPendingAction` 不再为已终态动作重建弹窗，`needs_reconciliation` 行始终保留。
-`locked` 属终态，走同一清除与过滤路径：不产生「可继续」提示，也不重建待决策面板。
+`locked` 属终态，走同一清除与过滤路径：不产生“可继续”提示，也不重建待决策面板。
 
-`MfaCard` 依 `pending.status`/`pending.statusMessage` 渲染只读终态；`failed` 用 `publicToolError` 渲染原因，`locked` 渲染「原因 + 状态 + 解锁入口」三段（见下）。
+`MfaCard` 依 `pending.status`/`pending.statusMessage` 渲染只读终态；`failed` 用 `publicToolError` 渲染原因，`locked` 渲染“原因 + 状态 + 解锁入口”三段（见下）。
 失败尝试文案按剩余次数选择：`attempts < maxAttempts` 渲染 `cards.mfa.failedAttempts`（`{attempts}`，`次。` 结尾），达到上限（`attempts >= maxAttempts`）渲染 `cards.mfa.failedAttemptsLimit`（`{attempts, maxAttempts}`）。
 `maxAttempts` 缺省时回落 `cards.mfa.failedAttempts`。
 `ApprovalRequest` 转发之，`ChatWindow` 传 `maxAttempts`（`MFA_MAX_ATTEMPTS`）。
@@ -96,9 +101,9 @@
 ### 验证面板的 DOM 钩子
 
 仓库不用 `data-testid`，只认语义 `data-*`、`role`/`aria-label` 与本地化可访问名。
-验证码输入框无 `data-*`，唯一钩子是 `aria-label={t('cards.mfa.label')}`（zh-CN「验证码」），故为 `[data-approval-request="true"] input[aria-label="验证码"]`。
+验证码输入框无 `data-*`，唯一钩子是 `aria-label={t('cards.mfa.label')}`（zh-CN“验证码”），故为 `[data-approval-request="true"] input[aria-label="验证码"]`。
 锁定后存活的表面是 `cards/ApprovalRecord`（底部 `ApprovalRequest` 随 `pendingAction` 清除而卸载），其专用钩子为 `data-approval-locked="true"`，`MfaCard` 的 `data-mfa-locked="true"` 相应不可观测。
-`data-status`/`data-approval-stage`/`data-stage-status` 给出不依赖文案的状态断言；文案上「已锁定」（`cards.terminal.locked`）是「验证已锁定」（`chat.approval.status.locked`）的子串，包含式断言无法区分两者。
+`data-status`/`data-approval-stage`/`data-stage-status` 给出不依赖文案的状态断言；文案上“已锁定”（`cards.terminal.locked`）是“验证已锁定”（`chat.approval.status.locked`）的子串，包含式断言无法区分两者。
 
 ### 验证响应校验与分支（`actions.ts#postAction`）
 
@@ -121,7 +126,7 @@
 
 面板是否出现只由 `pendingAction` 决定：`ChatWindow.tsx:237-238` 在 `pending && <ApprovalRequest key={pending.actionId} …/>`，挂在 `[data-chat-composer-dock="true"]`（`ChatWindow.tsx:226`）内、滚动区 `[data-chat-scroll="true"]` 之外。
 `pendingAction` 只来自本轮 `confirmation_required`/`mfa_required` 事件，或 `pickPendingAction` 从 `GET /api/actions` 中挑选的 `pending`/`awaiting_mfa`（`decision` attention）行（`agent-stream-reducer.ts:554-573`）。
-故「面板存在」⇔ 服务端存在一条未终态的 `PendingAction`，或本轮刚收到 `mfa_required`；模型文字不产生面板。
+故“面板存在”⇔ 服务端存在一条未终态的 `PendingAction`，或本轮刚收到 `mfa_required`；模型文字不产生面板。
 
 `ApprovalRequest.tsx:23-25` 的容器是唯一带 `data-approval-request` 的元素：
 `<section tabIndex={-1} aria-label={t(pending.kind === 'mfa' ? 'chat.approval.verification' : 'chat.approval.confirmation')} data-approval-request="true" data-action-id={pending.actionId} data-kind={pending.kind}>`，并在 `actionId`/`kind` 变化时 `focus({preventScroll:true})`。
@@ -132,7 +137,7 @@
 `ConfirmationCard`：取消 `disabled={busy || !canCancel}`、确认 `loading={busy} disabled={busy || !canConfirm}`（`ConfirmationCard.tsx:72-92`）。
 `MfaCard`：取消 `disabled={busy}`、验证 `loading={busy} disabled={!canSubmit}`，`canSubmit = /^\d{6}$/.test(code.trim()) && !busy && !readOnly`（`MfaCard.tsx:52-68`）。
 
-MFA 输入框（`MfaCard.tsx:90-106`）没有 `maxLength`、`name` 与任何 `data-*`：唯一稳定选择器是 `[data-approval-request="true"] input[aria-label="{cards.mfa.label}"]`（zh-CN 文案「验证码」）。
+MFA 输入框（`MfaCard.tsx:90-106`）没有 `maxLength`、`name` 与任何 `data-*`：唯一稳定选择器是 `[data-approval-request="true"] input[aria-label="{cards.mfa.label}"]`（zh-CN 文案“验证码”）。
 其余属性：`type="text"`、`inputMode="numeric"`、`autoComplete="one-time-code"`、`placeholder={cards.mfa.placeholder}`、`disabled={busy}`，值是本地受控 state；Enter 触发 `preventDefault()` + 提交。
 `hint`（`localizeVerificationHint`，缺省 `cards.mfa.hint`）只在非只读时渲染。
 
@@ -143,7 +148,7 @@ MFA 输入框（`MfaCard.tsx:90-106`）没有 `maxLength`、`name` 与任何 `da
 ### 锁定后实时 dock 卸载（断言须知）
 
 `status === 'locked'` 的 verify 响应会带 `security_event`（`code`/`reason` 由 `securityFacts` 从顶层或 `failure` 取，`actions.ts:650-658`）与终态 `action_settled`（`actions.ts:661-668`）。
-`settleAction` 对终态清除同 `actionId` 的 `pendingAction`（`agent-stream-reducer.ts:319-343`），二者在同一批事件里折叠，故 `MfaCard` 的 `data-mfa-locked` / `cards.terminal.locked` 分支在实时流程中不会上屏——实时可见证据是「dock 整体消失」加一条 `role:'system'` 气泡（`securityNotice` → `chat.error.actionLocked`）。
+`settleAction` 对终态清除同 `actionId` 的 `pendingAction`（`agent-stream-reducer.ts:319-343`），二者在同一批事件里折叠，故 `MfaCard` 的 `data-mfa-locked` / `cards.terminal.locked` 分支在实时流程中不会上屏——实时可见证据是“dock 整体消失”加一条 `role:'system'` 气泡（`securityNotice` → `chat.error.actionLocked`）。
 `data-approval-locked` 只出现在只读 `ApprovalRecord` 上（`data-status="locked"`），来源两处：
 实时转录里的内联 `mfa`/`confirmation` 卡（若存在）由 `settleAction` 在同一批事件里打上 `status:'locked'`（`agent-stream-reducer.ts:278-281`），因此**当内联卡存在时它会在实时流程中上屏**；
 内联卡是否在实时流程里存在取决于 `mfa_required` 的 `attachPlanDecisionRecord`——只有当某条消息的 `plan` 卡里有节点 `output.pendingActionId === actionId` 时才会附加（`agent-stream-reducer.ts:366-375`），不经过计划的直接工具调用没有内联卡。
@@ -154,7 +159,7 @@ MFA 输入框（`MfaCard.tsx:90-106`）没有 `maxLength`、`name` 与任何 `da
 安全与拒绝类文本的唯一收口点是 `lib/public-text.ts`（`isInternalDiagnostic`、`safePublicText`、`securityNotice`）。
 `securityNotice(eventOrFacts, t)` 依服务端权威 `code`/`reason` 映射：锁定与次数耗尽 → `chat.error.actionLocked`；可重试且带 `attemptsLeft` → `chat.error.verificationRemaining {count}`；`circuit_open`/`mfa_session_locked` → `chat.error.securityLocked`；其余（含未登记事件、无 `code`/`reason` 者）→ `chat.error.securityDenied`；返回值恒为非空文本。
 `securityNotice` 只读 `code`/`reason`/`attemptsLeft` 三个字段；输入类型声明的 `kind`/`maxAttempts` 从不被读取，传 `kind` 对渲染无影响。
-缺 `attemptsLeft` 的 `MFA_FAILED`/`mfa_code_invalid` 按 `count = 0` 渲染，即「剩余 0 次」。
+缺 `attemptsLeft` 的 `MFA_FAILED`/`mfa_code_invalid` 按 `count = 0` 渲染，即“剩余 0 次”。
 工具行文字只由 `publicToolSummary(event, t)` 生成，其错误分支经 `publicToolError(event.summary, t, 'chat.error.toolFailed', event.errorCode, event.errorParams)`（`lib/tool-feedback.ts`）；原始 `summary`/`debugDetail` 只出现在开发者模式诊断块。
 `PUBLIC_ERROR_CODES` 已含 `MFA_LOCKED → chat.error.actionLocked`、`CIRCUIT_OPEN → chat.error.securityLocked`、`MFA_FAILED → chat.error.verificationFailed`；内部标记、原始 JSON 与堆栈在登记表匹配之前被拦下。
 `status==='blocked'` 且无 `actionId` 时状态标签换成 `chat.activity.status.notExecuted`、摘要换成 `chat.error.operationNotStarted`。
@@ -164,7 +169,7 @@ MFA 输入框（`MfaCard.tsx:90-106`）没有 `maxLength`、`name` 与任何 `da
 ### 缺省回落矩阵（`chat.error.toolFailed` vs `chat.error.request`）
 
 识别是逐字相等：只有 `message` 命中 `PUBLIC_BUSINESS_ERRORS` 或验证码正则才给出专用文案；锁定句只由 `MFA_LOCKED`/`CIRCUIT_OPEN` 等错误码映射得到。
-`message` 缺失或空串直接走缺省回落，故「没有 message」与「message 未登记」得到同一句通用文案。
+`message` 缺失或空串直接走缺省回落，故“没有 message”与“message 未登记”得到同一句通用文案。
 能渲染 `chat.error.toolFailed` 的站点是 `cards/ErrorCard`（`ChatCard.type==='error'`）、`cards/MfaCard`（`failed` 的 `statusMessage`）、`cards/ApprovalRecord`（`failed`）、`cards/ConfirmationCard`（终态 `failed` 的 `reason`）、`ToolEventList`（`error` 分支）、`banking/AgentTaskTimeline`（失败计划节点）；`ChatWindow` 顶部错误横幅的回落键是 `chat.error.request`，永远不会显示该句。
 `MfaCard` 与 `ConfirmationCard` 的错误徽标使用 `localizeChatError`，未登记字符串原样显示。
 `ErrorCard` 的 `detail` 属性没有调用方传入——`CardRenderer` 只传 `message` 与 `code`。
@@ -186,11 +191,11 @@ MFA 输入框（`MfaCard.tsx:90-106`）没有 `maxLength`、`name` 与任何 `da
 
 ## 锁定（`status:'locked'`）后的可见状态
 
-`settleAction` 把内联 `mfa` 卡片打成 `{status: event.status, message: event.message}`，`confirmation` 卡片把 `status`（必要时 `message`）写进 `action`——`message` 只经开发者模式诊断块可见。
+`settleAction` 把内联 `mfa` 卡片打成 `{status: event.status, message: event.message}`，`confirmation` 卡片把 `status`（`message` 已提供时）写进 `action`——`message` 只经开发者模式诊断块可见。
 同一 `actionId` 的工具行被改成 `error`，但不写入结算文本：改为携带结构化事实——保留该行已有 `errorCode`（网关的 `MFA_LOCKED`/`CIRCUIT_OPEN`），缺失时按 `locked` 补 `MFA_LOCKED`；`publicToolSummary` 因此渲染 `chat.error.actionLocked` 或 `chat.error.securityLocked`，而非 `chat.error.toolFailed`。
 `upsertToolEvent` 用 `{...previous, ...next}` 合并、`toolActivity` 取每组最新一条，均不裁剪 `errorCode`/`errorParams`。
 终态清除 `pendingAction`，底部 `ApprovalRequest` 卸载；内联 `mfa` 卡改由 `cards/ApprovalRecord` 渲染 `chat.approval.status.locked`（验证已锁定）。
-锁定态的三段文案在 `MfaCard` 与 `ApprovalRecord` 上一致：原因 `securityNotice({code:'MFA_LOCKED', reason:'mfa_attempts_exhausted'})` → `chat.error.actionLocked`（含「请在安全中心解除限制后重新发起操作」）；状态 `cards.terminal.locked` / `chat.approval.status.locked`；解锁入口 `Link href="/security"`（标签 `pages.security.title`，支持句 `pages.security.unlockDescription`）。
+锁定态的三段文案在 `MfaCard` 与 `ApprovalRecord` 上一致：原因 `securityNotice({code:'MFA_LOCKED', reason:'mfa_attempts_exhausted'})` → `chat.error.actionLocked`（含“请在安全中心解除限制后重新发起操作”）；状态 `cards.terminal.locked` / `chat.approval.status.locked`；解锁入口 `Link href="/security"`（标签 `pages.security.title`，支持句 `pages.security.unlockDescription`）。
 锁定态不渲染验证码输入框、提交按钮或重试入口：`MfaCard` 的 `readOnly` 覆盖终态，`ApprovalRecord` 只渲染文本与安全中心链接。
 
 ## 已知问题
@@ -212,18 +217,18 @@ MFA 输入框（`MfaCard.tsx:90-106`）没有 `maxLength`、`name` 与任何 `da
 唯一的 `setTimeout` 是两处一次性中止上限，不重发请求：
 `history-request.ts` 的 `setTimeout(cancel, 5000)`（`requestLatestHistory`），
 `actions.ts` 的 `setTimeout(cancel, PENDING_ACTION_READ_TIMEOUT_MS)`（`PENDING_ACTION_READ_TIMEOUT_MS = 5000`，挂载恢复 `GET /api/actions`）。
-两处都将「取消」竞态成空结果（`kind:'failed'` / `[]`），不会产生第二个请求。
+两处都将“取消”竞态成空结果（`kind:'failed'` / `[]`），不会产生第二个请求。
 
 一次对话回合的请求顺序：`POST /api/chat`（`sendChatTurn`：`Accept: text/event-stream` + `readSseStream` 逐帧折叠）→
 仅当流被判定中断（`done` 前缺 `message_end` 或读取抛错）才追加一次 `GET /api/chat/history`（`requestLatestHistory`，上限 5000ms）。
 挂载时（服务端已传入 `initialHistory`，客户端不重复拉历史）：`GET /api/actions`（`fetchPendingActions`），有 `taskId` 时另加 `GET /api/tasks/:id`（`fetchTaskPlan`）。
 `controlTask` 先 `POST /api/tasks/:id` 再 `GET /api/actions`，共两次。
 `confirm`/`verify`/`cancel`/`recover` 各是一次 `POST /api/actions/:id/*`。
-分页 `GET /api/chat/history?cursor=…` 只在用户点击「加载更早」时发起。
+分页 `GET /api/chat/history?cursor=…` 只在用户点击“加载更早”时发起。
 
 `POST /api/chat` 与操作类 POST 没有客户端超时，也没有 `AbortController`（`pull` 里传的是 `new AbortController().signal`，永不中止）；
-`AbortController` 只用于历史分页与挂载恢复读取，且卸载时只中止这两类读取，不中止正在进行的回合。
-`POST /api/schedules/tick` 不由任何组件调用（只由 `app/schedules/page.tsx` 的「检查到期」按钮触发）。
+`AbortController` 只用于历史分页与挂载恢复读取，且卸载时只中止这两类读取，不中止正在执行的回合。
+`POST /api/schedules/tick` 不由任何组件调用（只由 `app/schedules/page.tsx` 的“检查到期”按钮触发）。
 
 ## 测试定位（DOM 标记）
 

@@ -149,6 +149,16 @@ export async function withDb<T>(fn: (db: PrismaClient) => Promise<T>): Promise<T
 }
 
 /** Read a rendered `CardTile`'s `<dt>/<dd>` rows (`账户余额` / `可用余额` / credit rows). */
+async function revealCardDetails(page: Page, cardId: string): Promise<void> {
+  const tile = page.locator(`[data-card-id="${cardId}"]`).first();
+  const history = page.locator('[data-card-history]');
+  if (!await tile.isVisible() && await history.count() && await history.getAttribute('open') === null) {
+    await history.locator(':scope > summary').click();
+  }
+  const details = tile.locator('[data-card-details]');
+  if (await details.count() && await details.getAttribute('open') === null) await details.locator(':scope > summary').click();
+}
+
 export async function readCardTileRows(page: Page, cardId: string): Promise<Record<string, string>> {
   return page.locator(`[data-card-id="${cardId}"]`).first().evaluate((tile) => {
     const rows: Record<string, string> = {};
@@ -163,6 +173,7 @@ export async function readCardTileRows(page: Page, cardId: string): Promise<Reco
 
 /** The whole rendered text of one `CardTile` (labels rendered as `<span>`, e.g. 关联账户 / 月限额). */
 export async function readCardTileText(page: Page, cardId: string): Promise<string> {
+  await revealCardDetails(page, cardId);
   return (await page.locator(`[data-card-id="${cardId}"]`).first().innerText()).replace(/\s+/g, ' ');
 }
 
@@ -455,7 +466,10 @@ export function assertVirtualCardTile(
   }
   // SUPERSEDED LABELS — `CardTile` renders 账户余额 / 可用余额 now. A tile that still shows the retired
   // 账户可用余额 / 当前可支付金额 rows is presenting a superseded contract and must fail immediately.
-  for (const retiredLabel of [CARD_LABEL_RETIRED.accountAvailable, CARD_LABEL_RETIRED.payableAmount]) {
+  if (rows[CARD_LABEL_RETIRED.payableAmount] !== undefined && rows[CARD_LABEL_RETIRED.payableAmount] !== formatCNY(expected.payableAmount)) {
+    throw new Error(`虚拟卡 ${cardId} 主金额与实际可消费余额不一致：${JSON.stringify(rows)}`);
+  }
+  for (const retiredLabel of [CARD_LABEL_RETIRED.accountAvailable]) {
     if (rows[retiredLabel] !== undefined) {
       throw new Error(`虚拟卡 ${cardId} 不应再渲染废弃标签「${retiredLabel}」行，实际 ${JSON.stringify(rows)}`);
     }
@@ -560,7 +574,17 @@ async function submitConsume(page: Page, input: ConsumeInput): Promise<void> {
   await form.locator('input[name="amount"]').fill(input.amount);
   await form.locator('input[name="category"]').fill(input.category);
   await form.locator('input[name="merchant"]').fill(input.merchant);
-  await form.getByRole('button', { name: '提交消费', exact: true }).click();
+  await form.getByRole('button', { name: '核对消费', exact: true }).click();
+  const verification = page.locator('[data-card-consume-verification]').first();
+  await waitFor(async () => await verification.count() > 0 ||
+    await page.locator('[data-card-consume-dialog] p[role="alert"]').count() > 0, {
+    timeoutMs: 30_000, intervalMs: 200, description: '消费确认验证或参数错误',
+  });
+  if (await verification.count()) {
+    await verification.locator('input[type="checkbox"]').check();
+    await verification.locator('input[name="code"]').fill('123456');
+    await verification.getByRole('button', { name: '验证并确认', exact: true }).click();
+  }
 }
 
 /** Render the dialog's consume records as `merchant · category · amount` lines. */

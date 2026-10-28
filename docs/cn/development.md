@@ -253,8 +253,8 @@ ESLint、Vitest 和 Playwright 用于代码检查与验收。
 
 ## 依赖版本与升级
 
-当前版本核对日期为 `2026-10-14`。
-项目固定经过本次迁移的版本，安装时使用锁文件。
+当前版本核对日期为 `2026-10-29`。
+项目固定已验证的依赖版本，安装时使用锁文件。
 后续升级需要重新验证接口和数据库事务。
 
 | 依赖 | 固定版本 |
@@ -262,7 +262,7 @@ ESLint、Vitest 和 Playwright 用于代码检查与验收。
 | Pi Core、Pi AI、Pi Coding Agent | `1.2.0` |
 | Next.js、环境加载器及 Next.js ESLint 插件 | `16.4.3` |
 | React、React DOM | `19.3.0` |
-| Prisma CLI、运行时及 SQLite 适配器 | `7.10.0` |
+| Prisma CLI、运行时及 SQLite 适配器 | `7.10.1` |
 | TypeScript 编译器 | `7.0.2` |
 | TypeScript 程序接口适配包 | `@typescript/typescript6@6.0.2` |
 | Vitest | `5.0.4` |
@@ -273,7 +273,10 @@ ESLint、Vitest 和 Playwright 用于代码检查与验收。
 完整版本见 [package.json](../../package.json)。
 传递依赖版本见 [pnpm-lock.yaml](../../pnpm-lock.yaml)。
 Prisma 8 的 RC 属于预发布版本。
-项目采用稳定版本 `7.10.0`。
+项目采用稳定版本 `7.10.1`。
+传递依赖的固定替换配置见 [pnpm-workspace.yaml](../../pnpm-workspace.yaml)。
+升级时同时检查该配置和锁文件，并执行 `pnpm audit`。
+审计通过只表示当次漏洞数据库没有报告命中的已知漏洞。
 
 TypeScript 7.0 提供原生编译器 `tsc`。
 该版本尚未提供稳定程序接口。
@@ -332,6 +335,7 @@ Next.js 和项目命令行入口自动加载这个文件。
 | `LLM_REQUEST_TIMEOUT_MS` | 在线请求超时。默认 30000 毫秒，范围为 1000 至 120000 毫秒。 |
 | `DATABASE_URL` | SQLite 数据库地址。未设置时使用 `prisma/dev.db`。 |
 | `DEMO_USER_ID` | 模拟用户标识。默认值为 `user_liming`。 |
+| `BANKING_ALLOWED_ORIGINS` | 逗号分隔的完整可信地址。未设置时仅允许本机地址。 |
 | `MFA_MODE` | 未设置或设为 `demo` 时使用模拟多因子认证。其他值需要认证适配器。 |
 
 DeepSeek 配置示例如下：
@@ -356,6 +360,46 @@ DEEPSEEK_API_KEY=<your-api-key>
 
 模拟多因子认证使用验证码 `123456`，不发送短信。
 模型请求和金融命令的重试规则见[持久化与恢复](agent-durability.md)。
+
+## 可信访问地址
+
+本地开发可使用 `localhost`、`127.0.0.1` 或 `[::1]`。
+使用其他域名时，在服务端环境中设置完整地址。
+例如，公开入口为 `https://banking.example.com`：
+
+```dotenv
+BANKING_ALLOWED_ORIGINS=https://banking.example.com
+```
+
+地址包含协议及非默认端口，不包含路径、查询参数或片段。
+多个地址用逗号分隔；配置后也需显式列出仍要使用的本机地址。
+例如，同时允许公开入口与本机调试：
+
+```dotenv
+BANKING_ALLOWED_ORIGINS=https://banking.example.com,http://localhost:3000
+```
+
+反向代理需保留公开入口的 `Host`。
+HTTPS 可在代理层终止，代理到应用之间可使用 HTTP。
+未知域名被拒绝时，检查配置和代理的 Host 转发。
+拒绝规则覆盖页面、API 和静态资源，详见[安全设计](security.md#http-请求边界)。
+可信地址配置不提供用户登录或角色分权。
+
+## 单轮模型调用预算
+
+一次用户输入的模型请求共用以下上限。
+
+| 环境变量 | 默认值 | 含义 |
+| --- | --- | --- |
+| `AGENT_MAX_MODEL_REQUESTS` | `32` | 模型请求及实际 HTTP 重试的总次数 |
+| `AGENT_MAX_MODEL_TOKENS` | `2000000` | 输入与最大输出的累计预留 token 数 |
+| `AGENT_MAX_TURN_MS` | `300000` | 自本轮首次模型调用开始的总时长，单位为毫秒 |
+
+上限使用正整数；无效配置回退到默认值。
+摘要、回复修复和重试均计入总量。
+token 预留是保守上限，与供应商的实际计费数量不同。
+单次传输超时仍由 `LLM_REQUEST_TIMEOUT_MS` 控制。
+持久化、恢复及收紧配置的规则见[单轮模型调用预算](agent-durability.md#单轮模型调用预算)。
 
 ## 数据库管理
 

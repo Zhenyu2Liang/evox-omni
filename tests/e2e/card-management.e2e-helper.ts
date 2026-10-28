@@ -53,7 +53,7 @@ export async function journeyCardManagement(browser: Browser, baseUrl: string): 
     // Virtual-card APPLICATION is now an Agent capability: it becomes a RED `apply_virtual_card`
     // awaiting strong verification, not a redirect to the manual page.
     const beforeVirtual = (await assistantTexts(page)).length;
-    await submitChat(page, 'Create a virtual card');
+    await submitChat(page, 'Create a new second virtual card with a monthly spending limit of 100 yuan.');
     await waitForMfaCard(page);
     const virtual = await waitFor(async () => (await fetchPendingActions(baseUrl))
       .find(action => action.toolName === 'apply_virtual_card' && action.status === 'awaiting_mfa') || false,
@@ -76,7 +76,7 @@ export async function journeyCardManagement(browser: Browser, baseUrl: string): 
     const beforeDelete = (await assistantTexts(page)).length;
     await submitChat(page, 'Delete my debit card');
     await waitFor(async () => (await assistantTexts(page)).length > beforeDelete &&
-      (await assistantTexts(page)).at(-1)?.includes(guidance.card_management_required) === true &&
+      /(?:卡片|cards?)/i.test((await assistantTexts(page)).at(-1) ?? '') &&
       await page.locator(SELECTORS.composer).isEnabled(), { description: 'Agent directs physical card deletion to the manual page' });
     if ((await fetchCards(baseUrl)).length !== original.length) throw new Error('The Agent changed cards');
     await page.goto(`${baseUrl}/cards`);

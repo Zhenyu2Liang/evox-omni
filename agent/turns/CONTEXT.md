@@ -11,8 +11,12 @@ It also has NO banking-fee concept: no fee argument, fee field, fee rule constan
 
 ## Ownership
 
-- `buffer.current` owns the current assistant prose only. Complete prose remains
-  verbatim, subject to whole-protocol format validation and bounded model repair.
+- `operationClaim`, `balanceClaim` and `operationExplanation` retain presentation-check state. Withhold unsupported claims before public text deltas, keep independent explanation, and use `../reply-safety.ts` for authoritative replacement.
+- `live-prompt.ts` sequences the controlled-write correction before format repair. If correction ends with `needsInput:true`, `../write-continuation.ts` retains the concrete question with the true unsubmitted state; it never supplies the missing choice.
+- `server-reply.ts` clears claim flags before publishing a server-owned reply and appends that reply to model memory. Raw provider candidates remain in the journal.
+- `buffer.current` owns the current assistant prose only. Independent explanation remains intact. Current-operation and balance assertions pass through
+  `../reply-safety.ts` and use server evidence; internal enum labels use business wording.
+  Whole-protocol format validation and bounded model repair remain separate.
 - `buffer.assistants` is the ordered list of new presentation messages, including
   independent `role: tool` entries. Its historical name does not restrict message roles.
 - Each tool entry has empty content, one tool event, and only its own result or

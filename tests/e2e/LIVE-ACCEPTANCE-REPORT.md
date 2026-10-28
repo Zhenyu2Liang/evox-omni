@@ -1,10 +1,55 @@
-# LIVE acceptance — virtual-card, card-consumption and card-loss → replace evidence
+# 真实模型验收证据
 
-Real `LLM_MODE=live` model · real headless Chrome · real `next dev` · isolated DB per entry.
-No mock, no response interception, no SDK/HTTP call standing in for a frontend action.
+## 安全修复验证
 
-This file records the current state of the evidence only.
-History lives in Git (`git log -p -- tests/e2e/LIVE-ACCEPTANCE-REPORT.md`).
+执行日期为 `2026-10-28`，文档核对日期为 `2026-10-29`。
+银行和 MFA 均使用隔离数据库中的模拟服务。
+真实模型为现有配置的 DeepSeek / `deepseek-flash`。
+浏览器验收使用真实 Chrome 和 `next start` 生产服务。
+
+产品树包含当时的未提交修改，不能只用 HEAD 表示。
+最终运行代码的 476 个文件记录在[文件清单](../../.local/security-audit/fixes/source-manifest-final.json)中。
+文档核对时，清单中的文件均与工作区一致。
+全量回归后另有 7 个运行代码文件变化，清单见[后续改动](../../.local/security-audit/fixes/post-full-suite-changes.json)。
+
+| 验证范围 | 结果 | 本地证据 |
+| --- | --- | --- |
+| 全量离线回归 | 343 个文件、3276 项通过；不包含末尾改动 | [全量日志](../../.local/security-audit/fixes/full-frozen.log) |
+| 末尾改动的专项回归 | 154 项展示与业务回归、114 项状态与持久化回归通过；两组有重叠 | [展示回归](../../.local/security-audit/fixes/final-presentation-regression.log)、[状态回归](../../.local/security-audit/fixes/action-status-regression.log) |
+| 真实模型业务验收 | 29 个具名场景逐项复测通过 | [场景汇总](../../.local/security-audit/fixes/classified-live-results.json) |
+| 最终构建的关键场景 | 姓名转账、手机号转账和“B”选择场景通过 | [最终复测](../../.local/security-audit/fixes/live-final-check/isolated-live-results.json) |
+| 对抗输入 | 10 组均未造成未授权业务数据变更 | [对抗结果](../../.local/security-audit/fixes/adversarial-results.json) |
+| 同机双服务器 HTTP 竞争 | 8 笔消费恰好 1 笔入账；16 次重试均返回原回执；提交后重启不重复扣款 | [HTTP 结果](../../.local/security-audit/fixes/http-race-results.json) |
+| SDK 跨进程竞争 | 3 组各 8 个进程，覆盖回执重放、余额不足和分类限额 | [竞争结果](../../.local/security-audit/fixes/race-results.json) |
+| 访问域名边界 | 恶意 Host 写入、读取页面、API 和静态资源均返回 403 | [Host 结果](../../.local/security-audit/fixes/host-results.json) |
+| 类型、构建与依赖 | 类型检查、生产构建和修改文件的 ESLint 通过；当次依赖审计为 0 | [类型检查](../../.local/security-audit/fixes/typecheck-final.log)、[构建](../../.local/security-audit/fixes/build-acceptance-final.log)、[ESLint](../../.local/security-audit/fixes/lint-last.log)、[依赖审计](../../.local/security-audit/fixes/dependency-audit-final.json) |
+
+29 个场景是逐项修复后的最新记录汇总。
+这些记录不是同一最终构建的一次全套运行。
+最终构建另跑上述 3 个关键场景。
+取消后按掩码号与完整手机号重发，在 4 套全新数据库中通过。
+每次都创建真实待确认操作，取消后余额与流水均不变。
+
+另有 1 组[故障注入验证](../../.local/security-audit/fixes/forced-declaration-live-results.json)。
+首条错误提交表述由脚本生成，后续 4 次请求调用真实模型。
+其中恰好 1 次要求 `describe_turn`，最终只生成 1 条待确认转账。
+余额和流水保持不变；该测试属于混合故障注入证据。
+
+原始日志保留各轮失败与修复后的结果。
+`live-status-1` 使用旧验收构建，不计入最新修复的验证。
+本组未复现绕过确认、验证码或重复扣款。
+范围不包括真实银行、真实微信投递、多主机部署和持续负载。
+
+上述原始证据保存在本地 `.local/security-audit/fixes/`，默认不随仓库分发。
+缺少原始文件时，该表只说明当时执行范围，不能作为可复验的认证。
+重新执行的方法见[测试指南](../../docs/cn/test-cases.md#安全修复回归)。
+
+## 较早分组验收
+
+下列内容保留各组原始记录，只适用于各自标注的产品树。
+这些记录使用真实在线模型、Chrome、`next dev` 和隔离数据库。
+各组没有以 SDK 或 HTTP 调用代替前端操作。
+下文的 HEAD 差异与未验证项按原记录范围理解。
 
 ## What each evidence set certifies
 
@@ -397,7 +442,7 @@ front-end `/cards` consume legs interleaved at **0** model turns:
 derived at runtime — never an invented number.
 
 **Turn 5 is the capability proof**: it produces a real `replace_card {"cardId":"card_credit"}` and a RED MFA panel,
-and no assistant turn in rounds 3–8 answers it with 「补办实体信用卡和借记卡只能在「卡片」页面手动办理」.
+and no assistant turn in rounds 3–8 answers it with `「补办实体信用卡和借记卡只能在「卡片」页面手动办理」`.
 **Turn 6 is accepted in two shapes and never grows the card count**: round 7 answered prose-only (`describe_turn` +
 `get_cards`, `finalTurn.action === undefined`, `6 → 6`); round 8 re-emitted `replace_card`, parked a second
 `PendingAction`, rendered a real panel, and replayed the existing replacement instead of issuing a second card —
@@ -691,7 +736,7 @@ shares `3934.334266`, `principalAmountMinor 395716`, `realizedProfitMinor 6073`,
 Round 1 asked it in two sentences, round 2 in three (product, basis) — the wording is model output, the refusal to act
 is the product behaviour.
 
-**Ledger shape of the whole flow**: exactly three investment rows — `−1000.00` (subscribing 稳健理财A, category `投资`),
+**Ledger shape of the whole flow**: exactly three investment rows — `−1000.00` (subscribing `稳健理财A`, category `投资`),
 `+2000.00` (redeem) and `+103.57` (redeem) — three `AuditLog` rows and three `executed` `PendingAction` rows. The bare
 number adds none of them.
 
@@ -734,9 +779,9 @@ terminal lock → reload `/agent` → `/security`.
 - `#3` → `status='locked'`, top-level `code='CIRCUIT_OPEN'`,
   `failure={code:'MFA_LOCKED', reason:'mfa_attempts_exhausted', attemptsUsed:3, attemptsLeft:0, maxAttempts:3}`.
 
-**Remaining-attempt copy never renders zero**: after `#1`/`#2` the dock's counter line reads 「验证失败，已尝试 1 次。」 /
-「验证失败，已尝试 2 次。」, and after `#3` the read-only receipt's current stage reads 「当前验证已锁定」. The page never
-prints 「还可尝试 0 次」 (`zeroAttemptsCopyHits = 0`), so `lib/public-text.ts#securityNotice`'s single `?? 0` default is
+**Remaining-attempt copy never renders zero**: after `#1`/`#2` the dock's counter line reads `「验证失败，已尝试 1 次。」` /
+`「验证失败，已尝试 2 次。」`, and after `#3` the read-only receipt's current stage reads `「当前验证已锁定」`. The page never
+prints `「还可尝试 0 次」` (`zeroAttemptsCopyHits = 0`), so `lib/public-text.ts#securityNotice`'s single `?? 0` default is
 not reached on this path.
 
 **Round 1 and round 2 differ in one copy mapping** — inside the dock, after a wrong code:
@@ -760,7 +805,7 @@ The only place that marker does appear is the protocol layer the browser never r
 
 **After a reload of `/agent`** the lock persists: `[data-approval-history="true"][data-status="locked"]` with
 `[data-approval-locked="true"]` (`lockedReceipts = 1`), one `[data-approval-stage="current"][data-stage-status="locked"]`
-row (`lockedStages = 1`), `[data-approval-request="true"]` count `0`, `mfaInput` count `0`, no 「确认」/「验证」 button
+row (`lockedStages = 1`), `[data-approval-request="true"]` count `0`, `mfaInput` count `0`, no `「确认」`/`「验证」` button
 in the dock, `PendingAction.status` still `locked`.
 
 **`/security`** renders `[data-unlock-panel][data-unlock-locked="true"][data-unlock-failures="3"]
@@ -797,7 +842,7 @@ ledger row, so the panel is a real pre-execution panel.
 
 **Leg 2 — a near-miss number is refused.** `13911110002` shares the visible ends with the seeded contact yet produces no
 confirm card, **no new `transfer_money` `PendingAction`** (`[]`) and no movement; `search_contact` answers
-`{"ok":true,"data":[]}` with 「未找到匹配…」. Identity matching is on the complete number, not on a prefix/suffix shape.
+`{"ok":true,"data":[]}` with `「未找到匹配…」`. Identity matching is on the complete number, not on a prefix/suffix shape.
 
 **Leg 3 — a card tail resolves without a full number.** Tail `6688` produces a confirm card whose 卡片 field reads
 `信用卡 ****6688`, matching the last four of `Card.numberFull` in the DB — the scenario never sends the full number.
@@ -832,27 +877,27 @@ Scenario id `lJ` (`lJ-live-debit-card-linked-account-balance`). One process per 
 `accountAvailableBalance = 23580.00`, `payableAmount = 23580.00`, `usable = true` and **no credit fields**;
 `/cards` renders 关联账户 `活期账户 · ****8821`, 账户余额 `¥23,580.00`, 可用余额 `¥23,580.00`, status 正常.
 `card_virtual` shows the same `¥23,580.00` account balance with 可用余额 `¥5,000.00` (its monthly limit);
-`card_credit` shows only 可用额度 `¥18,000.00` with no account row, and 「授信额度」 appears nowhere on the page.
+`card_credit` shows only 可用额度 `¥18,000.00` with no account row, and `「授信额度」` appears nowhere on the page.
 
-**A second virtual card on the same account (`02-lJ-second-virtual-card.png`)** — 「请帮我新开一张虚拟卡，月消费限额设为100元」
+**A second virtual card on the same account (`02-lJ-second-virtual-card.png`)** — `「请帮我新开一张虚拟卡，月消费限额设为100元」`
 (resolved through a real RED panel + `123456`) → all three cards then show the identical account balance `¥23,580.00`,
 the new card's 可用余额 is `¥100.00`, and `checkingBalance` / `totalAssets` do not move: opening a card moves no money
 and the shared account is counted once.
 
 **After a real transfer (`03-lJ-transfer-cards.png`, `04-lJ-transfer-overview.png`)** —
-「给张伟转12.34元」 → `transfer_money {"contactId":"contact_zhangwei","amount":"12.34"}` → balance `23580.00` →
+`「给张伟转12.34元」` → `transfer_money {"contactId":"contact_zhangwei","amount":"12.34"}` → balance `23580.00` →
 `23567.66`. The same `¥23,567.66` then appears on every debit/virtual tile, in `GET /api/cards`
 (`accountAvailableBalance = 23567.66`), in `/api/dashboard.checkingBalance` and on `/overview`, while `totalAssets`
 drops by exactly `12.34` — one account, one balance, one deduction.
 
-**A frozen card (`05-lJ-frozen-card.png`)** — 「请把我的借记卡冻结（我确认，可随时解冻）。」 → `status=FROZEN`,
+**A frozen card (`05-lJ-frozen-card.png`)** — `「请把我的借记卡冻结（我确认，可随时解冻）。」` → `status=FROZEN`,
 `usable=false`, and the tile still renders the **real** balance `¥23,567.66` (账户余额 and 可用余额 both `¥23,567.66`)
-with 已冻结 and 「卡片已冻结，暂不可用于消费（余额仍可查看）」; the consume entry is disabled while `card_virtual` stays
+with 已冻结 and `「卡片已冻结，暂不可用于消费（余额仍可查看）」`; the consume entry is disabled while `card_virtual` stays
 usable. Unavailable is not zero.
 
-**A lost card (`06-lJ-lost-virtual-card.png`)** — 「尾号7788的虚拟卡丢失了，请正式挂失，我确认不可撤销。」 → `status=LOST`,
+**A lost card (`06-lJ-lost-virtual-card.png`)** — `「尾号7788的虚拟卡丢失了，请正式挂失，我确认不可撤销。」` → `status=LOST`,
 `usable=false`, balance still `¥23,567.66`, 可用余额 `¥5,000.00`, 已挂失 and
-「卡片已挂失，暂不可用于消费（余额仍可查看）」, consume disabled. The non-`LOST` `CREDIT` available total stays
+`「卡片已挂失，暂不可用于消费（余额仍可查看）」`, consume disabled. The non-`LOST` `CREDIT` available total stays
 `18000.00` and `totalAssets` is unchanged: a terminal card is not counted alongside anything, and 挂失/冻结 move no money.
 
 **Evidence**: `output/playwright/live/lJ-head3ba488a-round1-merged/` and

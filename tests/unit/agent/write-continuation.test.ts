@@ -40,7 +40,7 @@ const DECLARED_TRANSFER_UNSUBMITTED = conversationMessages.declared_unsubmitted.
 function intent(tools: readonly string[], allowProtocolExamples = false): ConversationIntent {
   return {
     id: 'intent-1', revision: 1, purpose: 'operation', requestText: 'request', latestMessage: 'request',
-    allowProtocolExamples, steps: tools.map((tool, index) => ({ key: `step-${index + 1}`, tool })),
+    needsInput: false, allowProtocolExamples, steps: tools.map((tool, index) => ({ key: `step-${index + 1}`, tool })),
   };
 }
 

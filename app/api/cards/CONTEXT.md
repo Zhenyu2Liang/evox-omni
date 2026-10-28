@@ -9,6 +9,7 @@ MFA 验证/取消。每个路由只做「校验入参 → 解析服务端身份 
 
 - `@/banking-sdk`（`banking.card.*`）：读模型、消费扣款、消费流水查询；
 - `@/security/manual-card-management`：手动卡片提案、验证、取消与该命令的审计。
+- `@/security/card-consumption`：消费提案、原操作确认、MFA 与执行回执复用。
 
 身份始终在服务端解析：读接口用 `_lib/session#resolveUserId`，命令接口用 `_lib/session#requireIdentity`
 （固定演示工作区）。Cookie、查询参数或请求体都不能选择用户、会话或他人资源。共享传输设施只来自
@@ -21,7 +22,7 @@ MFA 验证/取消。每个路由只做「校验入参 → 解析服务端身份 
 | `GET /api/cards` | `route.ts` | 无查询参数；返回 `{ ok: true, data: { cards: CardView[] } }`（SDK 读模型）。 |
 | `POST /api/cards` | `route.ts` | 手动新增演示卡片提案（`addDemoCardSchema`，`.strict()`）；返回 `CardChangeResponse`，需后续 MFA 验证才落库。 |
 | `DELETE /api/cards/[id]` | `[id]/route.ts` | 手动删除演示卡片提案（`deleteDemoCardSchema`，`.strict()`）；路径 `id` 由服务端拼入，不接受请求体中的卡片标识。 |
-| `POST /api/cards/[id]/consume` | `[id]/consume/route.ts` | 请求体 `{ amount, category?, merchant?, executionKey? }`；`amount` 为精确 CNY 十进制字符串；记账时间由服务端决定。返回 `ConsumeCardResult`。 |
+| `POST /api/cards/[id]/consume` | `[id]/consume/route.ts` | 首次提交消费参数创建 RED 提案，不扣款。再次携带原参数、`actionId`、`confirmed:true` 与 `code` 才验证执行。返回 `CardConsumptionResponse`，成功后 `result` 为 `ConsumeCardResult`。 |
 | `GET /api/cards/[id]/consumptions` | `[id]/consumptions/route.ts` | 可选 `?limit=`（1–500，共享 `limitQuerySchema`）；返回 `{ ok: true, data: { consumptions: CardConsumptionView[] } }`，最新在前。 |
 | `GET /api/cards/changes` | `changes/route.ts` | 当前工作区仍未完成的卡片变更列表（`CardChange[]`）。 |
 | `POST /api/cards/changes/[id]/verify` | `changes/[id]/verify/route.ts` | 请求体 `{ code }`（`verifyCardChangeSchema`，`.strict()`）；返回 `CardChangeResponse`。 |
@@ -41,14 +42,14 @@ HTTP 200 且 `CardChangeResponse.ok === false`。
 
 `POST /api/cards/[id]/consume` 的请求体**只要出现** `occurredAt` 键（过去、未来、字符串、数字、
 `null` 或格式错误的值一律相同）就以 `AppError('VALIDATION')`（HTTP 400）拒绝，检测发生在路由私有的
-`parseConsumeBody`（在原始请求体上判断键是否存在，再交给共享 `parseBody` 校验）。拒绝在委派 SDK 之前
+`parseConsumeBody`（先由共享 `readJsonBody` 检查请求边界，再在对象上检查键并校验结构）。拒绝在委派 SDK 之前
 发生，因此不会产生任何持久化副作用（无资金变动、无流水行、无 `CardConsumption` 行）。只有「键不存在」
 才被接受。
 
 ## CardView 整对象透传
 
 卡片读模型一律整对象透传：`GET /api/cards` 的 `cards[]`、`POST /api/cards/[id]/consume` 的
-`ConsumeCardResult.card`、手动卡片变更里的 `CardChange.card`，都是 SDK／`security/manual-card-management`
+`CardConsumptionResponse.result.card`、手动卡片变更里的 `CardChange.card`，都是 SDK／`security/manual-card-management`
 直接返回的 `CardView`，交给 `_lib/http#jsonResponse` 时不做任何手写字段投影、改名或收窄。因此下列字段
 原样出现在 HTTP 响应里：`id`、`type`、`network`、`numberMasked`、`status`、`creditLimit`、
 `availableLimit`、`monthlyLimit`、`replacedByCardId`、`linkedAccountId`、`linkedAccountStatus`、

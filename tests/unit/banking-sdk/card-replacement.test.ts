@@ -7,7 +7,7 @@
  *   - `freezeCard`/`unfreezeCard` stay REVERSIBLE and idempotent;
  *   - `replaceCard` succeeds ONLY from `LOST`, rejects a foreign card, mints a NEW card with a fresh
  *     masked number owned by the SAME user and same type+network, carries `monthlyLimitMinor` over,
- *     copies NO per-category limits, sets `replacedByCardId` on the source, leaves the source `LOST`
+ *     inherits per-category limits, sets `replacedByCardId` on the source, leaves the source `LOST`
  *     (not revivable), and is idempotent on a second call; a CREDIT replacement carries over the
  *     SAME already-approved credit limit AND current available limit (no re-approval, inventing
  *     nothing), while a non-credit replacement keeps none;
@@ -112,11 +112,11 @@ describe('banking-sdk · replaceCard eligibility', () => {
 });
 
 describe('banking-sdk · replaceCard mints a NEW linked card', () => {
-  it('mints a fresh-masked card: same owner/type/network, monthly limit carried over, NO per-category limits', async () => {
+  it('mints a fresh-masked card and inherits monthly and category limits without increasing credit', async () => {
     const existingMasks = new Set(
       (await db().card.findMany({ where: { userId: DEMO_USER_ID } })).map((card) => card.numberMasked),
     );
-    // The CREDIT source carries a seeded 娱乐 分类 limit — the replacement must NOT copy it.
+    // The replacement retains the original spending restriction.
     expect(await db().cardLimit.count({ where: { cardId: CREDIT } })).toBe(1);
 
     // Snapshot the source's approved credit BEFORE the loss so the replacement is compared against it.
@@ -142,9 +142,8 @@ describe('banking-sdk · replaceCard mints a NEW linked card', () => {
     expect(replacement.monthlyLimit).toBe('18000.00');
     expect(row.monthlyLimitMinor).toBe(moneyToCents('18000.00'));
 
-    // Per-category limits are NOT copied onto the new card.
-    expect(replacement.limits).toEqual([]);
-    expect(await db().cardLimit.count({ where: { cardId: replacement.id } })).toBe(0);
+    expect(replacement.limits).toEqual([{ category: '娱乐', amount: '3000.00' }]);
+    expect(await db().cardLimit.count({ where: { cardId: replacement.id } })).toBe(1);
 
     // The source records the new card id and STAYS LOST (never revived).
     const source = await db().card.findUniqueOrThrow({ where: { id: CREDIT } });

@@ -2,6 +2,11 @@
 
 ## 范围
 
+预算和回复事实的核心测试位于源码同目录：
+`agent/model-budget.test.ts`、`agent/reply-safety.test.ts`。
+声明约束测试位于 `agent/providers/required-declaration.test.ts`。
+本目录的续写及持久化测试只验证有界纠错，不以模型正文证明操作已提交。
+需要澄清的用例必须检查无新操作，并保留具体问题。
 本目录覆盖确认、验证、取消与计划控制。
 也覆盖工具结果替换、续接失败与模型适配。
 
@@ -11,26 +16,26 @@
 - `task-cancel-revokes.test.ts` 检查取消与已执行事实。
 - `message-normalize.test.ts` 检查工具结果组与后续历史。
 - `run-turn-failure.test.ts` 用 `vi.mock('@/agent/banking-agent')` 替换 `createBankingAgent` 工厂（安全网关、工具注册表、SDK 与 SQLite 保持真实）检查实际结果与失败续接。
-- `system-prompt.test.ts` 检查系统提示词与工具目录分级一致并保留幻象规则，并断言确认/验证面板只在真实受控写工具结果停放后才存在、无该结果时禁止声称已发起或在等待确认；
-  `system prompt card capability scope` 分组按句扫描 `manual-only` 类语句，断言「人工办理」规则从不套用到已挂失卡的补办（`replace_card`）上，且实体卡人工规则显式限定为全新物理卡记录，同时保留「为挂失卡提供 replace_card」的正向表述。
+- `system-prompt.test.ts` 检查系统提示词与工具目录分级一致并保留幻象规则，并断言确认/验证面板只在真实受控写工具结果停放后才存在、无该结果时不得声称已发起或在等待确认；
+  `system prompt card capability scope` 分组按句扫描 `manual-only` 类语句，断言“人工办理”规则从不套用到已挂失卡的补办（`replace_card`）上，且实体卡人工规则显式限定为全新物理卡记录，同时保留“为挂失卡提供 replace_card”的正向表述。
   面板相关句子以 `prompt.toContain(<英文原句>)` 逐句断言，测试内重复了提示词原句，改动提示词措辞会直接破坏该用例。
 - `card-capability-guidance.test.ts` + `capability-guidance-markers.ts` 检查卡片生命周期能力话术契约：
   用 `fs.readdirSync` 发现 `agent/messages/*.json` 全部语言目录（不硬编码文件名），
   按句断言 `card_management_required` 及同类卡片管理条目不得否认 `apply_virtual_card`（申请/创建/虚拟卡）与 `replace_card`（补办/换卡/替换已挂失卡），
   人工办理规则必须显式限定在全新/新增/删除的实体卡上（不得含 `虚拟`/`补办`），
-  该用例只约束「不得否认」与「人工规则须限定范围」，不规定修复后的完整措辞，也不要求模板为 `补办` 做广告；能力正向说明由 `agent/system-prompt.ts` 承担，
+  该用例只约束“不得否认”与“人工规则须限定范围”，不规定修复后的完整措辞；能力正向说明由 `agent/system-prompt.ts` 承担，
   并用 `renderConversationGuidance('card_management_required')` 与目录原文等值校验，确保断言针对服务端真正渲染的字符串。
   `capability-guidance-markers.ts` 只做纯文本分类（分句、否定辖域、标记词表），不复刻产品逻辑，被上述两个测试共用。
 - 本目录没有用例让 `scriptedProvider` 走生产 `runTurn`：`run-turn-failure.test.ts` 替换运行时工厂，`write-continuation*.test.ts` 用假 `BankingAgentRuntime` 且不碰数据库。该骨架见 [../../integration/CONTEXT.md](../../integration/CONTEXT.md)。
 - `read-tool-boundaries.test.ts` 检查读取工具参数校验与模型可见错误信封。
 - `durable-reply-repair.test.ts` 检查回复修复的持久续接、崩溃不重复修复与凭据脱敏。
-- `durable-advice-context.test.ts` 检查授权恢复时建议用途与来源请求一致性。
+- `durable-advice-context.test.ts` 检查授权恢复时“建议”用途与来源请求一致性。
 - `recovery-worker.test.ts` 检查恢复主机批处理、关闭与参数校验。
 - `write-continuation.test.ts` 直接检查 `declaredWriteTools`、`hasGateEvent`、`hasWriteEvidence`、`pendingDeclaredWrites`，
   并用假 `BankingAgentRuntime` 驱动声明写续接的一次性预算：预算先于模型请求持久化、只续接一次、
   同一候选二次调用为空操作、guidance 与协议信封不消耗预算、仍无写证据时改发服务端 `declared_unsubmitted` 文本。
 - `write-continuation-durable.test.ts` 用假运行时证明 `continueDurableRun` 的 `calls.length === 0` 分支
-  对已完成却未提交的声明写执行同一条有界续接策略，并保持「预算先于请求」的持久化顺序。
+  对已完成却未提交的声明写执行同一条有界续接策略，并保持“预算先于请求”的持久化顺序。
 - `providers/` 检查离线响应、live 适配配置、流完成证据与模块边界。
 
 ## 证据与隔离
@@ -39,7 +44,7 @@
 只检查模型适配配置不等于完成 live 请求验收。
 结果文字必须区分服务端结果与模型输出。
 `provider-live.test.ts` 仅覆盖模型解析/身份/密钥，不覆盖回复格式或面板语义。
-`write-continuation*.test.ts` 注入「只声称面板、却无受控写工具调用」的模型输出，
+`write-continuation*.test.ts` 注入“只声称面板、却无受控写工具调用”的模型输出，
 验证服务端的有界续接与 `declared_unsubmitted` 纠正文案，并断言伪造面板文案不会被发布；
 它们不证明真实 live 模型不再生成该散文，真实模型稳定性仍以 live 验收为准。
 `providers/provider-mock.test.ts` 的面板场景须先有真实停放调用。

@@ -13,6 +13,7 @@
 import { NextResponse } from 'next/server';
 import type { z } from 'zod';
 import { AppError, type ErrorCode } from '@/lib/errors';
+import { trustedRequestOrigin } from '@/lib/request-origin';
 import type { ApiFailure, ApiSuccess } from './types';
 
 /** Frozen mapping from `AppError.code` to the HTTP status the edge returns. */
@@ -65,17 +66,59 @@ export function errorResponse(e: unknown): NextResponse {
   return NextResponse.json(body, { status });
 }
 
+/** Reject browser cross-site writes before reading a body or resolving a workspace. */
+export function assertSameOriginWrite(req: Request): void {
+  const write = !['GET', 'HEAD', 'OPTIONS'].includes(req.method.toUpperCase());
+  const origin = req.headers.get('origin');
+  const expectedOrigin = trustedRequestOrigin(req, write ? origin : null);
+  if (!write) return;
+  if (req.headers.get('sec-fetch-site') === 'cross-site' ||
+      origin !== null && origin !== expectedOrigin) {
+    throw new AppError('SECURITY_DENIED', 'Cross-origin writes are not allowed.');
+  }
+  if (req.body !== null && req.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') {
+    throw new AppError('VALIDATION', 'Content-Type must be application/json.');
+  }
+}
+
+export const MAX_JSON_BODY_BYTES = 64 * 1024;
+
+/** Bound the actual stream; Content-Length alone is attacker-controlled. */
+export async function readJsonBody(req: Request, allowEmpty = false): Promise<unknown> {
+  assertSameOriginWrite(req);
+  if (req.body === null && allowEmpty) return {};
+  if (req.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') {
+    throw new AppError('VALIDATION', 'Content-Type must be application/json.');
+  }
+  const reader = req.body?.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  if (reader) {
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        if (bytes > MAX_JSON_BODY_BYTES) {
+          void reader.cancel().catch(() => {});
+          throw new AppError('VALIDATION', 'Request body exceeds 64 KiB.');
+        }
+        chunks.push(value);
+      }
+    } finally { reader.releaseLock(); }
+  }
+  const raw = Buffer.concat(chunks).toString('utf8');
+  if (allowEmpty && raw.trim() === '') return {};
+  try { return JSON.parse(raw); }
+  catch { throw new AppError('VALIDATION', 'Request body must be valid JSON'); }
+}
+
 /**
  * Parse + validate a JSON request body against a zod schema.
  * Throws `AppError('VALIDATION')` on malformed JSON or a schema mismatch.
  */
 export async function parseBody<T>(schema: z.ZodType<T>, req: Request): Promise<T> {
-  let raw: unknown;
-  try {
-    raw = await req.json();
-  } catch {
-    throw new AppError('VALIDATION', 'Request body must be valid JSON');
-  }
+  const raw = await readJsonBody(req);
   const parsed = schema.safeParse(raw);
   if (!parsed.success) {
     throw new AppError('VALIDATION', 'Invalid request body', parsed.error.issues);
@@ -93,13 +136,9 @@ export async function parseBody<T>(schema: z.ZodType<T>, req: Request): Promise<
  * `AppError('VALIDATION')`, exactly like {@link parseBody}.
  */
 export async function parseOptionalBody<T>(schema: z.ZodType<T>, req: Request): Promise<T> {
-  const raw = await req.text();
-  const body = raw.trim() === '' ? '{}' : raw;
-  // Re-wrap the already-read raw body so the shared `parseBody` owns the JSON + schema validation.
-  return parseBody(
-    schema,
-    new Request(req.url, { method: 'POST', body, headers: { 'content-type': 'application/json' } }),
-  );
+  const parsed = schema.safeParse(await readJsonBody(req, true));
+  if (!parsed.success) throw new AppError('VALIDATION', 'Invalid request body', parsed.error.issues);
+  return parsed.data;
 }
 
 /**

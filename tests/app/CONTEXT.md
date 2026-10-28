@@ -2,10 +2,18 @@
 
 ## 范围与工具
 
+安全修复的新增入口如下：
+
+- `card-consumption-security.test.ts`：消费提案不扣款、原参数绑定与验证执行。
+- `chat-request-size.test.ts`：请求体和聊天消息长度边界。
+- `request-host-proxy.test.ts`：真实 Proxy 的可信域名检查。
+
+共享 HTTP 检查另见 `../unit/security/http-write-boundary.test.ts`。
+路由处理器通过不代表真实 HTTP 或浏览器攻击已验证。
 `issued-card-number-http.test.ts` 检查发卡凭证接口。
 成功发卡且已完成并消费验证后，才返回对应新卡号。
 测试拒绝未验证、验证未消费、失败、其他工具和外部工作区的操作。
-所有响应禁止缓存，原始工具结果不得包含完整卡号。
+所有响应不得缓存，原始工具结果不得包含完整卡号。
 
 测试直接调用真实 Next.js 路由处理器。
 请求使用 `NextRequest`，动态参数使用异步上下文。
@@ -60,7 +68,7 @@ HTTP 200 不等于业务成功；锁定的写操作也是 200 + `data.ok:false`�
 
 `GET /api/actions` 去曝光断言：`mfa-terminal-lock-http.test.ts:291,301,338-340`（本地 `surfaced()`，`:118`）、`mfa-lock-http-contract.test.ts`（`surfacedActions`）、`mfa-lock-refresh-unlock-http.test.ts`（`surfaced`）。
 `mfa_required` 缺失断言：`mfa-terminal-lock-http.test.ts`（`mfaEventsFor`，`:97`）、`plan-parking-http.test.ts:209`（YELLOW 不发 MFA）、`mfa-lock-refresh-unlock-http.test.ts`（过滤响应的 `data.events`）。
-`SecurityEventKind`（`lib/contracts/audit.ts`）没有 `mfa_required` 成员，故「锁定后不再写 `mfa_required` 事件」的 `SecurityEvent` 断言是空断言；有意义的保证是冻结的 `SecurityEvent` 总数。
+`SecurityEventKind`（`lib/contracts/audit.ts`）没有 `mfa_required` 成员，故“锁定后不再写 `mfa_required` 事件”的 `SecurityEvent` 断言是空断言；有意义的保证是冻结的 `SecurityEvent` 总数。
 `SecurityEvent` 断言按 `kind` 计数：`CIRCUIT_BREAKER_TRIPPED`/`high`（`actions-http.test.ts:497-500`）、`MFA_FAILURE`（`actions-http.test.ts:305`、`mfa-escalation-http.test.ts:303`）、`SECURITY_RESET`（`security-workflow-http.test.ts:1024-1027,1134-1137`、`developer-security-http.test.ts:28,43-46`）。
 锁定后的冻结一律用总数快照：`mfa-lock-http-contract.test.ts#sideEffects`/`expectFrozen`、`mfa-lock-refresh-unlock-http.test.ts#ledgerSnapshot`。
 
@@ -83,7 +91,7 @@ HTTP 200 不等于业务成功；锁定的写操作也是 200 + `data.ok:false`�
 
 ## 锁定读模型与解锁的形状
 
-`GET /api/security` 的 `lock` 是账户级常量 `{code:'CIRCUIT_OPEN',reason:'circuit_open'}`（`app/api/security/route.ts:72-77`），刻意不带 `attemptsUsed`/`attemptsLeft`/`maxAttempts`（按「键不存在」断言）。
+`GET /api/security` 的 `lock` 是账户级常量 `{code:'CIRCUIT_OPEN',reason:'circuit_open'}`（`app/api/security/route.ts:72-77`），刻意不带 `attemptsUsed`/`attemptsLeft`/`maxAttempts`（按“键不存在”断言）。
 逐 action 的 `mfa_attempts_exhausted` + 3/0/3 只出现在第 3 次错码的写响应里，任何读模型都不报告。
 `lock` 键只在 breaker 已锁时出现；解锁后键缺失而非 `null`（`'lock' in data === false`）。
 `lockedActions` 恒为数组：只含状态恰为 `'locked'` 的 `PendingAction`，按最后一次写入（锁定瞬间）倒序，人工专属发卡/删卡命令被排除（`isManualCardCommand`）。
@@ -115,7 +123,7 @@ HTTP 200 不等于业务成功；锁定的写操作也是 200 + `data.ok:false`�
 （伪造值表格、余额/流水/消费行前后一致、伪造时间不消耗 `executionKey`、月限额不可回溯绕过）。
 入账瞬间固定为 `demoNow()`，`CardConsumption.createdAt` 仅秒级精度，
 故排序与 `?limit=` 用例用 `seedConsumption` 直接写入不同 `occurredAt`；
-真实 POST→GET 链路另有用例覆盖。
+真实 POST→GET 流程另有用例覆盖。
 
 ## 卡片结算账户投影
 
@@ -124,10 +132,10 @@ HTTP 200 不等于业务成功；锁定的写操作也是 200 + `data.ok:false`�
 `payableAmount = min(账户余额, 家庭本月剩余限额)`；
 `UNTRUSTED`（他人账户）与 `MISSING`（`linkedAccountId: null`）**没有任何余额字段**，
 既不泄漏他人余额/账号/户名，也不伪造 `"0.00"` 或 `null`；
-`FROZEN`/`LOST` 仍返回真实余额，只用 `usable: false` 区分「不可用」与「没钱」；
+`FROZEN`/`LOST` 仍返回真实余额，只用 `usable: false` 区分“不可用”与“没钱”；
 `CREDIT` 恒 `NOT_APPLICABLE`，不查账户、保留 `creditLimit`/`availableLimit`。
 断言同时作用于解析后的行与 `JSON.stringify` 的整段报文，因为 `undefined` 键在报文里必须缺席。
-`GET /api/cards` 固定读演示用户，因此「他人视角」方向经路由调用的同一投影
+`GET /api/cards` 固定读演示用户，因此“他人视角”方向经路由调用的同一投影
 （`banking.card.getCards`）断言。
 
 执行命令：`pnpm exec vitest run tests/app`。
@@ -143,27 +151,27 @@ HTTP 200 不等于业务成功；锁定的写操作也是 200 + `data.ok:false`�
 终态锁定的响应字段由 `mfa-lock-http-contract.test.ts` 逐字段固定：`code`、`failure.code`、`failure.reason`，以及 `attemptsUsed`/`attemptsLeft`/`maxAttempts` 的存在与缺席（按路线分别断言）。
 锁值的真值只在两处逐字段断言：第 3 次错码 = 顶层 `code:'CIRCUIT_OPEN'` + `failure.code:'MFA_LOCKED'` + `failure.reason:'mfa_attempts_exhausted'` + 3/0/3（`mfa-lock-http-contract.test.ts:277-286` 的 `LADDER` 与 `:304-326`，`mfa-lock-refresh-unlock-http.test.ts:467-471`）。
 `MFA_LOCKED` 从不作顶层 `code`：`LadderStep.code` 只允许 `'MFA_FAILED' | 'CIRCUIT_OPEN'`（`mfa-lock-http-contract.test.ts:236`），顶层锁信号一律是 `CIRCUIT_OPEN`。
-锁后 verify 的 `failure` 装配很精确——既有 `attemptsLeft:0`、又**没有** `attemptsUsed` 键、且顶层同时带 `attemptsLeft:0`/`maxAttempts`：`mfa-lock-refresh-unlock-http.test.ts:488-490` 与 `mfa-lock-http-contract.test.ts:404-407` 必须同时成立；改网关/路由的 failure 形状要同时满足这两处，顶层计数的「缺失」只对 `cancel`/`recover` 守卫断言（`mfa-lock-http-contract.test.ts:477-480`）。
+锁后 verify 的 `failure` 装配很精确——既有 `attemptsLeft:0`、又**没有** `attemptsUsed` 键、且顶层同时带 `attemptsLeft:0`/`maxAttempts`：`mfa-lock-refresh-unlock-http.test.ts:488-490` 与 `mfa-lock-http-contract.test.ts:404-407` 必须同时成立；改网关/路由的 failure 形状要同时满足这两处，顶层计数的“缺失”只对 `cancel`/`recover` 守卫断言（`mfa-lock-http-contract.test.ts:477-480`）。
 `mfa-terminal-lock-http.test.ts` 与 `actions-http.test.ts` 仍只断言 `status`/`mfaResult`/`ok`。
 `POST /api/actions/[id]/{cancel,recover}` 对 `locked` 行的早退守卫生效于 `app/api/_lib/locked-action.ts#lockedActionRefusal`（`code:'CIRCUIT_OPEN'`、`failure.reason:'mfa_session_locked'`、`events: []`、固定文案），由 `mfa-lock-http-contract.test.ts` 的 `cancel`/`recover` 组覆盖；`cancel-safety-http.test.ts`、`cancel-during-authorization-http.test.ts` 的可执行状态集合仍不含 `'locked'`。
-`GET /api/security` 的读模型由 `mfa-lock-http-contract.test.ts` 的 4 个用例与 `mfa-lock-refresh-unlock-http.test.ts` 的刷新组固定，形状见「锁定读模型与解锁的形状」。
+`GET /api/security` 的读模型由 `mfa-lock-http-contract.test.ts` 的 4 个用例与 `mfa-lock-refresh-unlock-http.test.ts` 的刷新组固定，形状见“锁定读模型与解锁的形状”。
 `GET /api/tasks`(`/[id]`) 的 `pendingActionStatus` 由 `mfa-lock-refresh-unlock-http.test.ts` 断言；`tasks-http.test.ts` 仍只核对 `waiting_confirmation` 与 `pendingActionId`。
 `chat-history-http.test.ts` 只断言 `mfa` 卡的 `executed` 状态；`locked` 与 `confirmation` 卡的状态断言在 `mfa-lock-refresh-unlock-http.test.ts`。
 `MfaChallenge` 行由 `mfa-lock-http-contract.test.ts`（逐次 `attempts`/`maxAttempts`/`status`）与 `mfa-lock-refresh-unlock-http.test.ts`（状态列冻结、行数恒 1）核对。
 `/security` 页面渲染只有 `tests/e2e/acceptance.e2e.ts#j-circuit-breaker-lock` 覆盖（`已熔断`、`失败 N / N 次`、`CIRCUIT_BREAKER_TRIPPED` 行、刷新后保持、开发者重置）；
-`UnlockPanel` 的运行时解锁流程与 `data-lock-reason`/`data-unlock-*`/`data-locked-actions` 标记、以及「内部标记/JSON/堆栈/演示验证码不进 DOM」都无用例。
+`UnlockPanel` 的运行时解锁流程与 `data-lock-reason`/`data-unlock-*`/`data-locked-actions` 标记、以及“内部标记/JSON/堆栈/演示验证码不进 DOM”都无用例。
 
 用户可见文案断言极少：`chat-http.test.ts:409` 的 `toContain('验证码')`（RED 回合提示存在且不泄露 `MFA_CODE`）、`manual-review-http.test.ts:277` 的 `toContain('manual review')`、`card-consume-http.test.ts` 的 `occurredAt` 校验错误文案、`mfa-lock-http-contract.test.ts` 对锁定守卫固定句的全等断言。
-锁定的用户可见文案（`securityLocked`、`toolFailed`、「验证码错误次数过多」）在本目录零断言，也没有 `MfaCard`/`publicToolError` 渲染用例。
+锁定的用户可见文案（`securityLocked`、`toolFailed`、“验证码错误次数过多”）在本目录零断言，也没有 `MfaCard`/`publicToolError` 渲染用例。
 
 `__SECURITY_BLOCK__`、`chat.error.toolFailed`、`publicToolError`、`publicToolSummary`、`securityLocked` 在 `*.ts` 内零匹配。
 `security_event` 只出现在 `chat-http.test.ts`（`:55,158-159,291-299`，`project()` 于 `:125` 把事件映射为 `security_event:${kind}`）与 `malicious-input-http.test.ts`（`:206-208`），且只断言 `kind === 'injection'`；没有任何 `security_event.message` 或 block-reason 文本断言，也没有 `kind:'locked'` 的 `security_event` 断言。
 `developer-chat-http.test.ts:68` 的 `it.each` 也把 `'locked'` 当作 `PendingAction.status` 数据行（reset 返回 409 且 revision 与 transcript 不变）。
 
-锁定的 verify/confirm 在 `mfa-terminal-lock-http.test.ts` 里只断言「该 actionId 不再有 `mfa_required` 事件」（`:287,299,335`）与「`auditLog` 会话计数为 0」（`:306,345`、`actions-http.test.ts:520`）；
-「锁定调用不新增 `MfaChallenge` 行」「`pendingAction` 行不增」「无新 `SecurityEvent`」「无新回执」由 `mfa-lock-http-contract.test.ts` 的冻结快照与 `mfa-lock-refresh-unlock-http.test.ts` 的增量断言覆盖（`mfaChallenge` 在 `mfa-terminal-lock-http.test.ts`、`actions-http.test.ts` 内仍零匹配）。
+锁定的 verify/confirm 在 `mfa-terminal-lock-http.test.ts` 里只断言“该 actionId 不再有 `mfa_required` 事件”（`:287,299,335`）与“`auditLog` 会话计数为 0”（`:306,345`、`actions-http.test.ts:520`）；
+“锁定调用不新增 `MfaChallenge` 行”“`pendingAction` 行不增”“无新 `SecurityEvent`”“无新回执”由 `mfa-lock-http-contract.test.ts` 的冻结快照与 `mfa-lock-refresh-unlock-http.test.ts` 的增量断言覆盖（`mfaChallenge` 在 `mfa-terminal-lock-http.test.ts`、`actions-http.test.ts` 内仍零匹配）。
 
-本目录没有任何「用户可见文本/事件 message 不含内部标记」的断言：`__SECURITY_BLOCK__` 在 `tests/app/*.ts` 零匹配（只出现在本文件）、`decisionKind` 零匹配、无堆栈/原始 JSON「不含」断言；`not.toContain` 只用于 MFA 码、隐私字段与「已不 surfaced 的 actionId」。
+本目录没有任何“用户可见文本/事件 message 不含内部标记”的断言：`__SECURITY_BLOCK__` 在 `tests/app/*.ts` 零匹配（只出现在本文件）、`decisionKind` 零匹配、无堆栈/原始 JSON“不含”断言；`not.toContain` 只用于 MFA 码、隐私字段与“已不 surfaced 的 actionId”。
 内部标记的不含断言在 `tests/unit/`（`lib/public-text.test.ts`、`security/mfa-failure-contract.test.ts`、`agent/turn-security-event.test.ts`，见 `tests/unit/CONTEXT.md`）。
 
 ## 金额与货币文本的断言形态
@@ -173,7 +181,7 @@ HTTP 200 不等于业务成功；锁定的写操作也是 200 + `data.ok:false`�
 金额一律按十进制文本（`'2000.00'`、`'5050.51'`、`'1200.12'`）或 `BigInt` 最小单位（`2358000n`、`200050n`、`2356000n`）断言，从不经展示格式化器往返。
 `currency: 'CNY'` 在本目录只是数据字段值（`card-consume-http.test.ts`、`card-links-http.test.ts`），不是渲染输出。
 真正的渲染货币字面量锚点只在 `tests/integration/handoff-*` 之外三处（`frontend-followup-fixes.test.ts:44`/`:91`/`:116`、`frontend-review-fixes.test.ts:90`、`task-feature-hardening.test.ts:122`），格式化器自身的字面量夹在 `tests/unit/financial-values.test.ts`、`tests/unit/planner/decimal-format.test.ts`、`tests/unit/planner/chart-presentation.test.ts`。
-浏览器文本断言（Playwright 等）应从后两类文件取字面量，不要从本目录推导。
+浏览器文本断言（Playwright 等）必须从后两类文件取字面量，不得从本目录推导。
 
 ## 规格文件清单
 
@@ -200,7 +208,7 @@ HTTP 200 不等于业务成功；锁定的写操作也是 200 + `data.ok:false`�
 | `ledger-consistency-http.test.ts` | 已确认转账的余额/流水一致、被拒动作不动钱、诚实失败、多次确认累计 |
 | `malicious-input-http.test.ts` | 提示注入后转账仍被闸门拦截、已停放参数不被请求体/查询串覆盖、身份提示被忽略 |
 | `manual-card-management.test.ts` | 人工专属发卡/删卡：独立挑战、重放、所有者锁定与开发者重置、删除债务/未决操作拒绝、通用决策路由拒绝人工提案 |
-| `manual-review-http.test.ts` | 人工复核：接管闸门与模式、开案时禁止 resume/retry、保留已确认扣款、运营者 stop/resume、并发只产生一个活动案 |
+| `manual-review-http.test.ts` | 人工复核：接管闸门与模式、开案时不得 resume/retry、保留已确认扣款、运营者 stop/resume、并发只产生一个活动案 |
 | `mfa-escalation-http.test.ts` | confirm 时 YELLOW→RED 升级（日累计）、verify 完成升级转账、升级后错码正常 `200` |
 | `mfa-escalation-upgrade-http.test.ts` | 执行时档位升级：第二个 ¥600 confirm 升级为 RED/`awaiting_mfa` 并发 `mfa_required`，verify 后审计与升级决策一致 |
 | `mfa-lock-http-contract.test.ts` | 三次错码的 HTTP 阶梯（逐次 `status`/`code`/`failure.code`/`failure.reason`/`attemptsUsed`/`attemptsLeft`/`maxAttempts` 与两个持久化标记）、锁定后正确码与错码的冻结拒绝、`cancel`/`recover` 的守卫形状、`GET /api/security` 的锁定/解锁/低于阈值读模型 |
@@ -216,7 +224,7 @@ HTTP 200 不等于业务成功；锁定的写操作也是 200 + `data.ok:false`�
 | `task-resume-retry-http.test.ts` | 两个重叠 `resume`/`retry` 请求：未完成节点只执行一次、持久状态与读模型一致 |
 | `tasks-http.test.ts` | `POST /api/tasks/[id]` pause/cancel/retry、confirm/verify 恢复停放计划、`GET /api/tasks`(`/[id]`) 刷新恢复与所有权 |
 
-两个 `mfa-lock-*.test.ts` 各有约 600 行，这是刻意的：逐次阶梯矩阵、逐读模型矩阵与冻结快照都按事实展开，便于逐条定位；不要为长度把它们拆成多个文件。
+两个 `mfa-lock-*.test.ts` 各有约 600 行，这是刻意的：逐次阶梯矩阵、逐读模型矩阵与冻结快照都按事实展开，便于逐条定位；不得为长度把它们拆成多个文件。
 
 ## 停放、锁定与并发窗口的构造手法
 
@@ -235,7 +243,7 @@ HTTP 200 不等于业务成功；锁定的写操作也是 200 + `data.ok:false`�
 
 并发窗口一律用有界会合点（`makeBarrier`，超时 `BARRIER_TIMEOUT_MS = 3000`）而不是时钟：`task-resume-retry-http.test.ts:200-215`、`concurrent-execution-http.test.ts:286-300`、`cancel-safety-http.test.ts:343-357`、`scheduled-dispatch-http.test.ts:149-154`、`manual-review-http.test.ts:293-313`。
 
-计划执行 claim 的「活动所有者」直接写持久化字段伪造，不靠计时：把 `agentTask.executionClaimedAt` 写成当前时刻让续行的 `claimTaskExecution(..., { staleBefore })` 匹配 0 行（`confirm-continuation-fencing.test.ts:273-278`，随后断言 owner 行未被改写 `:295`），再清空 `executionToken`/`executionClaimedAt` 让同一计划恢复（`:333`）；无所有者分支见 `confirm-continuation-no-owner-fencing.test.ts:195-197`、接管写入 `:264-268`；`manual-review-http.test.ts:243` 用同样方式伪造活动执行者。`tasks-http.test.ts:467-471` 只伪造 `createdAt` 用于排序。
+计划执行 claim 的“活动所有者”直接写持久化字段伪造，不靠计时：把 `agentTask.executionClaimedAt` 写成当前时刻让续行的 `claimTaskExecution(..., { staleBefore })` 匹配 0 行（`confirm-continuation-fencing.test.ts:273-278`，随后断言 owner 行未被改写 `:295`），再清空 `executionToken`/`executionClaimedAt` 让同一计划恢复（`:333`）；无所有者分支见 `confirm-continuation-no-owner-fencing.test.ts:195-197`、接管写入 `:264-268`；`manual-review-http.test.ts:243` 用同样方式伪造活动执行者。`tasks-http.test.ts:467-471` 只伪造 `createdAt` 用于排序。
 
 本目录没有 `leaseExpiresAt` 或 `maxRecoveryAttempts` 用例，也没有 `vi.useFakeTimers`：经 HTTP 入口的租约过期与恢复次数上限完全未覆盖。
 唯一注入时钟的是调度器 `tickScheduledTasks(identity, { now: NOW })`（`scheduled-dispatch-http.test.ts:37` 起），以及 `developer-chat-http.test.ts:109` 直接写 `agentSession.activeRunId` 表示活动租约。
@@ -245,7 +253,7 @@ HTTP 200 不等于业务成功；锁定的写操作也是 200 + `data.ok:false`�
 `CHAT_DRIVEN_TEST_TIMEOUT_MS = 60_000` 由 `tests/helpers/timeouts.ts` 导出并由本 spec 引入，是所有 body 会驱动真实 `POST /api/chat` 的用例的显式预算，作为 `it(...)` 的第三个参数传入。
 带该预算的用例：it 1、it 2、it 3（经 `parkTwoTransfers()` 调两次 `chatTurn()`）与 it 9、it 10、it 11、it 12（it 9 直接调 `chatTurn()`，it 10–12 经 `lockOwner()` 调一次）。
 不驱动 chat 的 it 4–8、it 13（`runSubmitPlan`/`executeGatedTool`/纯路由）沿用全局 `testTimeout: 20000`。
-新写驱动 chat 的用例必须套用同一常量：其成本由串行语句数决定，与断言数量无关；常量取值依据与「冷库自建」那类用例的对应常量同处一个模块。
+新写驱动 chat 的用例必须套用同一常量：其成本由串行语句数决定，与断言数量无关；常量取值依据与“冷库自建”那类用例的对应常量同处一个模块。
 
 依据：一次 chat turn 约 1.4s、落库约 101 行 `agentRunEvent`；每个 Pi 事件各开一个交互式事务（`agent/durable/journal.ts:120-123` → `lib/db/repositories/agentRun.ts:118-122`），全部串行排在同一条 native SQLite 连接上（`lib/db/serialized-connection.ts`）。
 `parkTwoTransfers()` 调两次 `chatTurn()`，故 it 1–3 的 body ≈ 200 次串行交互式事务。
@@ -256,7 +264,7 @@ mock 路径没有任何内部 deadline 或 sleep/重试：`agent/durable/journal
 宿主争用下同一文件单跑 it 1 7081ms / it 2 6710ms / it 3 2397ms（相对 1.9s 约 3.7–4.4 倍）；该文件曾出现 `Error: Test timed out in 20000ms.`（用例起始行 `:294`，实际 24316ms），当时整套只慢 1.29×。
 
 已排除的成因：无第二个进程写同一 `prisma/test.db`（无锁竞争，也没有 >1s 的可复现单步停顿）；`prisma/test.db` 与 WAL 规模均在正常区间波动；`tests/setup.ts` 的 schema 哈希标记匹配，跑批中途不重建库；子进程只有四处 spawn 点且都在各自用例内 `await` + `kill`，`deploy-db-push` 用自己的库。
-唯一能同时解释「整套只慢 1.29×、单用例却慢 12.7×」的是宿主争用（同类 agent 的多个 worktree 在同机并发跑 node 进程）。
+唯一能同时解释“整套只慢 1.29×、单用例却慢 12.7×”的是宿主争用（同类 agent 的多个 worktree 在同机并发跑 node 进程）。
 
 残余风险：真实的 ~12× I/O 争用仍可能让更重的组合用例（多个 chat turn 叠加阶梯式 verify 循环）超过 60s。该预算抬高的是下限而非保证——超时是环境放大信号，不得据此断言业务缺陷或放宽断言。
 

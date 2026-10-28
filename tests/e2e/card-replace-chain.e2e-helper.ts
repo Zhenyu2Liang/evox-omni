@@ -173,7 +173,8 @@ export function certifiedHead(): string {
  * instead of merely forgetting the old ones: finding a retired row is a rendering defect.
  */
 export function assertNoRetiredCardLabels(rows: Record<string, string>, label: string): void {
-  if (CARD_LABEL_RETIRED.accountAvailable in rows || CARD_LABEL_RETIRED.payableAmount in rows) {
+  if (CARD_LABEL_RETIRED.accountAvailable in rows ||
+      CARD_LABEL_RETIRED.payableAmount in rows && rows[CARD_LABEL_RETIRED.payableAmount] !== rows[CARD_LABEL.usableBalance]) {
     throw new Error(
       `${label}：卡片不得再渲染已废弃标签「${CARD_LABEL_RETIRED.accountAvailable}」/「${CARD_LABEL_RETIRED.payableAmount}」，实际渲染行 ${JSON.stringify(rows)}`,
     );

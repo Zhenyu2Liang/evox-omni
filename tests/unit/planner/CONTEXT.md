@@ -2,6 +2,10 @@
 
 ## 范围
 
+`dag.test.ts` 与 `executor.test.ts` 覆盖特殊节点名称和条件引用。
+`__proto__`、`constructor`、`toString` 是普通数据键。
+路径分隔符、空白和控制字符必须被节点校验拒绝。
+此处验证结果寻址，不把原缺陷扩大为全局原型污染。
 本目录包含 DAG 执行器测试，也包含对话展示测试。
 名称不表示只验证计划模块。
 
@@ -40,7 +44,7 @@
 `reply-format.test.ts` 与 `reply-repair.test.ts` 只验证协议信封。
 `inspectReplyFormat` 只识别 guidance、reasoning、assistant、tool envelope。
 普通散文一律放行，不检查语义含义。
-「散文声称面板却无受控工具调用」的策略不在本目录。
+“散文声称面板却无受控工具调用”的策略不在本目录。
 判定与纠正在 `agent/write-continuation.ts`，用例见 [../agent/CONTEXT.md](../agent/CONTEXT.md) 与 `tests/integration/write-continuation.test.ts`。
 服务端确认面板只在该工具调用持久化 `PendingAction` 后出现。
 会话策略测试只覆盖 mock 分类器，不覆盖真实模型散文。
@@ -55,7 +59,7 @@
 | `tool-diagnostics.test.ts`（`renders locked verification and confirmation cards without actionable buttons`，L60） | 只断言 `cards.terminal.locked`、无 `<input>`、无 `<button>` |
 | `locked-card-rendering.test.ts` | 锁定原因句与结构块：`MfaCard`/`ApprovalRecord` 的 `chat.error.actionLocked`、`data-mfa-locked`、`data-approval-locked`、`data-status="locked"`、`chat.approval.status.locked`、`href="/security"` 与 `pages.security.title`/`unlockDescription`；`status:'awaiting_mfa'` 对照仍有 `<input>`（验证码入口只在该尝试额度未耗尽时存在）；`security_event` 只按 typed `code`/`reason` 折叠成 `chat.error.actionLocked`/`chat.error.securityLocked`/`chat.error.securityDenied`；`settleAction{status:'locked'}` 清空 `pendingAction`、写 `settledActions[id]='locked'`、行内卡片转 `locked`，工具行摘要为 `chat.error.actionLocked`（`errorCode` 缺失时默认 `MFA_LOCKED`）或 `chat.error.securityLocked`，绝不为 `chat.error.toolFailed`；`MessageBubble` 把内部诊断转成 `chat.error.securityDenied` 且不吞掉普通系统消息 |
 
-`chat.error.actionLocked` 原文含否定短语「无法继续验证或执行」，因此「锁定卡不得提供继续验证入口」按 `/验证` 与 `继续验证：` 判定，并额外断言该短语只出现在原因句内。
+`chat.error.actionLocked` 原文含否定短语“无法继续验证或执行”，因此“锁定卡不得提供继续验证入口”按 `/验证` 与 `继续验证：` 判定，并额外断言该短语只出现在原因句内。
 `chat.error.securityLocked` 只在该文件里经 `errorCode:'CIRCUIT_OPEN'` 的工具行与 `security_event` 命中。
 工具行摘要的锁定文案同样只在 `locked-card-rendering.test.ts` 经 `publicToolSummary` 覆盖；`tool-feedback.test.ts` 只覆盖 `chat.error.toolFailed`。
 `securityNotice` 的键级覆盖在 [../lib/CONTEXT.md](../lib/CONTEXT.md) 的 `public-text.test.ts`，不经过任何卡片渲染。
@@ -77,7 +81,7 @@
 `scripted-provider.test.ts` 只验证 `tests/helpers/scripted-provider.ts` 自身。
 声明先作为首个 `describe_turn` 调用流式返回，随后按脚本顺序返回，`calls()` 把声明计入。
 它不经过生产 `runTurn`、不建会话、不碰数据库。
-需要「脚本化模型 → 生产 `runTurn` → SQLite 断言」的骨架时用 `tests/integration/write-continuation.test.ts`。
+需要“脚本化模型 → 生产 `runTurn` → SQLite 断言”的骨架时用 `tests/integration/write-continuation.test.ts`。
 
 模型提案与逐轮声明测试位于 [../agent/providers/CONTEXT.md](../agent/providers/CONTEXT.md)。
 包含 `mock-plan-proposals.test.ts` 与 `mock-turn-declaration.test.ts`。

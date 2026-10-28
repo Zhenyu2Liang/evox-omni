@@ -2,6 +2,7 @@ import type { NextRequest } from 'next/server';
 import { getConfig } from '@/lib/config';
 import { DEFAULT_DEMO_USER_ID } from '@/lib/constants';
 import { getDemoSession } from '@/agent/session';
+import { assertSameOriginWrite } from './http';
 
 /** The only Web identity comes from trusted server configuration, never a browser parameter. */
 export function resolveUserId(): string {
@@ -21,5 +22,6 @@ export async function resolveIdentity(_req?: NextRequest): Promise<RequestIdenti
 
 /** Keep resource ownership, authorization and execution fences downstream of the demo identity. */
 export async function requireIdentity(req?: NextRequest): Promise<RequestIdentity> {
+  if (req) assertSameOriginWrite(req);
   return resolveIdentity(req);
 }

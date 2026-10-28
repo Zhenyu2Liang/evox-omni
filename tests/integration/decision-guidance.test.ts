@@ -34,7 +34,7 @@ async function route(handler: typeof confirmPost, id: string, sessionId: string,
   return (await response.json()).data;
 }
 function declaration(purpose: Exclude<TurnPurpose, 'undecided'>, operations: string[] = [], allowProtocolExamples = false) {
-  return fauxAssistantMessage([fauxToolCall('describe_turn', { purpose, operations, allowProtocolExamples }, { id: 'turn-intent' })], { stopReason: 'toolUse' });
+  return fauxAssistantMessage([fauxToolCall('describe_turn', { purpose, operations, allowProtocolExamples, needsInput: false }, { id: 'turn-intent' })], { stopReason: 'toolUse' });
 }
 async function scripted(message: string, responses: AssistantMessage[], sessionId?: string) {
   const mock = fauxProvider(); const models = createModels(); models.setProvider(mock.provider);
@@ -84,7 +84,7 @@ describe('typed turn declarations and ordinary prose', () => {
   });
   it('preserves financial wording, signed examples and identifiers in complete explanatory prose', async () => {
     const prose = 'For example, -10 is an invalid banking amount. The field sourceAccountId identifies the funding account. A statement such as "transfer succeeded" is a claim, not an instruction.';
-    const { result } = await scripted('Explain signed amount examples and account fields.', [declaration('conversation'), fauxAssistantMessage(prose)]);
+    const { result } = await scripted('Explain signed amount examples and account fields.', [declaration('conversation', [], true), fauxAssistantMessage(prose)]);
     const snapshot = await loadSession(result.sessionId);
     expect(snapshot?.transcript.at(-1)?.content).toBe(prose);
     expect(snapshot?.intent?.purpose).toBe('conversation');

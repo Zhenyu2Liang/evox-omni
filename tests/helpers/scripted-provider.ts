@@ -8,6 +8,7 @@ export interface ScriptedTurnDeclaration {
   operations: readonly string[];
   allowProtocolExamples?: boolean;
   workflow?: boolean;
+  needsInput?: boolean;
 }
 
 /** Tests declare interpretation through the same registered tool as a live provider. */
@@ -15,6 +16,7 @@ export function turnDeclaration(declaration: ScriptedTurnDeclaration): Assistant
   return fauxAssistantMessage([fauxToolCall('describe_turn', {
     purpose: declaration.purpose,
     operations: [...declaration.operations],
+    needsInput: declaration.needsInput ?? false,
     ...(declaration.allowProtocolExamples !== undefined ? { allowProtocolExamples: declaration.allowProtocolExamples } : {}),
     ...(declaration.workflow !== undefined ? { workflow: declaration.workflow } : {}),
   })], { stopReason: 'toolUse' });

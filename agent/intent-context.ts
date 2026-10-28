@@ -14,7 +14,7 @@ export function advanceConversationIntent(_previous: ConversationIntent | undefi
 
 /** The declaration is interpretation, not consent; actual operations still require server policy. */
 export function declareConversationIntent(current: ConversationIntent, purpose: Exclude<TurnPurpose, 'undecided'>,
-  operations: readonly string[], presentation: { allowProtocolExamples?: boolean; workflow?: boolean } = {}): ConversationIntent {
+  operations: readonly string[], presentation: { allowProtocolExamples?: boolean; workflow?: boolean; needsInput?: boolean } = {}): ConversationIntent {
   if (operations.some(name => !catalogEntry(name) || catalogEntry(name)?.agentEnabled === false || name === 'submit_plan')) {
     throw new AppError('VALIDATION', 'Requested operations must be registered banking capabilities.');
   }
@@ -24,15 +24,17 @@ export function declareConversationIntent(current: ConversationIntent, purpose: 
   const tools = current.steps.map(step => step.tool);
   const preparingOperation = current.purpose === 'operation' &&
     current.steps.every(step => catalogEntry(step.tool)?.effect === 'read');
+  const needsInput = purpose === 'operation' && presentation.needsInput === true;
   if (presentation.allowProtocolExamples && purpose !== 'conversation') throw new AppError('VALIDATION', 'Protocol examples require an explanation turn.');
   if (presentation.workflow && purpose !== 'operation') throw new AppError('VALIDATION', 'A workflow requires an explicit operation purpose.');
   if (current.purpose !== 'undecided' && (current.purpose !== purpose ||
       !preparingOperation && (tools.length !== operations.length || tools.some((tool, index) => tool !== operations[index])) ||
       Boolean(current.allowProtocolExamples) !== Boolean(presentation.allowProtocolExamples) ||
+      !preparingOperation && Boolean(current.needsInput) !== needsInput ||
       !preparingOperation && Boolean(current.workflow) !== Boolean(presentation.workflow))) {
     throw new AppError('CONFLICT', 'A turn declaration cannot change purpose or restart another operation.');
   }
-  return { ...current, purpose, allowProtocolExamples: Boolean(presentation.allowProtocolExamples), workflow: Boolean(presentation.workflow),
+  return { ...current, purpose, needsInput, allowProtocolExamples: Boolean(presentation.allowProtocolExamples), workflow: Boolean(presentation.workflow),
     steps: operations.map((tool, index) => ({ key: `step-${index + 1}`, tool })) };
 }
 

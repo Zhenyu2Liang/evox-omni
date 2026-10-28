@@ -116,6 +116,7 @@ export function Composer({
         data-chat-composer="true"
         data-chat-ready={ready ? 'true' : 'false'}
         value={text}
+        maxLength={4000}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={handleKeyDown}
         disabled={locked}

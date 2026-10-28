@@ -3,6 +3,12 @@
 ## 职责与入口
 
 本目录负责 DAG 校验、执行顺序与计划控制。
+节点 ID 必须是单个路径段，不含空白、点号或方括号。
+结果容器没有对象原型，`__proto__` 等合法数据键不会触发原型赋值。
+`constructor`、`toString` 同样按普通节点名称处理。
+节点 ID 必须是单个路径段，不得含点、括号、空白或控制字符。
+模型的 `needsInput` 写入前置条件由 Agent 检查，不由 DAG 猜测用户选择。
+回归入口为 `tests/unit/planner/dag.test.ts` 和 `tests/unit/planner/executor.test.ts`。
 银行业务、权限与持久化由注入接口负责。
 
 | 模块 | 职责 |
@@ -11,7 +17,7 @@
 | `executor.ts` | 节点执行、挂起、检查点与通知 |
 | `lifecycle.ts` | 暂停、取消、重试与决定后继续 |
 | `node-outcome.ts` | 工具结果到节点状态的转换 |
-| `failure.ts` | 结构化拒绝契约与「是否可再驱动」判定 |
+| `failure.ts` | 结构化拒绝契约与“是否可再驱动”判定 |
 | `index.ts` | 公共导出 |
 
 `PlanDeps` 注入工具执行、持久化、控制与执行权检查。
@@ -20,7 +26,7 @@
 
 ## 结构化拒绝契约
 
-`PlanFailure` 与 `SecurityFailure` 语义对齐，`reason` 可缺省（非安全类失败只有 `code`）：
+`PlanFailure` 与 `SecurityFailure` 语义一致，`reason` 可缺省（非安全类失败只有 `code`）：
 
 ```ts
 interface PlanFailure { code: ErrorCode; reason?: SecurityFailureReason; actionId?: string;
@@ -55,7 +61,7 @@ planner 不让内部诊断文本进入任何可渲染字段。
 已完成业务不因取消而伪装回滚。
 
 `summary` 没有节点列：无 `data` 时才并入 `output`（`node-outcome.ts#settleToolNode` 的 `success` 分支；`summary` 先过 `publicFailureText`）。
-可推进节点的重写保护来自持久层「终结态不写终结态」的条件更新；不可推进节点由守卫提前拦下（见「不可再驱动」）。
+可推进节点的重写保护来自持久层“终结态不写终结态”的条件更新；不可推进节点由守卫提前拦下（见“不可再驱动”）。
 `compensationReport` 描述已执行与已取消节点。
 它不执行资金补偿。
 
@@ -84,7 +90,7 @@ planner 不让内部诊断文本进入任何可渲染字段。
 `lifecycle.resumePlan(plan, { nodeId, outcome }, deps, opts)` 先用 `settleToolNode` 记录人工决定，
 写节点行后再调用 `runPlan(snapshot, deps, opts)` 继续（`lifecycle.ts` 内 persist → `runPlan`）；
 `lifecycle.retryPlan(plan, deps, opts)` 把目标及其传递后继重置为 `pending`，再调用 `runPlan`。
-不存在独立的拓扑续跑逻辑：恢复即「重放 `runPlan`」。
+不存在独立的拓扑续跑逻辑：恢复即“重放 `runPlan`”。
 `runPlan` 对已终态节点保留记录并跳过，新授权节点以 `success` 记录后其依赖因此解锁。
 `runPlan` 只在 `cancelled`、`success` 或未显式恢复的 `paused` 快照上原样返回，不写任何东西。
 `waiting_confirmation` 计划可直接被 `runPlan` 推进；未终态的挂起节点会再次认领并再次调用 `runTool`，但 sealed 节点先被守卫拦下。
@@ -151,7 +157,7 @@ planner 不让内部诊断文本进入任何可渲染字段。
 `lifecycle` 全无 catch；`resumePlan` 的 `AppError('NOT_FOUND')`（`lifecycle.ts:335`）是 lifecycle 里唯一的显式抛出。
 本目录全部显式抛出只有三处：`dag.ts#topologicalOrder`（有环，经 `runPlan` 逃出）、`dag.ts#assertConditionResolvable`（条件输出缺失/不可比，被 `runPlan` 条件分支捕获）、`runPlan` 中条件节点无表达式的分支（同处捕获）。
 `retryPlan` 对 `cancelled` 计划、无目标、无任何可重置节点三种情况原样返回同一 plan（`lifecycle.ts:249`/`:261`/`:291`），从不因终态/已锁定节点抛错。
-`PlanToolOutcome.ok === false` 只让节点 `failed`（或在 `requiresConfirmation`/`pendingActionId` 存在时挂起，`node-outcome.ts:36-52`），不抛错也不直接改计划状态；计划成败在结算处按「全部 success/skipped」判定（`executor.ts:720-724`）。
+`PlanToolOutcome.ok === false` 只让节点 `failed`（或在 `requiresConfirmation`/`pendingActionId` 存在时挂起，`node-outcome.ts:36-52`），不抛错也不直接改计划状态；计划成败在结算处按“全部 success/skipped”判定（`executor.ts:720-724`）。
 
 ## 本目录单元测试
 

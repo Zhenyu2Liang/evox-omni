@@ -365,6 +365,7 @@ export async function continueDurableRun(run: AgentRun, journal: AgentRunJournal
     snapshot.replyRepair = serialized.replyRepair;
     snapshot.replyContext = serialized.replyContext;
     snapshot.writeContinuation = serialized.writeContinuation;
+    snapshot.modelBudget = serialized.modelBudget;
     groundMessage(buffer, buffer.current);
     buffer.events = readyPresentationEvents(buffer);
     if (!authorization && !checkpoint.inputMessagePersisted) snapshot.transcript.push({ id: newId('msg'), role: 'user', content: request.message!, timestamp: Date.now() });

@@ -3,7 +3,8 @@
 ## 意图
 
 `ChatMessage.financialSummary` 是可选的服务端展示摘要。
-消息 `content` 仍保留完整原文。
+消息 `content` 保存校验后的公开正文，不等于未经检查的模型候选。
+运行日志分别保存原始供应商候选与公开事件。
 理财回执增加可选的产品名称、剩余及赎回份额、成交净值和赎回费。
 这些字段由工具结果校验后投影，不从模型文字提取。
 
@@ -13,6 +14,11 @@
 
 本目录只放类型、能力目录与纯归一化函数，不访问数据库、不做权限判定。
 业务执行、安全网关与界面投影由调用层实现。
+
+`intent.ts#ConversationIntent.needsInput` 表示是否仍需补充办理信息。
+模型边界的缺省规则在 `agent/tools/turn-intent.ts`，不能用类型可选性推断允许写入。
+`card-consumption.ts#CardConsumptionResponse` 绑定消费操作 ID、状态、结果和验证反馈。
+首次提案没有消费结果，验证成功或重放原回执时才包含 `result`。
 
 ## 能力目录（`tool-catalog.ts`，唯一事实来源）
 

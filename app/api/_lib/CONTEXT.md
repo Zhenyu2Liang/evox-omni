@@ -1,5 +1,9 @@
 # API support context
 
+Write destinations are trusted only through `BANKING_ALLOWED_ORIGINS` (exact canonical origins),
+or loopback addresses when it is unset. A matching Host/Origin pair cannot add a trusted origin.
+Configured HTTPS origins support TLS termination before Next's internal HTTP listener.
+
 ## Responsibility
 
 This private Next.js folder owns HTTP envelopes, error mapping, request parsing, SSE framing,
@@ -8,6 +12,8 @@ Server pages may use the identity helper; client components call HTTP routes ins
 
 ## Modules
 
+- `http.ts#assertSameOriginWrite` delegates trusted host/origin decisions to `lib/request-origin.ts` for reads as well as writes. `proxy.ts` applies the same host boundary to pages and static requests; neither forwarded headers nor matching untrusted Host/Origin values extend configured trust.
+- JSON writes require `application/json`. `readJsonBody` enforces 64 KiB while reading the stream, independently of Content-Length. `app/api/chat/route.ts` enforces the 4000-character message schema before admission. Read the body once through these helpers.
 - `session.ts`: `resolveUserId()` reads trusted server configuration; `resolveIdentity(req?)` and
   `requireIdentity(req?)` return the configured user and fixed `demo:${userId}` workspace through
   `getDemoSession`. The request parameter does not select identity. There is no login or

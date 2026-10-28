@@ -555,7 +555,7 @@ export async function reportLostCard(
  * The replacement is a fresh row with a new masked number (and the accompanying FICTIONAL complete
  * number, `numberFull`). It carries the source's monthly limit,
  * and a CREDIT replacement also inherits the source's approved credit limit and current available limit
- * (per-category limits are NOT copied). The source stays `LOST` and records the new card id in
+ * (per-category limits are inherited). The source stays `LOST` and records the new card id in
  * `replacedByCardId` — a historical reference, not a status change and not a relation.
  *
  * A DEBIT or VIRTUAL replacement also inherits the source's settlement account, RE-VALIDATED in the
@@ -631,6 +631,10 @@ export async function replaceCard(cardId: string, userId: string): Promise<CardV
       // A DEBIT/VIRTUAL replacement keeps spending from the SAME settlement account; CREDIT (and an
       // unbound DEBIT source, which stays `MISSING`) keeps none.
       linkedAccountId: settlementAccountId,
+      // Replacement must not reset a customer's spending restrictions. Family spend is already
+      // counted across old and new card IDs, so copying the caps preserves the remaining allowance.
+      limits: { create: (await tx.cardLimit.findMany({ where: { cardId: latest.id } }))
+        .map(limit => ({ category: limit.category, amountMinor: limit.amountMinor })) },
     } });
     await tx.card.update({ where: { id: latest.id, userId }, data: { replacedByCardId: created.id } });
     return loadCardView(created);
@@ -865,6 +869,14 @@ export async function consumeCard(
             spent: centsToMoney(spentMinor),
             amount,
           });
+        }
+      }
+
+      const categoryLimits = await tx.cardLimit.findMany({ where: { cardId, category } });
+      if (categoryLimits.length) {
+        const spentMinor = await cardFamilyMonthSpend(tx, cardId, userId, at, category);
+        if (categoryLimits.some(limit => spentMinor + amountMinor > limit.amountMinor)) {
+          throw new AppError('LIMIT_EXCEEDED', '超过卡片分类月消费限额。', { cardId, category });
         }
       }
 

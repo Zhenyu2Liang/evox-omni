@@ -18,11 +18,19 @@ There are no shell, file, SQL, arbitrary HTTP, or credential-change tools.
 | `plan-parameters.ts` | Validate original direct-call and workflow parameters without implicit coercion. |
 | `money-schema.ts`, `decimal-schema.ts` | Exact parameter text: CNY money (2dp), investment shares (6dp) and net value per unit (4dp) canonical decimal schemas. |
 | `result.ts` | Convert typed results into native Pi success or `isError: true`; project public model data. |
+| `turn-intent.ts` | Internal `describe_turn` control tool; interpret the current request and declare `needsInput`, never access bank data or authorize a write. |
 | `planning.ts` | Persist and execute a validated workflow through injected gateway and claim ports. |
 | `plan-compiler.ts` | Validate declared scope, node structure, output references, and dependencies. |
 | Family modules | Export TypeBox schemas, factories, and model-free SDK runners. |
 
 Workflow parameter descriptions distinguish success dependencies from user-requested business conditions. Decimal/money condition thresholds use exact decimal strings, including zero; count thresholds use numbers. A zero spending result is still a successful query and must not create an invented positive-spend condition.
+
+At the model-tool boundary, an operation declaration with omitted `needsInput` is incomplete.
+Read preparation may identify exact targets before binding the write sequence. A finalized write
+declaration cannot change readiness or its sequence until a new user message. Enforcement belongs
+to `../banking-agent.ts`; trusted fixture helpers can explicitly supply ready declarations.
+`investment.ts#holdingLine` uses product names in public summaries. Keep holding IDs in structured
+result data for binding, never insert them into the public holding summary.
 
 `lib/contracts/tool-catalog.ts` is the source of capability names, effects, authorization defaults,
 agent availability, and replay policy. Use `AGENT_TOOL_NAMES` for model-visible capabilities and
@@ -133,32 +141,32 @@ replays its recorded model call. The stored intent shape is `ConversationIntent`
 
 ### `redeem_investment` 赎回口径（`mode`：SHARES / AMOUNT / ALL）
 
-`RedeemInvestmentParams` = `{ holdingId, mode, shares?, amount?, expectedShares?, expectedNetValue?, expectedNetValueDate?, expectedSettlementAmount? }`。`mode` **必填**，取值 `SHARES | AMOUNT | ALL`，没有默认口径：`SHARES` 必须给 `shares`、`AMOUNT` 必须给 `amount`（由 SDK 按最新净值折算份额）、`ALL` 全部赎回且不接受份额或金额。口径的判定点在工具层 `investment.ts#redemptionRequest()`，先于任何 SDK 调用：口径缺失或未知、混用（`SHARES`+`amount`、`AMOUNT`+`shares`、`ALL`+任一）都返回 `VALIDATION`，口径缺失时话术固定为 `赎回需要明确口径：请确认按「份额」还是按「金额」赎回`。因此「赎回 2000」这类只给金额、未说明口径的请求必须回到澄清，绝不会被读成本金并在其上再额外支付收益。
+`RedeemInvestmentParams` = `{ holdingId, mode, shares?, amount?, expectedShares?, expectedNetValue?, expectedNetValueDate?, expectedSettlementAmount? }`。`mode` **必填**，取值 `SHARES | AMOUNT | ALL`，没有默认口径：`SHARES` 必须给 `shares`、`AMOUNT` 必须给 `amount`（由 SDK 按最新净值折算份额）、`ALL` 全部赎回且不接受份额或金额。口径的判定点在工具层 `investment.ts#redemptionRequest()`，先于任何 SDK 调用：口径缺失或未知、混用（`SHARES`+`amount`、`AMOUNT`+`shares`、`ALL`+任一）都返回 `VALIDATION`，口径缺失时话术固定为 `赎回需要明确口径：请确认按「份额」还是按「金额」赎回`。因此“赎回 2000”这类只给金额、未说明口径的请求必须回到澄清，绝不会被读成本金并在其上再额外支付收益。
 
-`redeemAmount`（旧「赎回本金」口径）及其别名 `expectedRedemptionAmount` **不是**参数：`plan-parameters.ts` 把它们当未知参数拒绝，`redemptionRequest()` 另以同一澄清话术（detail `PRINCIPAL_MODE_RETIRED`）在 SDK 之前拒绝。`InvestResult.redeemedPrincipal` / `remainingPrincipal` 仍作为只读结果回退字段参与摘要渲染，它们不是请求参数。
+`redeemAmount`（旧“赎回本金”口径）及其别名 `expectedRedemptionAmount` **不是**参数：`plan-parameters.ts` 把它们当未知参数拒绝，`redemptionRequest()` 另以同一澄清话术（detail `PRINCIPAL_MODE_RETIRED`）在 SDK 之前拒绝。`InvestResult.redeemedPrincipal` / `remainingPrincipal` 仍作为只读结果回退字段参与摘要渲染，它们不是请求参数。
 
 `shares` / `expectedShares` 与 `expectedNetValue` 使用 `decimal-schema.ts` 的 `SharesParameter`（≤6 位小数）与 `NetValueParameter`（≤4 位小数）：无符号纯十进制文本，拒绝负号、指数、货币符号和 JS number，多余小数位被拒（模式层给 `The call contains invalid tool parameters`，`canonical*` 给 `份额/净值最多允许 N 位小数`）。写库前一律经 `canonicalShareCount` / `canonicalNetValue`（内部 `decimalText()`）规范化，因为 SDK 的 `recordedShares()` / `productNetValue()` 要求 `nonNegativeDecimal(raw) === raw`：`'5050.000000'` → `'5050'`、`'0.9880'` → `'0.988'`。`amount` / `expectedSettlementAmount` 走 `money-schema.ts` 后规范成两位小数。
 
 `expectedPositionVersion`（整笔持仓版本）/ `expectedShares` / `expectedNetValue` / `expectedNetValueDate`（净值业务日，UTC epoch 毫秒整数）/ `expectedSettlementAmount` 是 `security/security-gateway.ts#redemptionSnapshot` 铸造的授权快照，由 `approvedSnapshot()` 规范化后原样转发，使 SDK 能在写事务内比对陈旧授权。执行身份不由模型提供：`runRedeemInvestment` 只把 `opts.idempotencyKey` 转发为 `idempotencyKey`，schema 里没有 `executionKey`。
 
-`redemptionSummary()` 只用服务端返回值渲染：赎回口径、赎回份额、成交净值（含 UTC+08:00 净值日期）、预计到账、费用口径（`SIMULATED_NONE` → `模拟环境不收取赎回费，赎回费 ¥0.00`）、剩余份额（0 时标注「持仓已结清」）、剩余成本、已实现收益、可选账户余额，末尾附 `收益为模拟估算，不承诺保本。`；缺失字段写「历史数据不足」，本地不用浮点重算任何金额。
+`redemptionSummary()` 只用服务端返回值渲染：赎回口径、赎回份额、成交净值（含 UTC+08:00 净值日期）、预计到账、费用口径（`SIMULATED_NONE` → `模拟环境不收取赎回费，赎回费 ¥0.00`）、剩余份额（0 时标注“持仓已结清”）、剩余成本、已实现收益、可选账户余额，末尾附 `收益为模拟估算，不承诺保本。`；缺失字段写“历史数据不足”，本地不用浮点重算任何金额。
 
-`get_investment_holdings` 的每条持仓渲染七项事实：持仓份额、最新净值与净值日期、持仓市值、剩余持仓成本、持仓收益、持仓收益率、累计收益。市值、收益、收益率取自 SDK（市值恒为 `shares × latestNetValue`，收益率只是把 SDK 的无量纲比率乘 100 的展示换算），记录无法支撑的项显式输出「历史数据不足」而不伪造数字；`valueBasis: 'MIGRATED_ESTIMATE'` 追加「（估算）」。
+`get_investment_holdings` 的每条持仓渲染七项事实：持仓份额、最新净值与净值日期、持仓市值、剩余持仓成本、持仓收益、持仓收益率、累计收益。市值、收益、收益率取自 SDK（市值恒为 `shares × latestNetValue`，收益率只是把 SDK 的无量纲比率乘 100 的展示换算），记录无法支撑的项显式输出“历史数据不足”而不伪造数字；`valueBasis: 'MIGRATED_ESTIMATE'` 追加“（估算）”。
 
-持仓收益是**有符号**的展示值，`investment.ts` 只做格式化、绝不做非负门禁：`holding.profit` / `holding.cumulativeProfit` 走 `formatDecimalCNY`（`:222`、`:224`，亏损渲染 `-¥60.00`），`holding.profitRate` 走 `percentText()`（`:77-80` = `multiplyDecimal(ratio,'100')` + `formatDecimalCNY` 去掉 `¥` 再加 `%`，HALF_UP 两位，亏损渲染 `-1.20%`），`InvestResult.realizedProfit` 走 `formatCNY`（`:523`，同样保留符号）。这里绝不调用 `nonNegativeDecimal` / `rateRatioToPercent` / `valuationToMinor`（它们对负文本抛 `VALIDATION`），也没有 `Math.abs`、clamp 或把负值过滤成 0：`agent/` 全目录只有 `decimal-schema.ts:12` 的注释提到 `nonNegativeDecimal`（SDK 存储契约），`rateRatioToPercent` 只用于产品 `annualYieldRate`（`:123`、`:176`），`signedRateToPercent` / `valuationToMinor` 在 `agent/` 无调用。摘要里「合计持仓收益」是 `addDecimal` 累加、缺失值按 `'0'` 计入（`:239`），累加同样保留符号。这些字段在模型可见的 `data` 中原样透传（`result.ts#modelBankingData` 只脱敏手机号与执行身份字段），没有任何裁剪。行为由 `redeem-investment.test.ts:375-399` 固定（`持仓收益 -¥60.00`、`持仓收益率 -1.20%`、`累计收益 -¥60.00`）。浏览器侧另有一个展示出口 `components/banking/HoldingFacts.tsx:91`（`signedRateToPercent`，不额外舍入），因此同一比率在聊天摘要里是两位小数、在持仓卡里是全精度——两者都是 `×100` 的有符号展示换算，都不在财务链路上。
+持仓收益是**有符号**的展示值，`investment.ts` 只做格式化、绝不做非负门禁：`holding.profit` / `holding.cumulativeProfit` 走 `formatDecimalCNY`（`:222`、`:224`，亏损渲染 `-¥60.00`），`holding.profitRate` 走 `percentText()`（`:77-80` = `multiplyDecimal(ratio,'100')` + `formatDecimalCNY` 去掉 `¥` 再加 `%`，HALF_UP 两位，亏损渲染 `-1.20%`），`InvestResult.realizedProfit` 走 `formatCNY`（`:523`，同样保留符号）。这里绝不调用 `nonNegativeDecimal` / `rateRatioToPercent` / `valuationToMinor`（它们对负文本抛 `VALIDATION`），也没有 `Math.abs`、clamp 或把负值过滤成 0：`agent/` 全目录只有 `decimal-schema.ts:12` 的注释提到 `nonNegativeDecimal`（SDK 存储契约），`rateRatioToPercent` 只用于产品 `annualYieldRate`（`:123`、`:176`），`signedRateToPercent` / `valuationToMinor` 在 `agent/` 无调用。摘要里“合计持仓收益”是 `addDecimal` 累加、缺失值按 `'0'` 计入（`:239`），累加同样保留符号。这些字段在模型可见的 `data` 中原样透传（`result.ts#modelBankingData` 只脱敏手机号与执行身份字段），没有任何裁剪。行为由 `redeem-investment.test.ts:375-399` 固定（`持仓收益 -¥60.00`、`持仓收益率 -1.20%`、`累计收益 -¥60.00`）。浏览器侧另有一个展示出口 `components/banking/HoldingFacts.tsx:91`（`signedRateToPercent`，不额外舍入），因此同一比率在聊天摘要里是两位小数、在持仓卡里是全精度——两者都是 `×100` 的有符号展示换算，都不在财务流程上。
 
 ### `subscribe_investment` 申购聚合
 
-对已持有产品的重复申购由 SDK 聚合进现有 `HOLDING`：增加该持仓份额与本金并重算市值，`InvestResult.addedToExisting = true`，不新建持仓。工具层以 `{ productId, amount }`（金额规范成两位小数）转发给 `banking.investment.subscribeInvestment`，并把 `opts.idempotencyKey` 转发为执行身份。申购结果本身不带成交净值，`runSubscribeInvestment` 因此以一次只读的 `banking.investment.listHoldings()` 回读该持仓最近一笔 `purchases[].netValuePerUnit` / `netValueDate` 作为**展示**用成交净值；这次回读失败或被重放的旧记录没有该字段时，摘要写「历史数据不足」，绝不把已成交的申购判为失败或凭空补一个净值。摘要字段为已认购金额、持仓号、`申购份额`、`成交净值`（含净值日期）、`持仓总份额`、可选账户余额，末尾附 `收益为模拟估算，不承诺保本。`。金额始终为精确十进制字符串，计算使用整数最小单位或十进制算术。
+对已持有产品的重复申购由 SDK 聚合进现有 `HOLDING`：增加该持仓份额与本金并重算市值，`InvestResult.addedToExisting = true`，不新建持仓。工具层以 `{ productId, amount }`（金额规范成两位小数）转发给 `banking.investment.subscribeInvestment`，并把 `opts.idempotencyKey` 转发为执行身份。申购结果本身不带成交净值，`runSubscribeInvestment` 因此以一次只读的 `banking.investment.listHoldings()` 回读该持仓最近一笔 `purchases[].netValuePerUnit` / `netValueDate` 作为**展示**用成交净值；这次回读失败或被重放的旧记录没有该字段时，摘要写“历史数据不足”，绝不把已成交的申购判为失败或凭空补一个净值。摘要字段为已认购金额、持仓号、`申购份额`、`成交净值`（含净值日期）、`持仓总份额`、可选账户余额，末尾附 `收益为模拟估算，不承诺保本。`。金额始终为精确十进制字符串，计算使用整数最小单位或十进制算术。
 
 ### 写入后的持仓卡（`data.holdings`）
 
-`subscribe_investment` 与 `redeem_investment` 在写事务提交后都调用 `investment.ts#currentHoldings()` 重读 `banking.investment.listHoldings(userId)`，再用 `withHoldings()` 把这份**当前**持仓以 `data.holdings` 附加在权威 `InvestResult` 之上（`amount`/`shares`/`realizedProfit` 等字段语义与取值不变，只是新增一个展示字段）。`agent/card-emitter.ts#writtenHoldings` 因此对这两个写工具投影 `receipt` + `investments`（`{ holdings }`）两张卡：回执仍是写入的权威结论，紧随其后的持仓卡与 `get_investment_holdings` 的形状完全相同，所以聊天里最新一张持仓卡永远是本次写入后的真实状态，绝不会停在写入前的旧快照。回读失败或不返回数组时 `data.holdings` 整体缺失，只投影回执卡——写入已提交，事实优先，绝不把成功写入变成失败调用，也不伪造空持仓；重放时重读的是「现在」的真实持仓。
+`subscribe_investment` 与 `redeem_investment` 在写事务提交后都调用 `investment.ts#currentHoldings()` 重读 `banking.investment.listHoldings(userId)`，再用 `withHoldings()` 把这份**当前**持仓以 `data.holdings` 附加在权威 `InvestResult` 之上（`amount`/`shares`/`realizedProfit` 等字段语义与取值不变，只是新增一个展示字段）。`agent/card-emitter.ts#writtenHoldings` 因此对这两个写工具投影 `receipt` + `investments`（`{ holdings }`）两张卡：回执仍是写入的权威结论，紧随其后的持仓卡与 `get_investment_holdings` 的形状完全相同，所以聊天里最新一张持仓卡永远是本次写入后的真实状态，绝不会停在写入前的旧快照。回读失败或不返回数组时 `data.holdings` 整体缺失，只投影回执卡——写入已提交，事实优先，绝不把成功写入变成失败调用，也不伪造空持仓；重放时重读的是“现在”的真实持仓。
 
 ### 费用字段（`feeAmount` / `feeRule`）的投影边界
 
-SDK 的 `InvestResult` 与 `HoldingRedemption` 都声明 `feeAmount`（模拟环境恒为 `'0.00'`）与 `feeRule`（恒为 `'SIMULATED_NONE'`）。本目录没有任何按名字读取这两个字段的投影逻辑，只有两处是它们真正落地的地方：
-- `redemptionSummary()` 的 `feeLine()`（`investment.ts:497-504`，常量 `REDEMPTION_FEE_RULE` 由 `@/banking-sdk` 导出，`:25`）：`feeRule === REDEMPTION_FEE_RULE` 时渲染 `费用口径 SIMULATED_NONE（模拟环境不收取赎回费，赎回费 ¥0.00）`；字段缺失写「历史数据不足」，不凭空补 `0.00`。
+SDK 的 `InvestResult` 与 `HoldingRedemption` 都声明 `feeAmount`（模拟环境恒为 `'0.00'`）与 `feeRule`（恒为 `'SIMULATED_NONE'`）。本目录没有任何按名字读取这两个字段的投影逻辑，只有两处是它们真正保存的地方：
+- `redemptionSummary()` 的 `feeLine()`（`investment.ts:497-504`，常量 `REDEMPTION_FEE_RULE` 由 `@/banking-sdk` 导出，`:25`）：`feeRule === REDEMPTION_FEE_RULE` 时渲染 `费用口径 SIMULATED_NONE（模拟环境不收取赎回费，赎回费 ¥0.00）`；字段缺失写“历史数据不足”，不凭空补 `0.00`。
 - `runRedeemInvestment()` / `runSubscribeInvestment()` 返回的 `data` 是 SDK 结果**原样**传递（`withHoldings()` `:297-302` 只追加 `holdings`），所以 `feeAmount` / `feeRule` 原样进入 `data`：模型 JSON（`result.ts:42-53` 的 `INTERNAL_FIELDS` 不剔除它们）、`ToolInvocation.resultJson`（`durable/journal.ts:175-184` 存 `data: event.result.details`）、`ExecutionReceipt.resultJson`/`responseJson`（`command-execution.ts:86-95`）、`PendingAction.resultJson`（`confirmation-recovery.ts:274-279`）与 `AuditEntry.toolResult`（`execution-audit.ts:24`、`confirmation/authorized-execution.ts:68`）都是整体序列化，没有专用费用字段。
 - 用户可见的回执卡**不含费用**：`business-card-payloads.ts#investmentPayload`（`:70-77`）只投影 `success`/`amount`/`newBalance`/`occurredAt`/`redemptionValuation`/`settlementRounding`，而 `BusinessReceipt`（`lib/contracts/agent.ts:11-13`）没有费用槽位。费用文案只出现在赎回摘要（`summary`，经 `ToolEventView.summary` 与 `financial-response.ts#renderWrite` 的 `write.summary` 展示）与确认快照字段里。
 - `subscribe_investment` 的摘要**没有**费用行：`feeLine()` 唯一调用点是 `redemptionSummary()`（`investment.ts:520`）。

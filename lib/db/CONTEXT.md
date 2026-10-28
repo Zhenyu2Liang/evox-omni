@@ -50,6 +50,8 @@ and aggregate repositories. Business permissions and risk rules belong to `secur
 
 ## Constraints
 
+- `../../banking-sdk/tx.ts#runInTransaction` acquires SQLite's writer before reading a business snapshot. This is a domain transaction boundary, not a new per-query PRAGMA or a retry loop in this layer. Native lock waiting and per-client FIFO serialization remain separate constraints.
+- Cross-process banking-write tests use independent clients and dedicated files; passing them does not prove unbounded load or multi-host support. See `../../tests/integration/sdk-multiprocess-transaction.test.ts`.
 - Generated code is ignored by Git. Run `pnpm db:generate` before type checking, building, or executing
   code that imports the client. `pnpm db:push` changes the database schema but does not generate code.
 - `prisma.config.ts` owns CLI schema location, datasource URL and seed command. The schema declares

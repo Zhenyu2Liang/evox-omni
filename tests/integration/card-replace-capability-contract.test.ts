@@ -271,9 +271,9 @@ describe('1. RED 补办 is reachable through the real gateway for every card typ
     expect(view.creditLimit).toBe('18000.00');
     expect(view.availableLimit).toBe('18000.00');
     expect(view.status).toBe('ACTIVE');
-    // The predecessor keeps its own limits; per-category limits are never copied to the replacement.
+    // Both predecessor history and replacement retain the original category restriction.
     expect((await cardRow('card_credit')).creditLimitMinor).toBe(sourceBefore.creditLimitMinor);
-    expect(await db().cardLimit.count({ where: { cardId: replacement.id } })).toBe(0);
+    expect(await db().cardLimit.count({ where: { cardId: replacement.id } })).toBe(1);
   });
 
   it('VIRTUAL: inherits the settlement binding AND keeps the current-month allowance continuous', async () => {

@@ -42,7 +42,7 @@ describe('durable Agent runtime with real database records', () => {
     const admitted = await beginRun({ sessionId: foreign.sessionId, userId, requestId: 'foreign-run', request: { message: 'Read my balance' } });
     await new AgentRunJournal(admitted.lease!).finish('interrupted');
     const context = { params: Promise.resolve({ id: admitted.run.id }) };
-    const headers = { cookie: `banking_session=${foreign.sessionId}` };
+    const headers = { cookie: `banking_session=${foreign.sessionId}`, 'content-type': 'application/json' };
     expect((await getRun(new NextRequest(`http://localhost/api/runs/${admitted.run.id}?sessionId=${foreign.sessionId}`, { headers }), context)).status).toBe(403);
     expect((await recoverRun(new NextRequest(`http://localhost/api/runs/${admitted.run.id}/recover`, { method: 'POST', headers, body: '{}' }), context)).status).toBe(403);
     expect((await getTestPrisma().agentRun.findUniqueOrThrow({ where: { id: admitted.run.id } })).status).toBe('interrupted');
@@ -163,7 +163,7 @@ describe('durable Agent runtime with real database records', () => {
     await journal.finish('waiting_confirmation');
     expect((await cancelAction(action.id, { sessionId: lease.sessionId, userId })).status).toBe('cancelled');
     const request = () => new NextRequest(`http://localhost/api/runs/${run.id}/recover`, {
-      method: 'POST', headers: { cookie: `banking_session=${lease.sessionId}` }, body: '{}',
+      method: 'POST', headers: { cookie: `banking_session=${lease.sessionId}`, 'content-type': 'application/json' }, body: '{}',
     });
     const context = { params: Promise.resolve({ id: run.id }) };
     const response = await recoverRun(request(), context);
@@ -207,7 +207,7 @@ describe('durable Agent runtime with real database records', () => {
     const newer = await beginRun({ ...input, requestId: 'newer-request' });
     expect(newer.lease).toBeDefined();
     const response = await recoverRun(new NextRequest(`http://localhost/api/runs/${run.id}/recover`, {
-      method: 'POST', headers: { cookie: `banking_session=${lease.sessionId}` }, body: '{}',
+      method: 'POST', headers: { cookie: `banking_session=${lease.sessionId}`, 'content-type': 'application/json' }, body: '{}',
     }), { params: Promise.resolve({ id: run.id }) });
     expect(response.status).toBe(200);
     expect((await response.json()).data.run.status).toBe('completed');
@@ -224,7 +224,7 @@ describe('durable Agent runtime with real database records', () => {
     const context = { params: Promise.resolve({ id: run.id }) };
     expect((await getRun(new NextRequest(`http://localhost/api/runs/${run.id}`), context)).status).toBe(200);
     const response = await recoverRun(new NextRequest(`http://localhost/api/runs/${run.id}/recover`, {
-      method: 'POST', headers: { cookie: `banking_session=${lease.sessionId}` }, body: '{}',
+      method: 'POST', headers: { cookie: `banking_session=${lease.sessionId}`, 'content-type': 'application/json' }, body: '{}',
     }), context);
     expect(response.status).toBe(200);
     expect((await response.json()).data).toMatchObject({

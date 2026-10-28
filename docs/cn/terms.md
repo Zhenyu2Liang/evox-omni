@@ -24,6 +24,8 @@
 | 候选筛选 | candidate、`phoneCandidateMatches` | 用脱敏号码或数字片段收窄候选，不绑定执行对象 |
 | 身份解析 | resolution | 服务端在 park 阶段把选择器解析为唯一资源 id |
 | 澄清 | clarification | 请求缺少必需信息时的拒绝结果，要求补齐字段，不套用默认值 |
+| 信息完整性 | `needsInput` | 是否还需补充本轮办理信息；`false` 不代表已授权 |
+| 模型调用预算 | `ModelBudgetState` | 单轮模型调用的总次数、预留 token 与总时长上限 |
 | 完整号码 | `Contact.phoneFull`、`Card.numberFull` | 仅供服务端精确匹配的虚构完整手机号或卡号 |
 | 掩码 | mask、`lib/mask.ts`、`numberMasked` | 展示用脱敏号码，只保留末 4 位 |
 | 卡尾号 | `cardTail` | 卡号末 4 位，只用于收窄候选 |

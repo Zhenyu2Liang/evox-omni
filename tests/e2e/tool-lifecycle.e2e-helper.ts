@@ -59,7 +59,7 @@ export async function journeyToolLifecycle(browser: Browser, baseUrl: string): P
     await captureScreenshot(page, 'subscription-confirmed-tool');
     await page.setViewportSize({ width: 1440, height: 1100 });
     await assertChatBubbleAlignment(page);
-    await page.locator(SELECTORS.assistantText).last().scrollIntoViewIfNeeded();
+    await page.locator('[data-message-role="assistant"]').last().scrollIntoViewIfNeeded();
     await captureScreenshot(page, 'subscription-chat-desktop-alignment');
     await subscriptions.last().scrollIntoViewIfNeeded();
     await captureScreenshot(page, 'subscription-results-normal');

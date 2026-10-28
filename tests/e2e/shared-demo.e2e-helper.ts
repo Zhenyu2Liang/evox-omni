@@ -1,5 +1,6 @@
 import type { Browser } from 'playwright-core';
-import { SELECTORS, assistantTexts, diffLedger, fetchLedger, gotoAgent, readDemoSessionId, submitChat, waitFor, waitForComposerHydration, withPage } from './helpers';
+import { SELECTORS, assistantTexts, diffLedger, fetchLedger, fetchPendingActions, getJson, gotoAgent, readDemoSessionId, submitChat, waitFor, waitForComposerHydration, withPage } from './helpers';
+import { submitCompletedLiveChatTurn } from './chat-turn.e2e-helper';
 import guidance from '../../agent/messages/conversation.zh-CN.json';
 import { renderInvalidAmountResponse } from '../../agent/providers/mock/invalid-amount-response';
 import { assertLatestHistory, renderedHistory } from './history-assertions.e2e-helper';
@@ -12,6 +13,7 @@ export async function journeySharedDemo(browser: Browser, baseUrl: string): Prom
     await gotoAgent(first, baseUrl);
     const sessionId = await readDemoSessionId(first);
     const before = await fetchLedger(baseUrl);
+    const live = (await getJson<{ llmMode: string }>(`${baseUrl}/api/health`)).llmMode === 'live';
     const turns = [
       { request: 'Hello', response: guidance.greeting },
       { request: '\u662f-200\u5143\uff0c\u4e0d\u662f200', response: renderInvalidAmountResponse('\u662f-200\u5143\uff0c\u4e0d\u662f200') },
@@ -19,6 +21,14 @@ export async function journeySharedDemo(browser: Browser, baseUrl: string): Prom
       { request: 'Confirm', response: guidance.confirmation_in_chat },
     ];
     for (const turn of turns) {
+      if (live) {
+        const completed = await submitCompletedLiveChatTurn(first, turn.request);
+        if (!completed.messages.some(message => message.role === 'assistant' && message.content.trim())) {
+          throw new Error('The current live clarification has no complete answer');
+        }
+        if ((await fetchPendingActions(baseUrl)).length) throw new Error('Conversation created an unsolicited authorization');
+        continue;
+      }
       const priorReplyCount = (await assistantTexts(first)).length;
       await submitChat(first, turn.request);
       await waitFor(async () => {

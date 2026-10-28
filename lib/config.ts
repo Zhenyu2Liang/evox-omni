@@ -3,6 +3,7 @@ export interface AppConfig {
   llmProvider: string;
   llmModel: string;
   demoUserId: string;
+  modelBudget?: { maxRequests?: number; maxTokens?: number; maxDurationMs?: number };
   contextCompaction?: {
     thresholdTokens?: number;
     reserveTokens?: number;
@@ -27,6 +28,11 @@ export function getConfig(): AppConfig {
     llmProvider: process.env.LLM_PROVIDER ?? 'openai',
     llmModel: process.env.LLM_MODEL ?? 'gpt-4o-mini',
     demoUserId: process.env.DEMO_USER_ID ?? 'user_liming',
+    modelBudget: {
+      maxRequests: Number(process.env.AGENT_MAX_MODEL_REQUESTS) || undefined,
+      maxTokens: Number(process.env.AGENT_MAX_MODEL_TOKENS) || undefined,
+      maxDurationMs: Number(process.env.AGENT_MAX_TURN_MS) || undefined,
+    },
     contextCompaction: {
       thresholdTokens: tokenSetting(process.env.AGENT_COMPACTION_THRESHOLD_TOKENS),
       reserveTokens: tokenSetting(process.env.AGENT_COMPACTION_RESERVE_TOKENS),

@@ -84,12 +84,12 @@ export async function assertApprovalDockFitsViewport(page: Page, actionId: strin
 
 /** Role labels and avatars must not turn the assistant prose into a full-width panel. */
 export async function assertChatBubbleAlignment(page: Page): Promise<void> {
-  const assistant = page.locator(SELECTORS.assistantText).last();
+  const assistant = page.locator('[data-message-role="assistant"]').last().locator(':scope > div > div').first();
   const user = page.locator('[data-message-role="user"] [data-message-content="true"]').last();
   await assistant.waitFor();
   await user.waitFor();
   const assistantBounds = await assistant.evaluate(element => {
-    const bubble = element.parentElement!.getBoundingClientRect();
+    const bubble = element.getBoundingClientRect();
     const row = element.closest('[data-message-role]')!.getBoundingClientRect();
     return { left: bubble.left, right: bubble.right, width: bubble.width, rowWidth: row.width };
   });

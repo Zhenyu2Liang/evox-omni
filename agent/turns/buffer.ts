@@ -15,6 +15,7 @@ import type { ConversationIntent } from '@/lib/contracts/intent';
 import { inspectReplyFormat } from '../reply-format';
 import { toolPresentationId } from '../tool-presentation-identity';
 import { normalizePresentationMessages } from '../transcript-presentation';
+import { businessProse, hasOperationClaim, hasBalanceClaim, operationExplanation } from '../reply-safety';
 
 export function createTurnBuffer(requestText?: string, intent?: ConversationIntent): TurnBuffer {
   return { events: [], assistants: [], current: null, toolMessages: new Map(), presentationId: newId('presentation'),
@@ -31,8 +32,19 @@ export function groundMessage(buffer: TurnBuffer, message: ChatMessage | null, _
     const guidance = buffer.allowProtocolExamples ? undefined : _guidance ?? parseBankingGuidance(prose ?? message.content);
     // Business outcomes belong to their tool entry. A format repair can withhold an
     // unpublished candidate, but presentation does not replace or cut ordinary prose.
+    const source = prose ?? message.content;
+    const operationClaim = hasOperationClaim(source);
+    const balanceClaim = hasBalanceClaim(source);
+    if (operationClaim || balanceClaim) {
+      buffer.operationClaim ||= operationClaim;
+      buffer.balanceClaim ||= balanceClaim;
+      buffer.operationExplanation = businessProse(operationExplanation(source), buffer.allowProtocolExamples);
+    } else if ((buffer.operationClaim || buffer.balanceClaim) && source.trim()) {
+      buffer.operationExplanation = businessProse(source, buffer.allowProtocolExamples);
+    }
     message.content = formatIssues.length ? '' : guidance ? renderBankingGuidance(guidance)
-      : renderConversationalResponse(prose ?? message.content);
+      : operationClaim || balanceClaim ? ''
+      : businessProse(renderConversationalResponse(source), buffer.allowProtocolExamples);
   } catch (error) { message.content = conversationMessages.unavailable; buffer.events.push({ type: 'error', message: safeToString(error) }); }
   buffer.groundedIds.add(message.id);
 }

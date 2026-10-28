@@ -2,6 +2,10 @@
 
 ## Intent
 
+`turn-declaration.ts` emits explicit `needsInput:false` for ready scripted requests. This fixture
+choice does not change the production `describe_turn` default for omitted readiness. Missing-choice
+tests must explicitly set `needsInput:true` or send a raw declaration that omits it.
+
 Pure, offline scripted decision layer that drives the mock provider. `respond` / `respondWithGuidance` (in `../mock-responder.ts`) classify the last user message into tool proposals; the real Agent, tools and security gateway run unchanged. `classify` (classifier.ts) dispatches direct action matchers before broad read intents and never authorizes writes. Every module must stay free of database, banking-SDK, filesystem, network, `Date.now()` and `Math.random()`; tool-call ids are explicit.
 
 ## No card-consumption capability

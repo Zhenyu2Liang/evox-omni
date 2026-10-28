@@ -8,6 +8,9 @@
 
 ## API Surface
 
+- `ConfirmOptions.narrate` 是可信调用方选项，不是模型或浏览器的授权参数。
+  卡片页消费使用 `narrate:false` 跳过 `resumeTurn`，由页面展示已验证结果。
+  该选项不跳过确认、MFA、原参数检查、执行租约、事务或回执结算。
 - `../confirmation.ts`（上级门面）— 公开 `confirmAction` / `verifyAction` / `cancelAction`；`confirm`/`verify` 由 `withLiveConfirmation` 包裹。
   `authorizeAndExecute(actionId, opts, mfaCode?)` 依次解析身份、短路已取消的所属计划、调用 `gateway.authorizeAction`，`!auth.ok` 时返回 `blockedOutcome`，否则进入 `executeAuthorizedAction`。
   `cancelAction` 在报告成功前**回读**持久化行，只有确认其为 `'cancelled'` 才写入取消审计并返回成功，否则返回 `unappliedCancelOutcome`。
@@ -15,10 +18,10 @@
 - `identity.ts` — `resolveTrustedIdentity`：持久化所有者断言，绝非授权；用户可见消息已去标识化，不含内部 id、会话 id 或状态字面量。
 - `liveness.ts` — `withLiveConfirmation`：持有持久化执行租约；租约冲突 → `conflictOutcome`；`beginExecutionLease` 仅以 `isOpenActionStatus(row?.status)` 判定冲突，终态行永不被当作未决决策。
 - `outcomes.ts` — `emitAll`、`effectiveTier`、`publicRefusalMessage`、`cancelledPlanOutcome`、`conflictOutcome`、`unappliedCancelOutcome`、`blockedOutcome`；内部有 `failureReasonFor`、`refusalFacts`、`CANCELLED_PLAN_REFUSAL`。
-- `authorized-execution.ts` — `executeAuthorizedAction`：在叙述前落地已授权命令证据，`settlePendingAction({ status, from: ['confirmed'], … })`，CAS 落败时如实上报持久化状态。
+- `authorized-execution.ts` — `executeAuthorizedAction`：在叙述前保存已授权命令证据，`settlePendingAction({ status, from: ['confirmed'], … })`，CAS 落败时如实上报持久化状态。
 - `gated-execution.ts` — `executeGatedTool` / `executeGatedToolOnce`（工作流执行端口，`../confirmation.ts` 再导出）；`blockedOutcome(auth)` 从 `parseBlockReason(...).failure.code` 取 `errorCode`，错误文案经 `securityNotice`/`safePublicText` 生成；`representedStatuses` 取 `ALL_ACTION_STATUSES`。
 - `plan-continuation.ts` — `resumeOwningPlan`：续跑下游节点而不改写已提交的业务结果；对外错误文案经 `publicPlanError`/`safePublicText` 消毒后才产生。
-- `../confirmation-recovery.ts`（位于 `agent/` 根，上级节点）— 结算落地原语与本节点使用的独立 wedge 恢复。
+- `../confirmation-recovery.ts`（位于 `agent/` 根，上级节点）— 结算保存原语与本节点使用的独立 wedge 恢复。
 
 ## 契约 (Contracts)
 
@@ -66,9 +69,9 @@ plain 冲突分支（网关抛 `AppError('CONFLICT', …)`，其文案内插原�
 - `locked` 是终态：不得作为待决策项呈现、不得重新发 `mfa_required`、不得被恢复/重试路径重新激活、不得自动执行；解除锁定后仍需用户重新发起并重新确认。
 - 本目录任何路径都不解锁、不重新激活、不恢复、不自动执行已锁定或其它终态操作。
 
-## 结算落地原语 (../confirmation-recovery.ts)
+## 结算保存原语 (../confirmation-recovery.ts)
 
-`settlePendingAction(input)` 在**一个** `prisma.$transaction` 内落地终态、持久化结果与执行审计，返回丢失 `false`（并发结算已移动行时什么都不写）。
+`settlePendingAction(input)` 在**一个** `prisma.$transaction` 内保存终态、持久化结果与执行审计，返回丢失 `false`（并发结算已移动行时什么都不写）。
 `SettlePendingActionInput.from: PendingActionStatus[]` 为**必填**：必须显式命名期望来源状态，绝不隐式变成无条件写。
 `assertSettleSources(input)` 在事务开始前校验：空 `from` 或非法来源状态一律抛 `AppError('SECURITY_DENIED', …)`，未写入任何行。
 `locked` 永远不是合法来源状态（由 `isLegalActionSourceStatus` 保证），因此耗尽验证的拒绝绝不会被重新激活或降级。
@@ -110,13 +113,13 @@ MFA 连续错误触发会话熔断（`security/mfa.ts` `verify` → `security/se
 本节点为扁平目录，无子目录；按文件划分：上表 API Surface 即各模块职责。
 跨节点只读引用（写须上抛父节点）：
 - `../action-status.ts` — 状态词汇表（上级节点，只读）。
-- `../confirmation-recovery.ts` — 结算落地原语、租约时钟、独立 wedge 恢复（上级节点，只读）。
+- `../confirmation-recovery.ts` — 结算保存原语、租约时钟、独立 wedge 恢复（上级节点，只读）。
 - `../turns/events.ts` — `security_event` 投影与 `blocked` 分类（上级节点，只读）。
 
 ## Notes for Agents
 
-- 一切拒绝文案必须经 `lib/public-text.ts`（`safePublicText`/`securityNotice`/`isInternalDiagnostic`）或 `publicRefusalMessage` 产出，拒绝同时携带类型化 `code`/`failure`；不要把网关句、状态字面量、载荷、JSON、堆栈塞进 `message`。
+- 一切拒绝文案必须经 `lib/public-text.ts`（`safePublicText`/`securityNotice`/`isInternalDiagnostic`）或 `publicRefusalMessage` 产出，拒绝同时携带类型化 `code`/`failure`；不得把网关句、状态字面量、载荷、JSON、堆栈塞进 `message`。
 - 新增状态判断请使用 `agent/action-status.ts` 的谓词，勿写本地字面量比较。
 - 本层不做任何金额运算：没有费率/手续费/费用字段、没有金额格式化，也没有 `fee`/`feeAmount`/`REDEMPTION_FEE_RULE` 之类的目录；`ToolExecutionResult`/`GatedToolOutcome` 的 `data` 只是透传，金额计算与费用口径都在 `banking-sdk/`。改动金额语义时不必在此目录寻找。
-- 不要新增 `action_settled` 的服务端发出者；它由浏览器客户端发出。
+- 不得新增 `action_settled` 的服务端发出者；它由浏览器客户端发出。
 - 修改结算来源时，`from` 必须显式且合法，`locked` 永不作来源；CAS 落败只如实上报持久化状态。

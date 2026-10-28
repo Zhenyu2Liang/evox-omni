@@ -6,6 +6,8 @@ import type { RunTurnDeps } from '../run-turn';
 
 /** Request identity is an assertion against persisted ownership, never a grant. */
 export interface ConfirmOptions {
+  /** Trusted page callers can settle a reviewed operation without a model narration request. */
+  narrate?: boolean;
   deps?: RunTurnDeps;
   onEvent?: (event: AgentStreamEvent) => void;
   userId?: string;

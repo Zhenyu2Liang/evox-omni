@@ -67,8 +67,9 @@ async function markSourceLost(): Promise<void> {
 async function expectSourceLinkedTo(replacementCardId: string): Promise<void> {
   const source = await database().card.findUniqueOrThrow({ where: { id: SOURCE_CARD_ID } });
   expect(source).toMatchObject({ status: 'LOST', numberMasked: SOURCE_NUMBER_MASKED, replacedByCardId: replacementCardId });
-  // Per-category limits are NOT copied to the replacement, so the source keeps its own row.
+  // Historical source limits remain intact; a replay must not duplicate the replacement's copy.
   expect(await database().cardLimit.count({ where: { cardId: SOURCE_CARD_ID } })).toBe(1);
+  expect(await database().cardLimit.count({ where: { cardId: replacementCardId } })).toBe(1);
 }
 
 /** Cards owned by the demo user / ACTIVE credit cards — the counts the live `lA` scenario also asserts. */
@@ -119,7 +120,7 @@ describe('replace_card replays its original committed response (原操作幂等�
       creditLimit: CREDIT_LIMIT,
       availableLimit: CREDIT_LIMIT,
       monthlyLimit: CREDIT_LIMIT,
-      limits: [],
+      limits: [{ category: '娱乐', amount: '3000.00' }],
     });
     expect(card.replacedByCardId).toBeUndefined();
     await expectSourceLinkedTo(card.id);

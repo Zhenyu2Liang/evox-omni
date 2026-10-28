@@ -333,7 +333,10 @@ function assertAccountTile(
     if (rows[creditLabel] !== undefined) fail(`${cardId} 不应渲染「${creditLabel}」行（那是 CREDIT 卡专用），实际 ${excerpt(JSON.stringify(rows))}`);
     if (tileText.includes(creditLabel)) fail(`${cardId} 的卡片文本出现「${creditLabel}」：${excerpt(tileText)}`);
   }
-  for (const retiredLabel of [CARD_LABEL_RETIRED.accountAvailable, CARD_LABEL_RETIRED.payableAmount]) {
+  if (rows[CARD_LABEL_RETIRED.payableAmount] !== undefined && rows[CARD_LABEL_RETIRED.payableAmount] !== rows[CARD_LABEL.usableBalance]) {
+    fail(`${cardId} 的主金额与可用余额不一致：${excerpt(JSON.stringify(rows))}`);
+  }
+  for (const retiredLabel of [CARD_LABEL_RETIRED.accountAvailable]) {
     if (rows[retiredLabel] !== undefined) fail(`${cardId} 仍渲染废弃标签「${retiredLabel}」行：${excerpt(JSON.stringify(rows))}`);
     if (tileText.includes(retiredLabel)) fail(`${cardId} 的卡片文本仍出现废弃标签「${retiredLabel}」：${excerpt(tileText)}`);
   }

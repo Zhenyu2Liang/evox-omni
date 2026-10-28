@@ -7,10 +7,10 @@ describe('explicit scripted model declarations', () => {
     const message = turnDeclaration({ purpose: 'operation', operations: ['freeze_card', 'freeze_card'], workflow: true });
     expect(message.stopReason).toBe('toolUse');
     expect(message.content).toEqual([expect.objectContaining({ type: 'toolCall', name: 'describe_turn',
-      arguments: { purpose: 'operation', operations: ['freeze_card', 'freeze_card'], workflow: true } })]);
+      arguments: { purpose: 'operation', operations: ['freeze_card', 'freeze_card'], workflow: true, needsInput: false } })]);
     const example = turnDeclaration({ purpose: 'conversation', operations: [], allowProtocolExamples: true });
     expect(example.content).toEqual([expect.objectContaining({ arguments: {
-      purpose: 'conversation', operations: [], allowProtocolExamples: true,
+      purpose: 'conversation', operations: [], allowProtocolExamples: true, needsInput: false,
     } })]);
   });
 

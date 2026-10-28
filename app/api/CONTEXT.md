@@ -53,7 +53,7 @@ This browser endpoint is not an agent tool; the complete number does not enter m
 | `POST /api/developer/security/reset` | Developer-mode cookie gate, then the unaudited-code demo clear `resetDemoSession` (audit actor `developer`); returns the raw `CircuitBreakerState`, reopens no `PendingAction` | `_lib/developer.ts` + account circuit-breaker policy |
 | `GET /api/{dashboard,bills,cards,subscriptions}` | Simulated banking read models for the configured user | Banking SDK |
 | `/api/cards/{,[id]}` and `/api/cards/changes/[id]/{verify,cancel}` | Manual demo-card add/delete proposals plus MFA verify/cancel; returns `CardChangeResponse` | `security/manual-card-management` (see `../cards/CONTEXT.md`) |
-| `POST /api/cards/[id]/consume` | Owned virtual-card consumption: exact CNY `amount` string plus optional `category`/`merchant`/`executionKey`; booking time is server-owned, so a body containing `occurredAt` is refused with `400 VALIDATION`; returns `ConsumeCardResult` | Banking SDK card-consumption capability (see `cards/[id]/CONTEXT.md`) |
+| `POST /api/cards/[id]/consume` | Creates a RED consumption proposal without a debit; identical arguments plus `actionId`, `confirmed:true` and `code` verify and execute the saved operation. Returns `CardConsumptionResponse`, with `result: ConsumeCardResult` after execution. Rejects caller-owned booking time. | `security/card-consumption`, shared MFA gateway and execution fence (see `cards/[id]/CONTEXT.md`) |
 | `GET /api/cards/[id]/consumptions` | Owned per-card consumption ledger, newest first; optional `limit`; returns `{ consumptions: CardConsumptionView[] }` | Banking SDK card-consumption capability (see `cards/[id]/CONTEXT.md`) |
 | `GET /api/contacts`, `POST /api/contacts` | Owned masked contacts; strict name/phone form with no client-selected owner | Contact SDK and atomic contact/audit command |
 | `DELETE /api/contacts/[id]` | Owned contact deletion with explicit `{ confirm: true }` decision | Contact SDK and atomic contact/audit command |
@@ -99,8 +99,8 @@ Verify ladder, projected by `agent/confirmation/outcomes.ts#blockedOutcome` from
   (`agent/confirmation.ts:43-46`).
 
 `message` is re-rendered from the typed facts (`outcomes.ts#publicRefusalMessage` →
-`lib/public-text.ts#securityNotice`), never the gateway sentence: 「验证码错误。还可尝试 N 次。」,
-「该操作已锁定…」 for the terminal lock, 「安全验证已锁定。请在安全中心查看状态。」 for an
+`lib/public-text.ts#securityNotice`), never the gateway sentence: “验证码错误。还可尝试 N 次。”,
+“该操作已锁定…” for the terminal lock, “安全验证已锁定。请在安全中心查看状态。” for an
 already-locked row. The client therefore receives public prose, not a catalog key.
 
 The route itself never writes `status`: locking is the gateway's CAS, and the edge reads the row only for
@@ -136,8 +136,9 @@ is not built from security events.
 `_lib/http.ts#errorResponse`/`mapAppError` already reduce a non-`AppError` throw to a generic internal
 error, so a failure envelope carries no diagnostics.
 Chat SSE frames, `/api/runs/[id]/events` and `/api/chat/history` still forward `AgentStreamEvent`
-frames verbatim (see Known issues): `security_event.message` can carry the raw marker, clients render
-those events from typed fields, and scrubbing them belongs to `agent/` and `components/chat`.
+frames from the grounded presentation channel without rewriting their business facts. Security refusal
+text is rendered from typed fields by `agent/` and `lib/public-text.ts`; raw provider or gateway
+archives are not a public stream source.
 
 ## Transport contracts
 
@@ -191,9 +192,9 @@ A refusal is TYPED, never message-parsed: `ActionResponse` (`_lib/types.ts:44-65
 Contrast `POST /api/cards/changes/[id]/verify`, which lets `AppError('CIRCUIT_OPEN')` bubble out as a `423` failure envelope WITH `code` (`security/manual-card-management.ts:71,112`), so the cards page localizes by code; the action routes deliberately do not.
 
 `data.message` provenance per route: `verify`/`confirm` copy `ConfirmationOutcome.message` verbatim (the gateway sentence on a refusal; `操作已执行。`/`result.error`/`操作结果尚无法核实…` plus a `（结果播报失败：…）` suffix from `agent/confirmation/authorized-execution.ts:94-100`; `该操作所属的任务计划已取消…` from `cancelledPlanOutcome`; the `AppError.message` from `conflictOutcome`), `cancel` `操作已取消。` (`agent/confirmation.ts:69`) except on a `locked` row, which is refused before delegation with the fixed `_lib/locked-action` sentence, `recover` the recovery outcome's own text (or the same fixed sentence on a `locked` row).
-No action route localizes: the i18n fallbacks (`chat.error.toolFailed`, `chat.error.securityLocked`) exist only client-side (`lib/public-text.ts#securityNotice`, `lib/tool-feedback.ts`), so a non-browser caller (e.g. `channels/weixin/`) reading `data.message` gets the server's Chinese sentence, never 「操作未完成。请核对原操作卡片和账户记录。」. No action route under `app/api` imports `lib/public-text.ts` (`securityNotice`, `safePublicText`) or `lib/tool-feedback.ts` (`publicToolError`): the edge forwards the typed `code`/`failure` plus the raw server sentence, so every refusal is rendered client-side.
+No action route localizes: the i18n fallbacks (`chat.error.toolFailed`, `chat.error.securityLocked`) exist only client-side (`lib/public-text.ts#securityNotice`, `lib/tool-feedback.ts`), so a non-browser caller (e.g. `channels/weixin/`) reading `data.message` gets the server's Chinese sentence, never “操作未完成。请核对原操作卡片和账户记录。”. No action route under `app/api` imports `lib/public-text.ts` (`securityNotice`, `safePublicText`) or `lib/tool-feedback.ts` (`publicToolError`): the edge forwards the typed `code`/`failure` plus the raw server sentence, so every refusal is rendered client-side.
 The only `lib/public-text.ts` consumer in this node is `_lib/public-security-event.ts` (`isInternalDiagnostic`), which neutralizes internal audit text in the `GET /api/security` public projection.
-TWO distinct lock sentences reach `data.message` with the SAME `ok:false`/`status:'locked'`: the attempt-limit branch 「验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。」 (`security/security-gateway.ts` `authorizeWithMfa` attempt-exhausted branch) and every later attempt on the already-persisted `locked` row via `lockedOutcome` 「当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。」 (`security/security-gateway.ts` `lockedOutcome`, reached from the `row.status === 'locked'` guard at the top of `authorizeAction`). Those two refusals also differ INSIDE `failure`: the attempt-exhausted one carries `failure.code:'MFA_LOCKED'` with `reason:'mfa_attempts_exhausted'` and real `attemptsUsed`/`attemptsLeft`/`maxAttempts` while its top-level `code` is `CIRCUIT_OPEN`, whereas `lockedOutcome` carries `failure.code:'CIRCUIT_OPEN'` (`reason` `mfa_session_locked`/`circuit_open`) with a fixed `attemptsLeft:0`/`maxAttempts`, so a renderer must key on `reason` and never on one field alone.
+TWO distinct lock sentences reach `data.message` with the SAME `ok:false`/`status:'locked'`: the attempt-limit branch “验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。” (`security/security-gateway.ts` `authorizeWithMfa` attempt-exhausted branch) and every later attempt on the already-persisted `locked` row via `lockedOutcome` “当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。” (`security/security-gateway.ts` `lockedOutcome`, reached from the `row.status === 'locked'` guard at the top of `authorizeAction`). Those two refusals also differ INSIDE `failure`: the attempt-exhausted one carries `failure.code:'MFA_LOCKED'` with `reason:'mfa_attempts_exhausted'` and real `attemptsUsed`/`attemptsLeft`/`maxAttempts` while its top-level `code` is `CIRCUIT_OPEN`, whereas `lockedOutcome` carries `failure.code:'CIRCUIT_OPEN'` (`reason` `mfa_session_locked`/`circuit_open`) with a fixed `attemptsLeft:0`/`maxAttempts`, so a renderer must key on `reason` and never on one field alone.
 A `confirm` (no code) on a `locked` row also returns `status:'locked'`/`ok:false`, but with `mfaResult:'not_required'` and `requiresMfa:true` (RED tier), never `'failed'`.
 
 ## Terminal MFA lock
@@ -232,7 +233,7 @@ configuration and TypeScript types only. Dynamic route parameters are awaited pr
 Handlers use `_lib/agent-bridge` for action/task delegation and persisted ownership checks before
 execution. The fixed demo identity has no missing-cookie rejection branch.
 
-## Known issues
+## Transport and domain outcome boundaries
 
 - `POST /api/actions/[id]/verify` (`app/api/actions/[id]/verify/route.ts`) returns HTTP `200` for
   every domain outcome, including the circuit-breaker `status:'locked'` case: it always serializes
@@ -241,14 +242,8 @@ execution. The fixed demo identity has no missing-cookie rejection branch.
 - The verify route emits no `action_settled`/`mfa_required`/`confirmation_required` stream events of
   its own (`:88` only forwards `outcomeWithPlan.events`). `action_settled` has no server producer at
   all (client-only, `components/chat/actions.ts`); closing the MFA prompt is left to the client.
-- The edge never rewrites agent text: `verify/route.ts:79-91` copies `outcome.message` and
-  `outcomeWithPlan.events` into `ActionResponse` unchanged (`ConfirmationOutcome.result` is dropped),
-  and `chat/route.ts:83` writes every `AgentStreamEvent` as a verbatim SSE frame via `_lib/http.ts:124`
-  `sseFrame`. A block reason built by `security/security-gateway.ts` `BLOCK_REASON_PREFIX` (`__SECURITY_BLOCK__` + JSON,
-  e.g. `{"decisionKind":"deny"}`) therefore reaches the browser inside `security_event.message` and any
-  tool-error text. The action routes' own lock refusal IS typed (`code`/`failure`), but stream frames
-  stay verbatim, so there is no app-layer scrubbing or error-code
-  mapping point for them. The same verbatim pass-through exists at `runs/[id]/events/route.ts:18` (`readRunPresentation` frames) and `../agent/history.ts:36-37` (persisted message cards re-emitted unchanged, so a stored `error` card keeps its text). `agent/turns/events.ts:49,73` puts the RAW marker into `security_event.message` and recognizes it only when the text STARTS WITH the prefix; `confirm`/`recover` forward `outcome.events` unchanged and `resumeTurn` (`agent/run-turn.ts:96`) installs the same handler, so a continuation that re-attempts a blocked tool can stream the marker too. The action routes' own `data.message` carries no marker: `AuthorizationResult.message` is always a human sentence and the prefixed payload lives only in `blockReason` / `GatedToolOutcome.error` (`agent/confirmation/gated-execution.ts:66`).
+- The edge serializes already grounded agent UI events. `verify`, `confirm`, chat SSE and run replay preserve public event identities and business facts. Refusal rendering and unsupported prose-claim replacement happen in `agent/turns/` and `lib/public-text.ts`, before persistence/publication. Never replace the UI event source with raw journal/provider events; the HTTP edge does not repair arbitrary archived diagnostic text.
+
 - A `'locked'` verify outcome appends no `mfa_required`: `blockedOutcome`
   (`agent/confirmation/outcomes.ts`) emits it only for `pending`/`awaiting_mfa`, so the only possible
   appended event is `plan_update` (and `nextPlanDecision`, `agent/task-decision.ts`, skips rows outside

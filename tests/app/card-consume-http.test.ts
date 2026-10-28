@@ -32,6 +32,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { banking } from '@/banking-sdk';
 import type { CardConsumptionView, ConsumeCardResult } from '@/banking-sdk/types';
+import type { CardConsumptionResponse } from '@/lib/contracts/card-consumption';
 import { POST as consumePost } from '@/app/api/cards/[id]/consume/route';
 import { GET as consumptionsGet } from '@/app/api/cards/[id]/consumptions/route';
 import { demoMonthRange, demoNow, demoPreviousMonthRange } from '@/lib/clock';
@@ -86,11 +87,15 @@ function consumptionsPath(cardId: string, query = ''): string {
 }
 
 /** POST a consume request for `cardId`, forwarding only the ignored browser identity hints. */
-function consume(cardId: string, body: unknown, opts: { sessionId?: string; cookie?: string } = {}) {
-  return postJson<Envelope<ConsumeCardResult>>(consumePost, consumePath(cardId), body, {
-    ctx: idCtx(cardId),
-    ...opts,
-  });
+async function consume(cardId: string, body: unknown, opts: { sessionId?: string; cookie?: string } = {}) {
+  const options = { ctx: idCtx(cardId), ...opts };
+  let response = await postJson<Envelope<CardConsumptionResponse>>(consumePost, consumePath(cardId), body, options);
+  if (response.data?.data?.status === 'awaiting_mfa') {
+    response = await postJson<Envelope<CardConsumptionResponse>>(consumePost, consumePath(cardId), {
+      ...body as Record<string, unknown>, actionId: response.data.data.actionId, code: '123456', confirmed: true,
+    }, options);
+  }
+  return { ...response, data: response.data ? { ...response.data, data: response.data.data?.result } as Envelope<ConsumeCardResult> : undefined };
 }
 
 /** GET the consumption ledger for `cardId`, forwarding only the ignored browser identity hints. */
@@ -190,7 +195,7 @@ describe('POST /api/cards/[id]/consume', () => {
       cardId: card.id, accountId: CHECKING, amount: '88.50', currency: 'CNY',
       category: '餐饮', merchant: DETAILS, occurredAt: bookedAt,
     });
-    expect(result.consumption.executionKey).toBeUndefined();
+    expect(result.consumption.executionKey).toMatch(/^cardconsume_/);
     expect(result.accountAvailableBalance).toBe('23491.50');
     expect(result.card).toMatchObject({ id: card.id, type: 'VIRTUAL', status: 'ACTIVE', accountAvailableBalance: '23491.50' });
 
@@ -212,7 +217,7 @@ describe('POST /api/cards/[id]/consume', () => {
     expect(consumption).toHaveLength(1);
     expect(consumption[0]).toMatchObject({
       userId: DEMO_USER_ID, accountId: CHECKING, amountMinor: 8850n, currency: 'CNY',
-      category: '餐饮', merchant: DETAILS, executionKey: null,
+      category: '餐饮', merchant: DETAILS, executionKey: result.consumption.executionKey,
     });
     expect(consumption[0].occurredAt).toEqual(new Date(bookedAt));
 
@@ -234,7 +239,7 @@ describe('POST /api/cards/[id]/consume', () => {
     expect(second.status).toBe(200);
     expect(second.data?.data).toEqual(first.data?.data);
     expect(first.data?.data?.consumption.occurredAt).toBe(demoNow());
-    expect(second.data?.data?.consumption.executionKey).toBe('http-consume-key-1');
+    expect(second.data?.data?.consumption.executionKey).toMatch(/^cardconsume_/);
     expect(await db().cardConsumption.count({ where: { cardId: card.id } })).toBe(1);
     expect(await db().transaction.count({ where: { merchant: DETAILS } })).toBe(1);
     expect((await db().account.findUniqueOrThrow({ where: { id: CHECKING } })).balanceMinor).toBe(CHECKING_MINOR - 1234n);
@@ -461,12 +466,13 @@ describe('POST /api/cards/[id]/consume — server-owned booking time (date tampe
     // The SAME identity is still free for a legitimate, server-booked consume.
     const legit = await consume(card.id, { amount: '5.00', merchant: DETAILS, executionKey: key });
     expect(legit.status).toBe(200);
-    expect(legit.data?.data?.consumption.executionKey).toBe(key);
+    const operationKey = legit.data!.data!.consumption.executionKey!;
+    expect(operationKey).toMatch(/^cardconsume_/);
 
-    const rows = await db().cardConsumption.findMany({ where: { executionKey: key } });
+    const rows = await db().cardConsumption.findMany({ where: { executionKey: operationKey } });
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
-      cardId: card.id, userId: DEMO_USER_ID, accountId: CHECKING, amountMinor: 500n, executionKey: key,
+      cardId: card.id, userId: DEMO_USER_ID, accountId: CHECKING, amountMinor: 500n, executionKey: operationKey,
       occurredAt: new Date(demoNow()),
     });
     // Exactly ONE charge: the refused request left no ledger row behind.

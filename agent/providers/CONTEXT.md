@@ -2,6 +2,12 @@
 
 ## Intent
 
+`agent/model-budget.ts` additionally bounds all conversational, compaction and repair requests by
+one persisted per-turn request/token/time budget, including actual HTTP retry attempts.
+`required-declaration.ts` can require only `describe_turn` for the single correction of an undeclared
+operation claim on DeepSeek non-thinking Chat Completions. It preserves other providers/modes and
+never forces a financial tool or supplies authorization. The audit wrapper records the final payload.
+
 request-options.ts bounds each live request (including body streaming) with a deadline and at most
 one transport retry. An explicit caller cancellation stays aborted; only the deadline is mapped to
 a transient timeout. Defaults: 30 seconds, maximum provider-requested retry delay 1500ms. The
@@ -133,7 +139,7 @@ Root Vitest auto-discovers provider tests under tests/unit/agent/providers/:
   an injected fetch and fake keys; they make no paid model requests.
 - provider-stream-completion.test.ts: actual Pi/OpenAI SDK SSE parsing with injected fetch;
   finish-chunk and later text before [DONE], missing terminators, final SSE flush, transport errors,
-  idle-body deadlines and caller cancellation. stop+[DONE] prose remains verbatim even if unfinished.
+  idle-body deadlines and caller cancellation. Transport preserves stop+[DONE] provider text; the separate agent presentation layer checks operation/balance assertions before publishing it.
 - completion-transport.test.ts: official fetch seam rejects missing [DONE] independently of prose.
 - model-audit.test.ts: effective payload, header whitelist, fragmented-argument redaction and
   model-request identity on provider evidence. Integration coverage also rejects otherwise complete
@@ -183,7 +189,7 @@ The mock has no card-consumption/spend/payment intent: its only card tool calls 
 `mock/conversation-guidance.ts:29-35` (`cardReissue`) excludes a reissue request from that branch entirely: a card word plus 补办/补卡/补发/补领, or replace/reissue/replacement card, never yields `card_management_required`. The reply then depends on the rest of the wording — 请为刚挂失的尾号6688信用卡补办新卡。 passes the conversational check (挂失 is a `WRITE_VERB`, `mock/conversation-policy.ts:3`) and reads the owned cards through `get_cards` (`mock/classifier.ts:76`), while 办理一张信用卡补办 is answered from the plain conversation branch (`mock/classifier.ts:46`); neither is the page-only template, because 补办 of an already-lost card is an agent capability.
 `mock/card-intents.ts:53-55` repeats the same code inside `classifyCardAction`; the full-text check in `classify` always precedes it, so only direct test callers reach that branch.
 The same envelope is accepted from a live model: `parseBankingGuidance` accepts `card_management_required` and `capabilities` (`../banking-guidance.ts:36`) and the server renders its own template (`../turns/buffer.ts:29-33`).
-This node adds no mitigation of its own: `provider-live.ts:206-223` returns the model plus `models.streamSimple` wrapped only by `withLiveRequestLimits` (deadline and one retry, `request-options.ts:7-45`), so no extra system instruction, temperature, capability preamble or tool filtering is sent and no card tool is dropped from the live declaration.
+The base live runtime applies transport limits in `request-options.ts`. Agent assembly additionally applies the persisted model budget, audit wrapper and the bounded `required-declaration.ts` correction. The correction can require only `describe_turn` on compatible DeepSeek non-thinking requests; it never drops card tools from normal requests or forces a financial tool.
 `capabilities` is emitted at `mock/classifier.ts:55` only for non-conversational text; a plain 能做什么/有哪些功能 question is answered with `help` (`mock/classifier.ts:44-45`).
 
 - respond(context) is pure: no database, banking SDK, filesystem, network,

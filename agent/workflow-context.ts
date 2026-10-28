@@ -1,4 +1,31 @@
 import { dbClient } from '@/lib/db/client';
+import type { ActionStatusEvidence } from './current-turn-focus';
+import type { AgentMessage } from '@earendil-works/pi-agent-core';
+import { security } from '@/security';
+import { isTerminalActionStatus } from './action-status';
+
+/** Project current terminal state at its original tool-result position; preserve the saved archive. */
+export function withCurrentActionStatuses(messages: readonly AgentMessage[], actions: readonly ActionStatusEvidence[]): AgentMessage[] {
+  const terminal = new Map(actions.filter(action => isTerminalActionStatus(action.status)).map(action => [action.id, action]));
+  return messages.map(message => {
+    if (message.role !== 'toolResult') return message;
+    const reason = message.content.filter(part => part.type === 'text').map(part => part.text).join('\n');
+    const blocked = security.gateway.securityGateway.parseBlockReason(reason);
+    const action = blocked?.actionId ? terminal.get(blocked.actionId) : undefined;
+    if (!action || action.toolName !== message.toolName) return message;
+    return { ...message, content: [{ type: 'text', text: JSON.stringify({ actionId: action.id,
+      currentActionStatus: action.status, historicalGateIsClosed: true,
+      instruction: 'This is the current server status of the historical call. It no longer awaits confirmation or verification. A new customer request needs a fresh describe_turn and controlled tool call; this status grants no authorization.' }) }] };
+  });
+}
+
+/** Refresh only statuses of chat tools; never project manual-page payloads or authorization secrets. */
+export async function loadActionContext(userId: string, sessionId: string, toolNames: readonly string[]): Promise<ActionStatusEvidence[]> {
+  return dbClient().pendingAction.findMany({
+    where: { userId, sessionId, toolName: { in: [...toolNames] } },
+    orderBy: { updatedAt: 'desc' }, take: 10, select: { id: true, toolName: true, status: true },
+  });
+}
 
 export interface WorkflowStatusEvidence {
   id: string;

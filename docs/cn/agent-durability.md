@@ -207,9 +207,11 @@ Pi、HTTP 续跑和调度路径共用 `ToolInvocation`。
 
 ## 回复纠正与建议续答
 
-正常交流只对完整协议封套做回复格式检查。
+回复格式检查识别完整协议封套。
 发现格式问题时，在原上下文中请求模型纠正一次。
-金额、业务词和旧草稿词不触发自动重答。
+单独出现金额、业务词或旧草稿词，不触发自动重答。
+办理状态和余额另经[事实检查](chat-presentation.md#办理状态与余额)。
+该检查使用现有证据生成状态，不为替换错误表述新增模型请求。
 业务结果由独立工具记录、授权和回执说明。
 页面暂缓展示未经校验的候选回复。
 原始候选继续保存，纠正不会裁剪归档消息。
@@ -267,7 +269,7 @@ Pi、HTTP 续跑和调度路径共用 `ToolInvocation`。
 
 ## 声明写入的单次续写
 
-一轮声明了写操作却没有受控工具调用时，运行时只追加一次续写。
+一轮信息完整且声明了写操作，却没有受控工具调用时，运行时至多追加 1 次续写。
 代码见 [write-continuation.ts](../../agent/write-continuation.ts)。
 
 声明来自 `describe_turn` 记录的 `ConversationIntent`，属于模型解释，不是授权。
@@ -275,9 +277,18 @@ Pi、HTTP 续跑和调度路径共用 `ToolInvocation`。
 
 - `llmMode` 为 `live`。
 - 声明中有 `effect` 为 `write` 的工具。
+- 声明明确设置 `needsInput:false`。
 - 本轮没有确认事件、验证码事件、写操作结果和 `submit_plan` 调用。
 - 最后一条助手消息的 `stopReason` 为 `stop`。
 - 该回复不需要格式纠正，也不是可渲染的指引信封。
+
+缺少办理对象或其他选择时，保留澄清并等待用户回答。
+模型遗漏声明且声称已提交操作时，可使用同一次续写要求重新解释本轮请求。
+这一分支的 `declaredTools` 为空，不从旧正文推断操作或授权。
+DeepSeek 非思考模式可要求先调用 `describe_turn`。
+该约束只要求解释，不强制调用金融写工具。
+其他服务商与思考模式保留原有工具选择方式。
+适配见 [required-declaration.ts](../../agent/providers/required-declaration.ts)。
 
 预算随检查点保存，结构见 [reply-repair.ts](../../agent/reply-repair.ts) 的 `WriteContinuationState`：
 
@@ -299,8 +310,28 @@ Pi、HTTP 续跑和调度路径共用 `ToolInvocation`。
 续写不创建待确认操作，也不确认、执行或绕过安全网关。
 
 续写后仍没有受控写入时，由服务端说明真实状态。
-文字来自 [financial-response.ts](../../agent/financial-response.ts) 的 `renderFinancialResponse`，`declared` 选项列出本轮声明的操作。
-该文字说明操作尚未提交，并提示核对信息后重新发送或使用已有操作卡。
+已声明操作由 [financial-response.ts](../../agent/financial-response.ts) 按真实事实生成状态。
+遗漏声明的分支由 [reply-safety.ts](../../agent/reply-safety.ts) 说明未提交状态。
+纠错后仍需补充信息时，保留具体问题，不用未提交提示替代问题。
+
+## 单轮模型调用预算
+
+[model-budget.ts](../../agent/model-budget.ts)为同一轮调用维护 `ModelBudgetState`。
+预算由本轮意图 ID 标识，并随会话检查点保存。
+普通生成、上下文压缩、回复修复及 HTTP 重试共用总量。
+请求前先保存次数与 token 预留，再联系模型服务。
+失败请求保留已用预留量，不因重试或恢复退还。
+
+输入按上下文的 UTF-8 字节数加协议余量预留。
+输出按请求或模型的最大输出预留，余额不足时降低输出上限。
+实际 HTTP 重试在发出请求前再次预留。
+该保守估计用于限制调用量，不代替供应商的计费统计。
+
+总时长从首次模型调用开始，包含重试和恢复之间的时间。
+达到时限后，即使供应商忽略取消信号，也终止本轮输出。
+新的用户输入开始新预算。
+恢复沿用已保存预算，配置变更只能收紧原上限。
+默认值和环境变量见[开发指南](development.md#单轮模型调用预算)。
 
 ## 独立工作流
 

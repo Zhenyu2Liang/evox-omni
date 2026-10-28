@@ -2,6 +2,10 @@
 
 ## Responsibility
 
+`consume/route.ts` delegates proposals and verification to `security/card-consumption.ts`.
+The original arguments, action identity, challenge consumption, account lock and receipt remain
+server-owned. Category caps use monthly family spending, including predecessor cards after replacement.
+
 HTTP edge for a single card (`:id`). Each handler validates input, resolves the fixed demo
 workspace server-side, delegates to the banking SDK and serializes the frozen envelope. Ownership
 and domain rules stay INSIDE the SDK (`banking.card.*`): unknown/foreign card → `NOT_FOUND`,
@@ -17,12 +21,12 @@ spend another user's card. All shared plumbing comes from `_lib` (`http`, `sessi
 | Route | Handler | Contract |
 | --- | --- | --- |
 | `DELETE /api/cards/[id]` | `route.ts` | Manual demo-card deletion proposal (`security/manual-card-management#proposeCardChange`); MFA verify/cancel live under `/api/cards/changes/[id]/{verify,cancel}` (see `../CONTEXT.md`). |
-| `POST /api/cards/[id]/consume` | `consume/route.ts` | Body `{ amount (exact CNY decimal string), category?, merchant?, executionKey? }` → `{ ok:true, data: ConsumeCardResult }`. Booking time is SERVER-OWNED: a body containing an `occurredAt` key is rejected with `400 VALIDATION` (never stripped), before any delegation. |
+| `POST /api/cards/[id]/consume` | `consume/route.ts` | `{ amount, category?, merchant?, executionKey? }` creates a RED proposal without a debit. Resubmit identical parameters plus `actionId`, `confirmed:true` and `code` to verify and execute. Returns `CardConsumptionResponse`; `result` contains the committed `ConsumeCardResult` only after execution. An `occurredAt` key is rejected with `400 VALIDATION`. |
 | `GET /api/cards/[id]/consumptions` | `consumptions/route.ts` | Optional `?limit=` (1–500, shared `limitQuerySchema`) → `{ ok:true, data: { consumptions: CardConsumptionView[] } }`. |
 
 ## Routing Table
 
-- `./consume/` — POST virtual-card consumption: SDK-atomic debit of the bound CHECKING account plus a `channel='CARD'` ledger row and a `CardConsumption` row in one transaction, monthly-limit guarded and idempotent on `executionKey`.
+- `./consume/` — RED proposal and verification through `security/card-consumption`, the shared gateway and execution fence. The SDK checks monthly and category limits in its debit transaction; retries reuse the persisted action and verified receipt. Page execution does not request model narration.
 - `./consumptions/` — GET a card's consumption ledger, newest first (SDK default 20, hard cap 200).
 - `route.ts` — DELETE manual demo-card proposal (no subdirectory).
 

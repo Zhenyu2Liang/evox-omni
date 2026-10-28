@@ -53,6 +53,7 @@ pnpm dev
 警告：再次执行 `pnpm db:seed` 会重建演示数据。
 数据库操作与 DeepSeek 配置见[开发指南](docs/cn/development.md)。
 真实模型密钥保存在 `.env.local`。
+使用非本地域名或反向代理时，按[可信访问地址配置](docs/cn/development.md#可信访问地址)设置服务地址。
 
 ## 常用命令
 
@@ -83,5 +84,6 @@ pnpm dev
 - [微信通道](docs/cn/weixin.md)：扫码、对话、确认命令和测试边界。
 - [金融数值与结算](docs/cn/financial-values.md)：单位、精度和结算。
 - [安全设计](docs/cn/security.md)与[当前限制](docs/cn/known-risks.md)：权限和模拟边界。
+- [测试指南](docs/cn/test-cases.md)：安全回归、隔离数据库和真实模型验收。
 
 比赛要求见 [req.md](req.md)。

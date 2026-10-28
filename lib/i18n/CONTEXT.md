@@ -75,12 +75,12 @@
 
 ## 费用（fee）文案
 
-本目录只有「费用口径」展示标签，没有任何费用计算、费用字段或费用占位符。
-与手续费相关的键只有两个：`chat.field.feeRule`（zh `费用口径` / en `Fee basis`，`messages/chat.*.json:260`，由 `display-sources.json#fields:87` 映射）与 `chat.value.feeRuleSimulatedNone`（`messages/chat.*.json:277`，zh「模拟环境不收取赎回费，赎回费 ¥0.00。」/ en「No redemption fee is charged in the simulation; the redemption fee is ¥0.00.」）。
+本目录只有“费用口径”展示标签，没有任何费用计算、费用字段或费用占位符。
+与手续费相关的键只有两个：`chat.field.feeRule`（zh `费用口径` / en `Fee basis`，`messages/chat.*.json:260`，由 `display-sources.json#fields:87` 映射）与 `chat.value.feeRuleSimulatedNone`（`messages/chat.*.json:277`，zh“模拟环境不收取赎回费，赎回费 ¥0.00。”/ en“No redemption fee is charged in the simulation; the redemption fee is ¥0.00.”）。
 `chat.value.feeRuleSimulatedNone` 是固定字面量：不带 `{...}` 占位符，`¥0.00` 写死在文案里，不渲染任何计算结果；它也不在 `display-sources.json#policyValues`（`:120-133`）中，因此 `localizeActionFieldValue` 不翻译费用数值。
 字段标签 `费用口径` 由调用方以 TS 字面量写进摘要（`security/security-gateway.ts`），不经 `chat.field.feeRule` 查表。
-检索 `费用`/`fee` 会命中两处**订阅费用**文案，与银行手续费无关：`pages.subscriptions.summary`（zh「…费用与续费日期」/ en「…Fees and renewal dates」，`messages/pages.*.json:76`）与 `pages.subscriptions.listDescription`（zh「名称 / 费用 / 计费周期 / 下次扣费」/ en「Name / fee / billing cycle / next charge」，`:86`）。
-`business.subscriptions.nextCharge`（下次扣费 / Next charge）与 `cards.reconciliation.recoverable.help`（不会重复扣款）里的「扣费/扣款」是扣款语义，同样不是手续费。
+检索 `费用`/`fee` 会命中两处**订阅费用**文案，与银行手续费无关：`pages.subscriptions.summary`（zh“…费用与续费日期”/ en“…Fees and renewal dates”，`messages/pages.*.json:76`）与 `pages.subscriptions.listDescription`（zh“名称 / 费用 / 计费周期 / 下次扣费”/ en“Name / fee / billing cycle / next charge”，`:86`）。
+`business.subscriptions.nextCharge`（下次扣费 / Next charge）与 `cards.reconciliation.recoverable.help`（不会重复扣款）里的“扣费/扣款”是扣款语义，同样不是手续费。
 
 ## 卡片标签
 
@@ -126,15 +126,19 @@
 | `business.cards.monthlyLimit` | 月限额 | Monthly limit | 卡片带月限额时的一行 |
 | `business.cards.categoryLimits` | 分类限额 | Category limits | 分类限额区块标题 |
 
-这些卡片键全部**不含占位符**，`t(key)` 返回值即目录原文；en 的 `cardFrozenNotice` / `cardLostNotice` 使用 U+2014 em dash（`Card frozen — not usable…`），断言时不要写成连字符。
+这些卡片键全部**不含占位符**，`t(key)` 返回值即目录原文；en 的 `cardFrozenNotice` / `cardLostNotice` 使用 U+2014 em dash（`Card frozen — not usable…`），断言时不得写成连字符。
 `lib/i18n/messages/pages.*.json` 不含任何 `business.cards.*` 键，`shared.ts:15`/`:21` 的展开覆盖不会改变这些值；`pages.cards.*` 是 `/cards` 页面自身的表单、消费与空态文案。
 关联账户名称复用既有 `business.cards.linkedAccount`；`business.cards.usableBalance` 是更通用的可用余额标签。
-取值相同的键不重复新增，例如不设 `business.cards.linkedAccountName`。
+同一含义复用既有键，例如不另设 `business.cards.linkedAccountName`。
+主金额与详情属于不同语境，按各自语义选择键。
 当前渲染方：`components/banking/CardTile.tsx` 把 `accountBalance` / `usableBalance` 渲染成 `<dt>` 标签，`linkedAccount` 渲染成 `<span>` 标签，`cardUnavailable` / `cardFrozenNotice` / `cardLostNotice` / `linkedAccountMissing` / `linkedAccountUntrusted` 由 `components/banking/card-account-display.ts` 的映射选择。
-`business.cards.accountAvailable`、`business.cards.payableAmount`、`business.cards.balanceFromAccount` 当前没有任何组件渲染；`tests/e2e/card-labels.e2e-helper.ts` 只把前两者读入 `CARD_LABEL_RETIRED`，用于断言它们不再出现。
+`business.cards.accountAvailable`、`business.cards.payableAmount`、`business.cards.balanceFromAccount` 是旧详情键。
+`CARD_LABEL_RETIRED` 保留前两者的文字，用于检查旧详情。
+`CardPrimaryAmount` 使用 `business.presentation.payable`，可显示同名的“当前可支付金额”。
+该主金额文字存在不等于重新使用旧详情键，验收同时核对金额。
 浏览器验收断言的卡片标签来自 `tests/e2e/card-labels.e2e-helper.ts` 的 `CARD_LABEL`，它用 `createTranslator('zh-CN')` 读目录而不是复制字符串。
 
-本目录没有「卡号」「账号」「尾号」「结算账户」这类键：脱敏卡号是 `CardView.numberMasked`（`****6688`，4 个 `*` + 4 位数字）原样渲染，关联账号是 `CardView.linkedAccountNumber`，都不经目录；「结算账户」只出现在 `chat.policy.consume_virtual_card` 的策略描述里。
+本目录没有“卡号”“账号”“尾号”“结算账户”这类键：脱敏卡号是 `CardView.numberMasked`（`****6688`，4 个 `*` + 4 位数字）原样渲染，关联账号是 `CardView.linkedAccountNumber`，都不经目录；“结算账户”只出现在 `chat.policy.consume_virtual_card` 的策略描述里。
 `/cards` 页自身的键集中在 `pages.cards.*`（`messages/pages.zh-CN.json:30-74` 与 `pages.en.json:30-74` 行号一致）；其中 `pages.cards.summary`（`{count}`）与 `pages.cards.verificationFailed`（`{attempts}`）含占位符，断言前必须先补值，其余卡片页键是纯字面量。
 `tests/e2e/card-labels.e2e-helper.ts` 尚未收录类型键、状态键与三条不可用提示键（`cardUnavailable`/`cardFrozenNotice`/`cardLostNotice`）。
 `pages.cards.consume*` 提供卡片消费界面（模拟消费表单、消费结果提示与消费记录）的中英文标签。
@@ -196,7 +200,7 @@
 因此新增键必须同时写进 en 与 zh-CN 目录（否则类型或运行期失败），中英文键顺序在四份文件中保持一致便于对照。
 键是**扁平字面量**，没有嵌套路径遍历：`t('cards.mfa.label')` 里的点号只是键名的一部分，`translate` 直接 `messages[locale][key]` 取值。
 参数名不统一，按键取值：`cards.mfa.failedAttempts` 用 `{attempts}`，`cards.mfa.failedAttemptsLimit` 用 `{attempts, maxAttempts}`，`chat.error.verificationRemaining` 用 `{count}`（值来自 `failure.attemptsLeft ?? 0`），`security.reset.success` 与 `security.breaker.failureCount` 用 `{count, max}`。
-`tests/e2e/` 的断言文案经 `createTranslator('zh-CN')` 从本目录读取（`tests/e2e/acceptance.e2e.ts:695` 与多数 `*.e2e-helper.ts`），新增 e2e 断言应沿用该写法而非硬编码中文字面量；`tests/e2e/conversation.zh-CN.json` 是用户提示词与否定词的 fixture，不是界面文案表。
+`tests/e2e/` 的断言文案经 `createTranslator('zh-CN')` 从本目录读取（`tests/e2e/acceptance.e2e.ts:695` 与多数 `*.e2e-helper.ts`），新增 e2e 断言必须沿用该写法而非硬编码中文字面量；`tests/e2e/conversation.zh-CN.json` 是用户提示词与否定词的 fixture，不是界面文案表。
 
 ## 安全与验证文案的跨目录分布
 
@@ -209,7 +213,7 @@
 | 页面 | `messages/pages.zh-CN.json` | `pages.security.*`、`pages.cards.locked`、`pages.activity.status.locked`、`pages.audit.status.locked` |
 
 `已锁定` 精确出现在三处：`cards.terminal.locked`、`pages.activity.status.locked`、`pages.audit.status.locked`。
-`chat.approval.status.locked` 是「验证已锁定」，`cards.mfa.locked` 是完整句「已锁定，请到安全中心处理。」，两者不可替代 `cards.terminal.locked`。
+`chat.approval.status.locked` 是“验证已锁定”，`cards.mfa.locked` 是完整句“已锁定，请到安全中心处理。”，两者不可替代 `cards.terminal.locked`。
 终态卡片的 `terminalStatusView`（`components/chat/cards/confirmationStatus.ts`）自带硬编码中文标签且不经本目录，见 [components/chat/cards/CONTEXT.md](../../components/chat/cards/CONTEXT.md)。
 客户端查找链：`createTranslator(locale)`（`shared.ts:41-43`）返回 `(key, params?) => translate(locale, key, params)`，签名见 `Translator`（`shared.ts:18`），返回值就是目录字符串本身（无包裹、无追加空白或标点）。
 `LocaleProvider`（`LocaleProvider.tsx:23-48`）用 `useState(initialLocale)` + `useMemo(() => createTranslator(locale))` 提供上下文的 `t`；`useI18n()`（`:51-53`）就是 `useContext(I18nContext)`。

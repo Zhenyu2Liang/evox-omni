@@ -79,7 +79,7 @@ export async function executeAuthorizedAction(
     // Atomic settlement remains authoritative if the gateway notification fails.
   }
   const planEvents = await resumeOwningPlan(action, result, identity.userId, opts);
-  const { events } = await resumeTurn({
+  const { events } = opts?.narrate === false ? { events: [] as AgentStreamEvent[] } : await resumeTurn({
     sessionId: action.sessionId, toolResult: result,
     toolName: link?.taskId ? 'submit_plan' : action.toolName,
     resultToolName: action.toolName,

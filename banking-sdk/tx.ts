@@ -31,6 +31,9 @@ export function runInTransaction<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
   const current = currentTransaction();
   if (current) return fn(current);
   return prisma.$transaction(async (tx) => {
+    // Acquire SQLite's writer before any snapshot read. A deferred read followed by an UPDATE can
+    // otherwise fail immediately with SQLITE_BUSY when another process commits in between.
+    await tx.$executeRaw`UPDATE "User" SET "id" = "id" WHERE 0`;
     // Every SDK mutation enters here, including runners that only forward their first argument.
     // The trusted fence takes the SQLite writer slot before any banking write in this transaction.
     await context?.fence?.(tx);

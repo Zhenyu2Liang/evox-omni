@@ -47,7 +47,11 @@ export async function recoverTurnIntentControl(invocation: ToolInvocation, run: 
       runtimeRequestDigest(TURN_INTENT_TOOL, safeParse(invocation.argsJson, null)) !== runtimeRequestDigest(TURN_INTENT_TOOL, args)) {
     throw new AppError('CONFLICT', 'The interpretation arguments do not match their original invocation.');
   }
-  const result = await tool.execute(invocation.callId, args);
+  // A checkpoint may already contain the original control result from before readiness became a
+  // model argument. Replay its saved interpretation instead of silently changing it on upgrade.
+  const replayArgs = args.needsInput === undefined && current.purpose !== 'undecided' && current.needsInput !== undefined
+    ? { ...args, needsInput: current.needsInput } : args;
+  const result = await tool.execute(invocation.callId, replayArgs);
   return toJson({ ok: true, data: result.details,
     content: result.content, usage: result.usage,
     summary: result.content.flatMap(part => part.type === 'text' ? [part.text] : []).join('\n') });

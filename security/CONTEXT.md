@@ -6,18 +6,25 @@
 
 ## 模块边界
 
+`card-consumption.ts` 管理卡片页消费提案、原参数绑定和验证执行。
+首次请求只创建待确认操作，不扣款。
+验证与提交复用原操作、挑战和回执，事务内复查账户锁与限额。
+该入口与页面增删卡片的 `manual-card-management.ts` 分工独立。
+HTTP 域名和请求体检查由 `app/api/_lib/http.ts` 负责。
+`needsInput` 只约束模型提议，不能代替本层的授权判断。
+
 `lib/contracts/tool-catalog.ts` 是名称、效果、默认档位与重放要求的共享来源。
 `permission-engine.ts` 推导静态策略。
 `risk-engine.ts` 使用精确 bigint 运算并输出十进制字符串。
 转账始终需要人工决定。
 已入账金额加上在途未入账金额超过 `1000.00` 时需要强验证。
 订阅查询为 YELLOW。
-`set_card_limit` 只调整分类消费限额，意图标签为「调整卡片分类消费限额」。
+`set_card_limit` 只调整分类消费限额，意图标签为“调整卡片分类消费限额”。
 `replace_card`、`apply_virtual_card` 与 `consume_virtual_card` 属于 RED 写操作，均要求确认、强验证与幂等重放。
 
 `security-gateway.ts` 校验归属资源、记录确定性授权决定并创建待确认操作。
 确认采用原子认领，并重新评估累计风险。
-开放的人工接管阻断新的执行认领；已授权的在途命令仍可落地。
+开放的人工接管阻断新的执行认领；已授权的在途命令仍可提交。
 `authorizeAction` 与 `lib/db/repositories/pendingAction.ts#assertActionMayStart` 在人工复核接管时抛 `AppError('MANUAL_REVIEW_HOLD', …)`（HTTP 409），而不是通用的 `CONFLICT`：拒绝条件本身不变（`row.taskId` 加未关闭的 `manualReview`），但原因以结构化错误码对外表达，最终文案由 `lib/public-text.ts` 收口为 `chat.error.manualReviewHold`。
 人工复核接管拦的是**新授权**（confirm/verify 经 `authorizeAction`）与**新命令**（`claimPendingAction` 仅在 `to === 'confirmed'` 时调用 `assertActionMayStart`），因此 `cancel` 是例外：`cancelAction` 只做 `NOT_FOUND`/`isManualCardCommand`→`SECURITY_DENIED`/`assertOwnership`，再以 `claimPendingAction({ from: ['pending','awaiting_mfa'], to: 'cancelled' })` 原子认领，未结算的行仍会被取消为 `cancelled`，只有已结算或已 `locked` 的行才是 `CONFLICT`；同一条边界也适用于终态锁定——它拦新授权与新命令，不拦所有者撤回自己的挂起命令。
 `authorization-record.ts` 记录策略版本、命令指纹、原因与脱敏输入。
@@ -66,8 +73,8 @@ MFA 连续 `MFA_MAX_ATTEMPTS`（`lib/constants.ts` = 3）次错误产生三重�
 
 ## reason 的权威判定表（mfa.ts + security-gateway.ts）
 
-`mfa.attemptState(actionId)`（`MfaAttemptState { attempts, maxAttempts, exhausted }`）是「本操作是否用尽尝试」的唯一权威来源：`exhausted = attempts >= maxAttempts || challenge.status === 'locked'`，**只看该操作自己的挑战行**，不看账户熔断。
-`mfa.challengeInvalidation(error)` 是「挑战为何不可用」的唯一权威来源：服务端判别 `'consumed' | 'expired' | 'command_changed'`，`null` 表示不是挑战级拒绝。
+`mfa.attemptState(actionId)`（`MfaAttemptState { attempts, maxAttempts, exhausted }`）是“本操作是否用尽尝试”的唯一权威来源：`exhausted = attempts >= maxAttempts || challenge.status === 'locked'`，**只看该操作自己的挑战行**，不看账户熔断。
+`mfa.challengeInvalidation(error)` 是“挑战为何不可用”的唯一权威来源：服务端判别 `'consumed' | 'expired' | 'command_changed'`，`null` 表示不是挑战级拒绝。
 `verify` 的挑战级拒绝抛 `ChallengeInvalidError extends AppError`：`code` 仍为 `'MFA_FAILED'`、英文 message 逐字不变（`lib/tool-feedback.ts` 精确白名单），判别只经 `SecurityFailure` 与 `invalidation` 字段承载（`consumed` → `{code:'CONFLICT', reason:'denied'}`，`expired`/`command_changed` → `{code:'MFA_FAILED', reason:'denied'}`）。
 
 | 情况 | 顶层 `code` | `failure.code` | `failure.reason` | `status` | 行写入 |
@@ -80,10 +87,10 @@ MFA 连续 `MFA_MAX_ATTEMPTS`（`lib/constants.ts` = 3）次错误产生三重�
 | 挑战过期 / 命令摘要变化 | 无 | 无 | 无 | `awaiting_mfa` | 先 `issueChallenge` 重签，提示态不带 `failure` |
 | 无法归类的挑战级拒绝 | 抛 `AppError('CONFLICT', …)` | — | — | — | 不写业务副作用（fail-closed） |
 
-`mfa_attempts_exhausted` 只描述**该操作自己**的尝试记录，账户熔断一律 `circuit_open`：因此 `attemptsUsed` 恒等于本操作已消费次数，绝不出现 0 或负数冒充「用尽」。
+`mfa_attempts_exhausted` 只描述**该操作自己**的尝试记录，账户熔断一律 `circuit_open`：因此 `attemptsUsed` 恒等于本操作已消费次数，绝不出现 0 或负数冒充“用尽”。
 判定表使用的 reason 全部是既有 `SecurityFailureReason` 成员，`FAILURE_REASONS` 白名单无需扩展。
 `consumedAt` 已写表示决定已结算：该行只能进入终态 `cancelled`（CAS 落空时重读，`locked` 走 `lockedOutcome(…, 'mfa_session_locked')`，否则抛 `AppError('CONFLICT', …)`），绝不执行、不消耗尝试、不重新签发验证码。
-`expired`/`command_changed` 是唯一允许出现「继续验证」语义的情形（服务端确实签发了全新挑战）。
+`expired`/`command_changed` 是唯一允许出现“继续验证”语义的情形（服务端确实签发了全新挑战）。
 `locked` 终态与 `from` CAS 约束不变：`locked` 永不作为 `from` 来源，也永不写回 `pending`/`awaiting_mfa`/`confirmed`/`executed`/`failed`；解锁（`circuit-breaker.ts#resetSession`）只清熔断与失败计数，不复活任何 `locked` 操作。
 
 `security/` 下的回归测试与局部 vitest 配置：`security/vitest.security-contract.config.ts`（`root` 固定为仓库根、`include: ['security/**/*.test.ts']`）配合 `security/mfa-lock-reason-authority.test.ts`（A–E 五条，DB 支撑），运行 `pnpm exec vitest run --config security/vitest.security-contract.config.ts`。
@@ -92,31 +99,31 @@ MFA 连续 `MFA_MAX_ATTEMPTS`（`lib/constants.ts` = 3）次错误产生三重�
 
 `lib/contracts/security.ts` 的 `SecurityFailure { code; reason: 'mfa_code_invalid'|'mfa_attempts_exhausted'|'mfa_session_locked'|'circuit_open'|'denied'; actionId?; attemptsUsed?; attemptsLeft?; maxAttempts? }` 是拒绝的唯一机器可读形态；`lib/errors.ts` 的 `'MFA_LOCKED'` 是它的领域错误码。
 网关每个拒绝点都填 `failure`：`lockedOutcome`（`reason` 区分 `circuit_open`/`mfa_session_locked`，`attemptsLeft` 恒为 `0`）、`authorizeWithMfa` 的 `mfa_code_invalid` 与 `mfa_attempts_exhausted`（后者 `code` 为 `MFA_LOCKED`，`attemptsUsed`/`attemptsLeft`/`maxAttempts` 完整）、`planCancelledOutcome`、`authorizeTransfer` 的 `LIMIT_EXCEEDED` 升级分支。
-`authorizeWithMfa` 的「尚未提交验证码／需要输入」分支是流程提示态而非拒绝，不带 `failure`。
+`authorizeWithMfa` 的“尚未提交验证码／需要输入”分支是流程提示态而非拒绝，不带 `failure`。
 `mfa.verify` 的挑战级拒绝在 `SecurityFailureReason` 中没有专门成员，`ChallengeInvalidError` 借既有成员承载（`consumed` → `{code:'CONFLICT', reason:'denied'}`，`expired`/`command_changed` → `{code:'MFA_FAILED', reason:'denied'}`），判别只看 `invalidation`；网关按它分流，**不**把三者塌缩成 `mfa_code_invalid`，也不渲染 `res.error.message`：
 `consumed` 表示决定已结算——CAS `from:['pending','awaiting_mfa']` → `cancelled`，返回 `status:'cancelled'`、顶层 `code:'CONFLICT'`、`failure {code:'CONFLICT', reason:'denied', actionId}`、`message: CONSUMED_CHALLENGE_MESSAGE`（逐字命中 `lib/tool-feedback.ts#PUBLIC_BUSINESS_ERRORS` → `chat.error.verificationConsumed`，`security-gateway.ts:1179-1201`）；认领落空时重读该行，`locked` 走 `lockedOutcome(…, 'mfa_session_locked')`，否则抛 `CONFLICT`（`:1181-1188`）。
 `expired`/`command_changed` 先 `issueChallenge` 重签，再返回不带 `code`/`failure` 的 `awaiting_mfa` 提示态，文案取 `security/messages/mfa.zh-CN.json#renewedChallenge`（`:1202-1215`）。
 无法归类者抛 `AppError('CONFLICT', …)` 并带 `{code:'CONFLICT', reason:'denied'}`，不写业务副作用（fail-closed，`:1216-1217`）。
 `manual-card-management.ts` 的终态锁定拒绝抛 `AppError('MFA_LOCKED', …)` + `{ code:'MFA_LOCKED', reason:'mfa_session_locked', actionId }`，熔断拒绝抛 `AppError('CIRCUIT_OPEN', …)` + `{ code:'CIRCUIT_OPEN', reason:'circuit_open', actionId }`。
-用户可见文案不内插内部状态字面量：`PENDING_ACTION_STATUS_LABEL` 覆盖全部 `PendingActionStatus` 的中文标签，`statusLabel` 对未知值降级为「状态已变更」。
+用户可见文案不内插内部状态字面量：`PENDING_ACTION_STATUS_LABEL` 覆盖全部 `PendingActionStatus` 的中文标签，`statusLabel` 对未知值降级为“状态已变更”。
 
 `blockReason` 载荷是结构化 JSON：`serializeBlockReason` 产出 `__SECURITY_BLOCK__` + `{ actionId, decisionKind, failure? }`（`actionId` 无条件是必填的真实行 id）。
 `handleToolCall` 的熔断 deny 与 `plan_cancelled` deny 产出同名前缀 + `{ decisionKind:'deny', failure:{ … } }` 且**不含** `actionId`。
-`parseBlockReason` 接受省略 `actionId` 的载荷并保留其 `failure`；返回 `null` 只表示「不是本层载荷」。
+`parseBlockReason` 接受省略 `actionId` 的载荷并保留其 `failure`；返回 `null` 只表示“不是本层载荷”。
 `VALIDATION` 与转账收款人不唯一的 `clarify` 的 `blockReason` 是纯中文消息，不带前缀。
-`message` 永不等于序列化后的 block reason 标记串，也不把状态字面量当文案；消费方应使用 `parseBlockReason` 的 `failure` 渲染拒绝，不得直接展示原始串。
+`message` 永不等于序列化后的 block reason 标记串，也不把状态字面量当文案；消费方必须使用 `parseBlockReason` 的 `failure` 渲染拒绝，不得直接展示原始串。
 
 ## MFA 尝试限制
 
-熔断在「第 3 次」失败即触发（`failures >= max`，非第 4 次）。
+熔断在“第 3 次”失败即触发（`failures >= max`，非第 4 次）。
 `security-gateway.ts` 的 MFA 分支以领域结果返回状态（不抛出）：
-未达上限 → `status: 'awaiting_mfa'`、消息「验证码错误，请重试。剩余尝试次数：N。」；
+未达上限 → `status: 'awaiting_mfa'`、消息“验证码错误，请重试。剩余尝试次数：N。”；
 达到上限 → `status: 'locked'`、`code: 'CIRCUIT_OPEN'`、`failure.reason: 'mfa_attempts_exhausted'`；
 已锁定后的再次提交走提前熔断分支或 `status==='locked'` 早退，返回 `failure.reason: 'mfa_session_locked'`。
 锁定态返回值仍带 `requiresMfa: true`，但 HTTP 路由由 `status` 推导出的 `mfaResult` 变为 `failed`，且不发出 `mfa_required` 流事件。
-真正的终态锁定以「仅从 `pending`/`awaiting_mfa` 出发」的 CAS 把 `PendingAction.status` 落库为 `'locked'`；该行因此不再作为待决策项返回，也不再发出 `mfa_required`，MFA 弹窗不会重现；对已是 `'locked'` 的行再次授权幂等返回同一拒绝。
+真正的终态锁定以“仅从 `pending`/`awaiting_mfa` 出发”的 CAS 把 `PendingAction.status` 落库为 `'locked'`；该行因此不再作为待决策项返回，也不再发出 `mfa_required`，MFA 弹窗不会重现；对已是 `'locked'` 的行再次授权幂等返回同一拒绝。
 `mfa.ts#verify` 返回 `Result` 而非抛错；抛 `CIRCUIT_OPEN` 的只有 `circuit-breaker.resetSession`、`execution-policy.assertSessionMayWrite` 与 `manual-card-management.ts#breakerLockedError`（熔断开启时在签发挑战与验证之前拒绝，`manual-card-management.ts:60-63`、`:161`）。
-成功验证码重置连续失败计数，但不解除已触发的熔断（「locked 优先」）；仅 `resetSession` 以验证码或冷却解除。
+成功验证码重置连续失败计数，但不解除已触发的熔断（“locked 优先”）；仅 `resetSession` 以验证码或冷却解除。
 `issueChallenge` 只对未决行签发，并对已结算的 `executed`/`cancelled` 行返回 `CONFLICT`；`confirmed`/`failed`/`needs_reconciliation` 仍可签发（恢复授权与回滚重验路径依赖）。
 `mfa.ts` 把 5 分钟墙钟挑战绑定到命令（`commandDigest`），保留有效尝试并记录消费。
 `step-up-authenticator.ts` 是明确的演示适配器，不发送短信。
@@ -152,13 +159,13 @@ RED 工具调用被挂起时**立即**铸造挑战：`security-gateway.ts:1007` 
 ## 卡片生命周期与 replace_card 前提
 
 `replace_card` 的前提只有两条：源卡属于当前用户，且状态为 `LOST`。
-`banking-sdk/card.ts#requireCard` 对不存在的卡片抛 `NOT_FOUND`、对他人卡片抛 `SECURITY_DENIED`；`#replaceCard` 对非 `LOST` 源卡抛 `CONFLICT`「只有已挂失的卡片可以补办，请先办理挂失。」。
+`banking-sdk/card.ts#requireCard` 对不存在的卡片抛 `NOT_FOUND`、对他人卡片抛 `SECURITY_DENIED`；`#replaceCard` 对非 `LOST` 源卡抛 `CONFLICT`“只有已挂失的卡片可以补办，请先办理挂失。”。
 本层与 `agent/tools/card.ts` 都没有 CREDIT / DEBIT / VIRTUAL 的类型禁区；RED 档位只来自 `lib/contracts/tool-catalog.ts` 的目录项。
 唯一的类型分支在 SDK：VIRTUAL 补办必须重新校验并继承结算账户绑定，CREDIT 补办原样继承 `creditLimitMinor` 与 `availableLimitMinor`，因此代理可以补办挂失的信用卡。
 `gatewayCreatePendingAction` 在挂起时只把卡片类型与掩码写进确认摘要，不做归属或类型裁决。
 卡片页也没有补办入口，补办只能由代理发起（见 `docs/cn/card-management.md`）。
 `agentEnabled === false` 的拒绝分支存在于 `permission-engine.ts`、`agent/confirmation/gated-execution.ts`、`security-gateway.ts`（确认与取消）与 `agent/tools/index.ts`，但当前没有任何目录项设为 `false`；物理卡的创建/删除只能手工，是因为目录里不存在这类工具名，而不是被该开关拦住。
-模型对「实体卡只能手工办理」的措辞来自 `agent/system-prompt.ts`，服务端无此规则。
+模型对“实体卡只能手工办理”的措辞来自 `agent/system-prompt.ts`，服务端无此规则。
 
 ## 待处理操作（PendingAction）的创建路径
 
@@ -195,12 +202,12 @@ RED 工具调用被挂起时**立即**铸造挑战：`security-gateway.ts:1007` 
 
 ### 确认摘要里可断言的号码字段
 
-`buildPendingActionSummary`（`security-gateway.ts:1693-1745`）对 `transfer_money` 依次产出 `收款人`（姓名）、`收款手机号`（`maskPhone(recipient.phone)`，如 `139****0002`）、`Amount`（标签逐字是英文 `Amount`，**不是**「金额」）、`账户`、`风险等级`。
-卡片工具由 `gatewayCreatePendingAction` 追加一条 `卡片` 字段，值为 `${cardTypeLabel(card.type)} ${card.numberMasked}`（如「信用卡 ****6688」，`security-gateway.ts:901-904`）。
+`buildPendingActionSummary`（`security-gateway.ts:1693-1745`）对 `transfer_money` 依次产出 `收款人`（姓名）、`收款手机号`（`maskPhone(recipient.phone)`，如 `139****0002`）、`Amount`（标签逐字是英文 `Amount`，**不是**“金额”）、`账户`、`风险等级`。
+卡片工具由 `gatewayCreatePendingAction` 追加一条 `卡片` 字段，值为 `${cardTypeLabel(card.type)} ${card.numberMasked}`（如“信用卡 ****6688”，`security-gateway.ts:901-904`）。
 非转账分支用 `操作`、`金额`（仅金额存在时）与 `风险等级`。
 `金额` 行只来自 `args.amount`（`resolveAmount`，`:339-342`）：赎回的 SHARES/ALL 口径没有该行，AMOUNT 口径下它显示请求金额，而 `summary.amount` 随后被改写成预计到账金额（`:922`）。
 两个投资写操作由 `gatewayCreatePendingAction` 把身份行 `unshift` 到 `操作` 之前：赎回以 `持仓`（值 `${product.name}（${holding.id}）`，`:909-911`）开头，申购以 `产品`（值 `${product.name}（${product.code}）`，`:905-907`）开头。
-两者随后都追加 `入账账户`（赎回）/`付款账户`（申购），值为该用户 CHECKING 账户名，缺失时为「账户待核对」（`:952-955`）。
+两者随后都追加 `入账账户`（赎回）/`付款账户`（申购），值为该用户 CHECKING 账户名，缺失时为“账户待核对”（`:952-955`）。
 `security/messages/` 只有 `mfa.zh-CN.json`；澄清与摘要文案都是 TS 字面量，不在文案资源里。
 
 ## 赎回报价
@@ -215,7 +222,7 @@ RED 工具调用被挂起时**立即**铸造挑战：`security-gateway.ts:1007` 
 确认摘要按序追加 7 行（`security-gateway.ts:923-931`）：`赎回口径`、`赎回份额`、`成交净值`、`净值日期`、`预计到账金额`、`费用口径`、`金额变化`；`持仓` 行在此之前已 `unshift` 到首位（`:911`）。
 `RedemptionQuote`（`security-gateway.ts:705-719`）带 `feeAmount` 与 `feeRule` 两个纯展示字段：`feeAmount` 是字面量 `'0.00'`（`:767`），`feeRule` 取自 SDK 常量 `REDEMPTION_FEE_RULE`（`banking-sdk/net-value.ts:37`，即 `SIMULATED_NONE`）（`:768`）。
 费用在本层不参与任何计算：到账金额直接取 `settlementFromShares(shares, netValue)`（`:766`），没有 `settlement − fee` 之类扣减，也不回读执行结果的费用字段。
-`费用口径` 行是字面量模板（`:929`）`赎回费 ${formatCNY(feeAmount)}（${feeRule}：模拟规则免收）`，因此 UI 显示「费用口径 / `赎回费 ¥0.00（SIMULATED_NONE：模拟规则免收）`」；`formatCNY` 带 `¥` 与千分位（`lib/money.ts:79-84`）。
+`费用口径` 行是字面量模板（`:929`）`赎回费 ${formatCNY(feeAmount)}（${feeRule}：模拟规则免收）`，因此 UI 显示“费用口径 / `赎回费 ¥0.00（SIMULATED_NONE：模拟规则免收）`”；`formatCNY` 带 `¥` 与千分位（`lib/money.ts:79-84`）。
 费用字段不进 `redemptionSnapshot`（`:773-780`），故不属于请求身份、不进命令指纹，执行时也不校验，也不落库为执行证据。
 `PendingActionSummary`（`lib/contracts/security.ts:115-124`）没有费用字段，费用只以 `fields` 里的一行文本出现。
 摘要金额（`summary.amount`，`:922`）是预计到账金额，不是本金。
@@ -232,7 +239,7 @@ RED 工具调用被挂起时**立即**铸造挑战：`security-gateway.ts:1007` 
 
 `security-gateway.ts#recordActionResult(actionId, 'executed'|'failed')` 只做一次 `claimPendingAction({ actionId, from: RESULT_RECORDABLE_STATUSES, to: status })`，即只写 `PendingAction.status`。
 它不写 `resultJson`、不写 `AuditLog`、不写 `AuthorizationDecision` 或 `SecurityEvent`；行不存在时抛 `NOT_FOUND`，落在不可覆盖状态（`locked`）时静默返回。
-真正的执行证据由 `agent/confirmation-recovery.ts#settlePendingAction` 落地（同一事务内 `claimPendingAction` 加 `resultJson`），本函数只是其后的尽力通知。
+真正的执行证据由 `agent/confirmation-recovery.ts#settlePendingAction` 保存（同一事务内 `claimPendingAction` 加 `resultJson`），本函数只是其后的尽力通知。
 它以方法形式挂在 `securityGateway` 对象字面量上（`security-gateway.ts:1580` 定义、`:1678` 挂载），没有独立的命名导出，只能从对象上取用或以属性形式打桩。
 唯一生产调用方是 `agent/confirmation/authorized-execution.ts`：`:32` 在无法解析所属会话时提前上报 `'failed'`；`:76` 在副作用提交且结算落定之后上报，条件为 `landed && status ∈ {'executed','failed'}`，并被 try/catch 吞掉失败。
 该文件写的是 `gateway.recordActionResult(...)`，其中 `gateway = security.gateway.securityGateway` 在模块加载时绑定；属性在调用时才查，因此对**同一对象**上该属性的 `vi.spyOn` 会被命中，替换整个 `securityGateway` 对象则不会。
@@ -240,11 +247,11 @@ RED 工具调用被挂起时**立即**铸造挑战：`security-gateway.ts:1007` 
 ## 逐次错误验证码的响应事实（文案口径与计数）
 
 `MFA_MAX_ATTEMPTS = 3`（`lib/constants.ts:10`）；熔断在 `failures >= max` 的当次触发（`lib/db/repositories/circuitBreaker.ts:78`），因此**第 3 次**错误即锁定，不是第 4 次。
-第 1/2 次错误走 `security-gateway.ts:1230-1242`：`status:'awaiting_mfa'`、`code:'MFA_FAILED'`、`mfaResult:'failed'`、`failure {code:'MFA_FAILED', reason:'mfa_code_invalid', actionId, attemptsUsed:1|2, attemptsLeft:2|1, maxAttempts:3}`，`message` 由 `:1239` 内插为「验证码错误，请重试。剩余尝试次数：2|1。」；`PendingAction` 状态不变，但 `MfaChallenge.attempts` 自增（`mfa.ts:277`）、熔断 `failures` 自增并写一条 `MFA_FAILURE`。
+第 1/2 次错误走 `security-gateway.ts:1230-1242`：`status:'awaiting_mfa'`、`code:'MFA_FAILED'`、`mfaResult:'failed'`、`failure {code:'MFA_FAILED', reason:'mfa_code_invalid', actionId, attemptsUsed:1|2, attemptsLeft:2|1, maxAttempts:3}`，`message` 由 `:1239` 内插为“验证码错误，请重试。剩余尝试次数：2|1。”；`PendingAction` 状态不变，但 `MfaChallenge.attempts` 自增（`mfa.ts:277`）、熔断 `failures` 自增并写一条 `MFA_FAILURE`。
 第 3 次错误：`attemptState` 的 `exhausted`（`mfa.ts:119`）为真，走 `security-gateway.ts:1243-1256`：`status:'locked'`、`code:'CIRCUIT_OPEN'`、`mfaResult:'failed'`、`failure {code:'MFA_LOCKED', reason:'mfa_attempts_exhausted', actionId, attemptsUsed:3, attemptsLeft:0, maxAttempts:3}`、`message: ATTEMPTS_EXHAUSTED_MESSAGE`（`:277`），并经 `persistLockedAction`（`:1105-1108`）CAS 落库 `locked`。
 文案常量：`ATTEMPTS_EXHAUSTED_MESSAGE`（`:277`）与 `lib/tool-feedback.ts:28` 的 `PUBLIC_BUSINESS_ERRORS` 键逐字相同 → `chat.error.actionLocked`；`lib/public-text.ts:68-69` 也从 `failure.code === 'MFA_LOCKED'` / `reason === 'mfa_attempts_exhausted'` 得出同一键。两条独立路径一致，故锁定文案稳定为 `chat.error.actionLocked`。
 顶层 `code` 不能单独用于选文案：锁定响应的顶层 `code` 是 `CIRCUIT_OPEN`，按 `lib/tool-feedback.ts:12` 会得到 `chat.error.securityLocked`，与该响应自带的 `failure`/`message` 口径相反。渲染方必须优先用 `failure`。
-`lockedOutcome`（`:1115-1132`）不带 `mfaResult`，其 `message` 是 `CIRCUIT_LOCK_MESSAGE`（`:274`，「操作已被拒绝」版）→ `chat.error.actionLocked`（`lib/tool-feedback.ts:32`）；`security-gateway.ts:516` 的「高风险操作已被锁定」熔断文案才映射 `chat.error.securityLocked`（`:33`）。
+`lockedOutcome`（`:1115-1132`）不带 `mfaResult`，其 `message` 是 `CIRCUIT_LOCK_MESSAGE`（`:274`，“操作已被拒绝”版）→ `chat.error.actionLocked`（`lib/tool-feedback.ts:32`）；`security-gateway.ts:516` 的“高风险操作已被锁定”熔断文案才映射 `chat.error.securityLocked`（`:33`）。
 `AuthorizationResult`（`:118-137`）没有 `events` 字段：`events` 由 HTTP/agent 层合成（`app/api/actions/[id]/verify/route.ts:91`），`mfaResult` 在该路由由 `status` 推导（`:73-77`）。
 每次错误另写一条 `MFA_FAILURE`（`severity:'medium'`）事件（`mfa.ts:281-296`）；锁定当次再由 `recordFailure` 写一条 `CIRCUIT_BREAKER_TRIPPED`（`severity:'high'`，`detail.result:'session_locked'`，`circuit-breaker.ts:179-188`），owner 键为 `user:<userId>`（`:121-127`）。
 锁定当次三处写入同时发生：`MfaChallenge.status='locked'`（`mfa.ts:298-300`，仅当 `attempts >= maxAttempts`）、熔断 `CircuitBreakerState.locked=true` 加 `lockedAt`、`PendingAction` CAS 到 `'locked'`（`security-gateway.ts:1105-1108`）。
@@ -277,7 +284,7 @@ MFA 尝试梯度是**跨请求**的：3 次错误码等于 3 个独立 `POST /ap
 `execution-policy.ts#assertSessionMayWrite`（`:13`）读 `agentSession.findUnique` 1 + `isLocked` 2：在 SDK 写事务内必须传入该事务 client，否则这 3 条读会排到自持唯一连接的事务后面，直到 `timeout: 10000` 才失败。
 `recovery-authorization.ts` 不在 confirm/verify 路由上；其 `expiresAt` 判定（`:61-62`，`Date.now()` 真实时钟）只比较不等待，`:37` 的事务先以 `confirmed` 认领作为写入序列化点，`:73` 的 `issueChallenge` 在提交之后。
 `incidents.ts` 的 `SIGNAL_POLICY` 窗口（`:8-11`，600000/300000 ms）只是 `riskSignal.count` 的 `createdAt >= now - windowMs` 过滤条件，不是定时器。
-本层每条语句的硬上限来自下游而非本层：适配器 `timeout: 10000` 与 Prisma `maxWait`/`timeout: 10000`（`lib/db/database.ts:23-25`）；本层不引入任何额外的等待、重试或轮询，因此延迟完全等于「语句条数 × 单条耗时 + FIFO 队列等待」，后者无上限。
+本层每条语句的硬上限来自下游而非本层：适配器 `timeout: 10000` 与 Prisma `maxWait`/`timeout: 10000`（`lib/db/database.ts:23-25`）；本层不引入任何额外的等待、重试或轮询，因此延迟完全等于“语句条数 × 单条耗时 + FIFO 队列等待”，后者无上限。
 
 ## 已知边界
 

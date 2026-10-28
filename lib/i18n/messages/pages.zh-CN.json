@@ -67,7 +67,7 @@
   "pages.cards.consumeAmount": "金额",
   "pages.cards.consumeCategory": "分类",
   "pages.cards.consumeMerchant": "商户",
-  "pages.cards.consumeSubmit": "提交消费",
+  "pages.cards.consumeSubmit": "核对消费",
   "pages.cards.consumeSuccess": "消费成功",
   "pages.cards.consumeFailed": "消费失败",
   "pages.cards.consumeInsufficient": "账户可用余额不足",

@@ -2,6 +2,12 @@
 
 Owns the persist-first evidence layer for agent runs: the Pi event journal, run leases, stable invocation/model-request identities, bounded retries/recovery and the model-checkpoint continuation used by recovery.
 
+## Model budget
+
+`SessionSnapshot.modelBudget` persists the intent identity, first-request wall time, request count,
+conservative token reservations and original limits before provider calls. Summaries and HTTP
+fetch retries share it. Recovery cannot renew it or widen limits.
+
 ## Intent
 
 Turn a live agent run into durable, replayable evidence — no banking effect is attributed to an operation until its invocation, receipt and model request are persisted — and resume an interrupted run from its saved checkpoint without inventing effects or new operation identities.
@@ -21,7 +27,7 @@ Branch decision after restoring the latest completed model request: `calls = ass
 
 ## Bounds and budgets
 
-All bounds are enforced by persisted DB counters, not by in-memory loop constants. There is no `MAX_`/`bounded`/`rounds`/`nudge`/`followup`/`re-prompt` identifier anywhere in this directory.
+Durable retry counters live in database rows; reply/write correction state and `modelBudget` live in persisted session checkpoints. Recovery cannot reset either class of bound.
 `ModelRequest.maxAttempts Int @default(3)` (`prisma/schema.prisma:539`) — at most 3 attempts per request including the first; `startModelRequest` (`lib/db/repositories/agentRun.ts:307`) reuses an unfinished row but throws `CONFLICT` 'Model request retry limit reached' at `previous.attempt >= previous.maxAttempts` (l.315), and a new request gets `ordinal = previous.ordinal + 1` (l.318).
 `AgentRun.maxRecoveryAttempts Int @default(3)` (schema l.518); `listRecoverableAgentRuns` filters `recoveryAttempts < maxRecoveryAttempts` and excludes `RECONCILIATION_REQUIRED`/`WORKFLOW_REQUIRES_ATTENTION`/`CHECKPOINT_MISSING` (`agentRun.ts:281-293`).
 `ReplyRepairState.attempt` is the literal `1` → at most ONE corrective generation per durable run (`reply-repair.ts:14`).
@@ -48,7 +54,7 @@ Every generation must be a distinct `ModelRequest` row: `AgentRunJournal.prepare
 ## Bounded continuation for a declared-but-unemitted write
 
 `turns/live-prompt.ts` `runLivePrompt` awaits `runtime.agent.prompt(request)`, then `continueDeclaredWrites(runtime, buffer, now, { config })` and finally `repairConversationalReply`. The foreground deliberately does NOT set `applyCorrection` on this continuation: a reply-correction bracket makes `beforeToolCall` reject any write emitted during the continuation, so the declared write could never reach the security gateway and create the real gate. Only `repairConversationalReply` brackets its own format repair with correction. The durable mirror reuses the same helper: `continueDurableRun`'s `calls.length === 0` branch rebuilds the grounded presentation and awaits `continueDeclaredWrites(runtime, buffer, () => Date.now(), { config })`. Both run only when `config.llmMode === 'live'` (`../write-continuation.ts`).
-`../write-continuation.ts` `continueDeclaredWrites` spends at most ONE continuation per candidate: the persisted `WriteContinuationState` (`../reply-repair.ts`, `version: 1`, `phase: 'requested' | 'completed'`, `attempt: 1`, `sourceDigest`, `instruction`, `declaredTools`) is written BEFORE `runtime.agent.continue()`, so a restart reuses the recorded request instead of issuing a second one. If the continuation still yields no write evidence, the server publishes `renderFinancialResponse(buffer.factResults, { declared })` (`declared_unsubmitted`) instead of unverified model prose; a real confirmation/MFA card is still produced only by a blocked gateway call.
+`../write-continuation.ts#continueDeclaredWrites` persists one `WriteContinuationState` before the provider request. Ready declared writes require `needsInput:false`. An undeclared submission claim may use the same single correction with an empty `declaredTools` list. Missing choices remain clarification; the final public reply preserves a corrected question alongside authoritative unsubmitted facts. A completed phase or a different candidate digest cannot spend a second correction.
 `banking-agent.ts` `finishTurn` forces `{action:'end'}` when `config.llmMode === 'live'` and a `submit_plan` succeeded / `stopAfterDecision` — where "the turn already ended" is decided.
 
 ## Terminal statuses: `locked` never re-opens a decision
@@ -82,9 +88,18 @@ No financial arithmetic and no domain money field exists here: amounts, fees, ra
 A parked decision is re-presented only while its persisted row is open; a terminal row is skipped and reported through typed event fields, never through text.
 Raw tool payloads stay in the stored `content`/`internalSummary` evidence for the model and classifiers; every user-visible string is funnelled through `@/lib/public-text` or a catalog key.
 
-## Known Issues
+## Settling closed actions
 
-`lib/db/repositories/agentRun.ts` `synchronizeRunActionInvocations`/`finalizeReceiptedAgentRun` still enumerate settled statuses inline without `locked`, so a locked row never settles its `ToolInvocation` (it stays `waiting_verification`) and a run whose only remaining row is locked can be finalized without reconciliation. This layer compensates (`closedActions` prevents the decision prompt) but those lists belong to `TERMINAL_ACTION_STATUSES` in `lib/`.
+`lib/db/repositories/agentRun.ts#settleRunActionInvocations` uses the shared
+`SETTLED_PENDING_ACTION_STATUSES`, including `locked`. Both `synchronizeRunActionInvocations` and
+`finalizeReceiptedAgentRun` use it; finalization settles linked actions before checking invocation
+terminality. A locked action settles its invocation as `failed` with `MFA_LOCKED`, never reopens
+verification and never becomes an unknown financial result solely because it was locked.
+Regression: `tests/unit/lib/agentRun.locked-settlement.test.ts`.
+
+`control-recovery.ts` first verifies the saved original declaration digest. Legacy declarations
+without `needsInput` can retain a known matching readiness from the saved intent; missing evidence
+remains incomplete. This compatibility never replaces original model input or grants consent.
 
 ## Routing Table
 

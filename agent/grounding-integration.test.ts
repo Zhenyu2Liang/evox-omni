@@ -42,19 +42,25 @@ describe('separate model prose and authoritative tool entries', () => {
     'Your balance is 999999.99 CNY.',
     'The transfer has completed successfully.',
     'An explanation may quote the phrase: the operation completed successfully.',
-  ])('preserves the full provider prose without converting it into financial evidence: %s', async prose => {
+  ])('preserves independent explanation and replaces unsupported balance or outcome assertions: %s', async prose => {
     const before = await getTestPrisma().transaction.count();
     const script = scriptedProvider({ purpose: 'query', operations: ['get_balance'] }, [tool('get_balance', {}), fauxAssistantMessage(prose)]);
     const turn = await runTurn({ message: 'Read my account balances and explain them.' }, { config, provider: script.provider });
-    expect(lastProse(turn.events)).toBe(prose);
+    if (prose.startsWith('An explanation')) expect(lastProse(turn.events)).toBe(prose);
+    else {
+      expect(lastProse(turn.events)).toContain('23,580.00');
+      expect(lastProse(turn.events)).toContain('73,580.00');
+      expect(lastProse(turn.events)).not.toContain('999999.99');
+      expect(lastProse(turn.events)).not.toContain('completed successfully');
+    }
     const rows = toolRows(turn.events);
     expect(rows).toHaveLength(1);
     expect(rows[0].toolEvents).toMatchObject([{ toolName: 'get_balance', status: 'success' }]);
     expect(rows[0].cards).toContainEqual({ type: 'balance', data: expect.objectContaining({ totalAvailable: '73580.00' }) });
     expect(messages(turn.events).filter(message => message.role === 'assistant').every(message => !message.cards?.length && !message.toolEvents?.length)).toBe(true);
-    expect(messages(turn.events).findIndex(message => message.role === 'tool')).toBeLessThan(messages(turn.events).findIndex(message => message.content === prose));
+    expect(messages(turn.events).findIndex(message => message.role === 'tool')).toBeLessThan(messages(turn.events).findLastIndex(message => message.role === 'assistant'));
     const saved = await loadSession(turn.sessionId);
-    expect(saved?.transcript.filter(message => message.role === 'assistant').at(-1)?.content).toBe(prose);
+    expect(saved?.transcript.filter(message => message.role === 'assistant').at(-1)?.content).toBe(lastProse(turn.events));
     expect(saved?.agentState.messages.some(message => message.role === 'assistant' && message.content.some(block => block.type === 'text' && block.text === prose))).toBe(true);
     await noFinancialEffects(before);
   });
@@ -64,7 +70,7 @@ describe('separate model prose and authoritative tool entries', () => {
     const prose = 'I have transferred 500 CNY to Alice.';
     const script = scriptedProvider({ purpose: 'conversation', operations: [] }, [fauxAssistantMessage(prose)]);
     const turn = await runTurn({ message: 'Explain how a transfer works.' }, { config, provider: script.provider });
-    expect(lastProse(turn.events)).toBe(prose);
+    expect(lastProse(turn.events)).toBe('本轮尚未创建待确认操作，也未执行任何新的银行操作。');
     expect(toolRows(turn.events)).toEqual([]);
     expect(await getTestPrisma().pendingAction.count()).toBe(0);
     await noFinancialEffects(before);

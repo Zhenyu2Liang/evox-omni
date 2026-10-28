@@ -49,6 +49,9 @@ export interface TurnBuffer {
   allowProtocolExamples?: boolean;
   replyPhase?: 'generating' | 'checking' | 'repairing';
   repairingReply?: boolean;
+  operationClaim?: boolean;
+  balanceClaim?: boolean;
+  operationExplanation?: string;
   groundedIds: Set<string>;
 }
 

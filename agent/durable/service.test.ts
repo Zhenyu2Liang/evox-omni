@@ -150,7 +150,7 @@ describe('owned runtime recovery service and HTTP boundary', () => {
     expect(missing.status).toBe(200);
     expect((await missing.json()).data.id).toBe('run-1');
     mocks.getAgentRun.mockResolvedValue({ ...run(), sessionId: 'other-session' });
-    const foreign = await POST(new NextRequest('http://localhost/api/runs/run-1/recover?sessionId=session-1', { method: 'POST', headers: { cookie: 'banking_session=other-session' }, body: '{}' }), context);
+    const foreign = await POST(new NextRequest('http://localhost/api/runs/run-1/recover?sessionId=session-1', { method: 'POST', headers: { cookie: 'banking_session=other-session', 'content-type': 'application/json' }, body: '{}' }), context);
     expect(foreign.status).toBe(403);
     expect(mocks.beginAgentRun).not.toHaveBeenCalled();
   });

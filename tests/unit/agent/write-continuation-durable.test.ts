@@ -46,7 +46,7 @@ interface Harness { run: AgentRun; snapshot: SessionSnapshot }
 
 /** A decoded checkpoint whose last model response is ordinary prose with no controlled tool call. */
 function completedProseRun(declaredTools: readonly string[], claim = PANEL_CLAIM, runConfig: AppConfig = config): Harness {
-  const intent = { id: 'intent-1', revision: 1, purpose: 'operation' as const, requestText: question,
+  const intent = { id: 'intent-1', revision: 1, purpose: 'operation' as const, needsInput: false, requestText: question,
     latestMessage: question, steps: declaredTools.map((tool, index) => ({ key: `step-${index + 1}`, tool })) };
   const source = { sessionId: 'session', userId: 'owner', revision: 0,
     agentState: { model: { id: 'faux', api: 'faux', provider: 'faux', baseUrl: '' }, tools: [],

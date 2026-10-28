@@ -2,6 +2,10 @@
 
 ## 范围
 
+`card-category-limit.test.ts` 检查分类限额按月累计。
+补办用例检查复制分类限额、保留零限额和跨代消费连续性。
+跨进程竞争属于 `../../integration/sdk-multiprocess-transaction.test.ts`。
+进程内 Promise 并发不能替代独立连接的竞争测试。
 本目录直接调用模拟银行 SDK。
 权限策略另由网关测试覆盖。
 SDK 写入仍必须满足可信执行上下文与事务约束。
@@ -38,14 +42,14 @@ SDK 写入仍必须满足可信执行上下文与事务约束。
 `CardView.linkedAccountStatus` 为 `LINKED`/`MISSING`/`UNTRUSTED`/`NOT_APPLICABLE`。
 只有 `LINKED` 才写 `linkedAccountNumber`、`linkedAccountName`、`accountAvailableBalance`（账户余额）与 `payableAmount`（`min(账户余额, 补办家族当月剩余限额)`；无月限额时等于账户余额）。
 `MISSING`/`UNTRUSTED` 一个余额字段都没有，不得序列化成 `0.00`；`usable` 只看 status，FROZEN/LOST 仍展示真实余额。
-UNTRUSTED 由「账户存在但不属于持卡人」与「账户不是 CHECKING」覆盖。
+UNTRUSTED 由“账户存在但不属于持卡人”与“账户不是 CHECKING”覆盖。
 
 ## 卡消费的时间与限额权威
 
 `consumeCard(input, options)` 的公开入参不含时间字段；记账时刻与 UTC+08:00 计费月都由服务端 `demoNow()` 决定。
 唯一时钟缝隙是第二参数 `options.now`（测试专用）。
 运行时入参携带已定义的 `occurredAt`（任意值）在任何读写前被拒为 `VALIDATION`；`{ occurredAt: undefined }` 等同于未提供。
-月限额按补办家族当月消费计算，`payableAmount` 与强制限额读同一个数字；结果快照报「限额被强制时的那个时刻」所在月的余额（`options.now`），不带缝隙的重新读取按 `demoNow()` 所在月计算。
+月限额按补办家族当月消费计算，`payableAmount` 与强制限额读同一个数字；结果快照报“限额被强制时的那个时刻”所在月的余额（`options.now`），不带缝隙的重新读取按 `demoNow()` 所在月计算。
 `truncateAll()` 清除 schema 的每个模型，包括无关系声明的 `CardConsumption`；套件无需自备清理钩子（完整性由 `tests/helpers/db-truncate.test.ts` 校验）。
 
 ## 执行与数据

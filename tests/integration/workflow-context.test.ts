@@ -1,5 +1,8 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { loadWorkflowContext } from '@/agent/workflow-context';
+import { loadActionContext, loadWorkflowContext, withCurrentActionStatuses } from '@/agent/workflow-context';
+import type { ToolResultMessage } from '@earendil-works/pi-ai';
+import { currentTurnFocus } from '@/agent/current-turn-focus';
+import { advanceConversationIntent } from '@/agent/intent-context';
 import { buildSystemPrompt } from '@/agent/system-prompt';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
 
@@ -15,6 +18,42 @@ function createTask(id: string, userId = 'user_liming', sessionId = 'demo:user_l
 }
 
 describe('workflow status refreshed after out-of-band Web/IM control', () => {
+  it('refreshes cancelled action statuses for only owned chat tools without projecting payloads', async () => {
+    const ledgerBefore = await db().transaction.count();
+    const create = (id: string, userId = 'user_liming', sessionId = 'demo:user_liming', toolName = 'transfer_money') =>
+      db().pendingAction.create({ data: { id, userId, sessionId, toolName, argsJson: 'PRIVATE_ARGS',
+        summaryJson: 'PRIVATE_SUMMARY', resultJson: 'PRIVATE_RESULT', riskLevel: 'high', status: 'pending' } });
+    await create('owned'); await create('other-user', 'other');
+    await create('other-session', undefined, 'other');
+    await create('manual-page', undefined, undefined, 'consume_card');
+    expect(await loadActionContext('user_liming', 'demo:user_liming', ['transfer_money'])).toEqual([
+      { id: 'owned', toolName: 'transfer_money', status: 'pending' },
+    ]);
+    await db().pendingAction.update({ where: { id: 'owned' }, data: { status: 'cancelled' } });
+    const facts = await loadActionContext('user_liming', 'demo:user_liming', ['transfer_money']);
+    expect(facts).toEqual([{ id: 'owned', toolName: 'transfer_money', status: 'cancelled' }]);
+    const focus = currentTurnFocus(advanceConversationIntent(undefined, '给张伟转200元'), facts);
+    if (focus.role !== 'system') throw new Error('Expected server context');
+    expect(focus.content).toContain('"currentOwnedActionStatuses":[{"id":"owned","toolName":"transfer_money","status":"cancelled"}]');
+    expect(focus.content).toContain('supersede historical tool results');
+    expect(focus.content).not.toContain('PRIVATE_');
+    const result: ToolResultMessage = { role: 'toolResult', toolCallId: 'original-call', toolName: 'transfer_money',
+      content: [{ type: 'text', text: '__SECURITY_BLOCK__{"actionId":"owned","decisionKind":"require_confirmation"}' }],
+      isError: true, timestamp: 1 };
+    const projected = withCurrentActionStatuses([result], facts);
+    expect(projected[0]).toMatchObject({ role: 'toolResult', toolCallId: 'original-call', toolName: 'transfer_money', isError: true });
+    expect(JSON.stringify(projected)).toContain('currentActionStatus');
+    expect(JSON.stringify(projected)).toContain('cancelled');
+    expect(JSON.stringify(projected)).not.toContain('__SECURITY_BLOCK__');
+    expect(result.content[0]).toMatchObject({ text: expect.stringContaining('__SECURITY_BLOCK__') });
+    expect(withCurrentActionStatuses([result], [])).toEqual([result]);
+    expect(withCurrentActionStatuses([result], [{ ...facts[0], status: 'pending' }])).toEqual([result]);
+    expect(withCurrentActionStatuses([result], [{ ...facts[0], toolName: 'freeze_card' }])).toEqual([result]);
+    expect(await loadActionContext('unknown', 'unknown', ['transfer_money'])).toEqual([]);
+    expect(await loadActionContext('user_liming', 'demo:user_liming', [])).toEqual([]);
+    expect(await db().transaction.count()).toBe(ledgerBefore);
+  });
+
   it('scopes evidence to both owner and session, without exposing task inputs or outputs', async () => {
     await createTask('owned'); await createTask('other-user', 'other'); await createTask('other-session', 'user_liming', 'other');
     const facts = await loadWorkflowContext('user_liming', 'demo:user_liming');

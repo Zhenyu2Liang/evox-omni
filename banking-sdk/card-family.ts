@@ -73,12 +73,13 @@ export async function cardFamilyMonthSpend(
   cardId: string,
   userId: string,
   now?: number | Date,
+  category?: string,
 ): Promise<bigint> {
   const { start, end } = demoMonthRange(now);
   const family = await cardFamilyIds(client, cardId, userId);
   if (family.length === 0) return 0n;
   const rows = await client.cardConsumption.findMany({
-    where: { userId, cardId: { in: family }, occurredAt: { gte: start, lt: end } },
+    where: { userId, cardId: { in: family }, occurredAt: { gte: start, lt: end }, ...(category !== undefined ? { category } : {}) },
     select: { amountMinor: true },
   });
   return rows.reduce((total, row) => total + row.amountMinor, 0n);

@@ -361,7 +361,8 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
 
   /** Scope for condition evaluation: prior node id → its recorded `output`. */
   const buildScope = (): Record<string, unknown> => {
-    const scope: Record<string, unknown> = {};
+    // Node identities are data, including __proto__; never invoke Object.prototype setters.
+    const scope: Record<string, unknown> = Object.create(null);
     for (const node of plan.nodes) {
       const r = results.get(node.id);
       if (r) scope[node.id] = r.output;

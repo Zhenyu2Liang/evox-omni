@@ -401,6 +401,11 @@ describe('redeem_investment — required 赎回口径', () => {
       '剩余持仓成本 ¥5,000.00', '持仓收益 -¥60.00', '持仓收益率 -1.20%', '累计收益 -¥60.00']) {
       expect(result.summary).toContain(fact);
     }
+    // Public summaries use product names; structured IDs remain available to the controlled tools.
+    expect(result.summary).toContain('持仓 稳健理财（R2）');
+    expect(result.summary).toContain('持仓 旧持仓（R1）');
+    expect(result.summary).not.toContain('holding_');
+    expect(result.data).toEqual([expect.objectContaining({ id: 'holding_1' }), expect.objectContaining({ id: 'holding_2' })]);
     // The unvaluable holding states the gap instead of a fabricated share count, value or return.
     expect(result.summary).toContain(`最新净值 ${INSUFFICIENT}`);
     expect(result.summary).toContain(`持仓市值 ${INSUFFICIENT}`);

@@ -70,6 +70,14 @@ const findResult = (plan: TaskPlan, id: string): TaskNodeResult | undefined =>
   plan.results.find((r) => r.id === id);
 
 describe('planner/executor · ordering + happy path', () => {
+  it.each(['__proto__', 'constructor', 'toString'])('treats node ID %s as an own result key without touching object prototypes', async id => {
+    const h = harness(() => ({ ok: true, data: { totalAvailable: '1.00' } }));
+    const plan = makePlan([toolNode(id), { id: 'check', name: 'check', kind: 'condition', dependencies: [id],
+      condition: { path: `${id}.totalAvailable`, op: '==', value: '1.00' } }]);
+    const result = await runPlan(plan, h.deps);
+    expect(findResult(result, 'check')?.status).toBe('success');
+    expect(Object.prototype).not.toHaveProperty('totalAvailable');
+  });
   it('executes nodes in topological order (a dependency resolves before its dependent)', async () => {
     const h = harness(() => ({ ok: true, data: {} }));
     const plan = makePlan([toolNode('b', { dependencies: ['a'] }), toolNode('a')]);

@@ -4,6 +4,8 @@ Persists historical conversation summaries and bounded model-request projections
 
 ## API Surface
 
+- The injected runtime uses the same `../model-budget.ts` stream wrapper as conversational generation. Every summary chunk, failed attempt and HTTP retry spends that original per-intent budget; compaction does not renew it. Context-window projection limits and cumulative provider-call limits are separate checks.
+- `overheadTokens` includes the current-turn scope and refreshed action-status evidence. `../banking-agent.ts` projects current terminal action states before compaction; recovery of an already recorded model input retains the original projection.
 - `index.ts` — `createContextCompactor({ runtime, settings?, state?, persist?, onState })`; returns `{ project(source, signal?, overheadTokens?) }`. Computes `window`/`reserve`/`threshold`/`keep`/`summaryTokens` defaults (threshold 60000, reserve 8192, keep 12000, summary 2048, each clamped to the model window), decides via Pi's `shouldCompact`, cuts, batches, summarizes chunk by chunk and emits `compaction_partial` / `compaction_completed` events plus matching checkpoints. A projected view over budget throws `AppError('VALIDATION')` with `reason: 'CONTEXT_BUDGET_EXCEEDED'` and the `messages.contextBudgetExceeded` copy (never an empty or truncated history).
 - `projection.ts` — `estimateContextTokens` (CJK-aware, `8 + nonAscii + ceil(ascii/4)` per message floor), `conversationMessages`, `prefixDigest`, `compactionCut`, `validSummary`, `projectedMessages`.
 - `batches.ts` — `summaryBatches(messages, budget)`: splits ONLY the summary input text; archived messages and recent turns stay intact; surrogate pairs kept together; an unsplittable message/block throws `VALIDATION`.

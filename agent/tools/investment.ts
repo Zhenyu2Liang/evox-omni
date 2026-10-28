@@ -214,7 +214,7 @@ function holdingLine(holding: HoldingView): string {
     ? `${formatDecimalCNY(holding.marketValue)}${estimate}`
     : HISTORY_INSUFFICIENT;
   return [
-    `持仓 ${holding.id}（${holding.productName}，${holding.riskLevel}）`,
+    `持仓 ${holding.productName}（${holding.riskLevel}）`,
     `持仓份额 ${holding.shares === undefined ? HISTORY_INSUFFICIENT : `${holding.shares} 份`}`,
     netValueLine(holding.latestNetValue, holding.latestNetValueDate, '最新净值'),
     `持仓市值 ${marketValue}`,

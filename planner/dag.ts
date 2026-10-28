@@ -103,6 +103,8 @@ export function validatePlan(nodes: TaskNodeSpec[], knownTools: Set<string>, out
     const id = typeof node.id === 'string' ? node.id.trim() : '';
     if (id === '') {
       problems.push('a node has a missing or blank id');
+    } else if (id !== node.id || /[.\s\[\]\u0000-\u001f\u007f]/u.test(id)) {
+      problems.push(`node id '${id}' must be one unambiguous path segment without whitespace`);
     } else if (seenIds.has(id)) {
       problems.push(`duplicate node id '${id}'`);
     } else {

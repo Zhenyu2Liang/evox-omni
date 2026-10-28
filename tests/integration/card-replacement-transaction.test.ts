@@ -187,7 +187,7 @@ describe('replaceCard is ONE transaction: a failed 补办 leaves no half-written
       linkedAccountId: CHECKING,
     });
     expect(await userCardCount()).toBe(4);
-    // Per-category limits are not copied and a 补办 books no spend.
+    // This source has no category limits; replacement still books no spend.
     expect(await db().cardLimit.count()).toBe(limitsBefore);
     expect(await db().cardConsumption.count()).toBe(0);
   });

@@ -9,12 +9,20 @@ import { inspectReplyFormat } from '../reply-format';
 import { runtimeRequestDigest, snapshotRuntimeValue } from '../durable/serialization';
 import type { ReplyRepairState } from '../reply-repair';
 import { continueDeclaredWrites } from '../write-continuation';
+import { operationFactsReply } from '../reply-safety';
 import dialogueMessages from '../messages/dialogue.zh-CN.json';
 
 export { publishServerReply, retireUnpublishedReply } from './server-reply';
 
 /** Correct an invalid conversational candidate once in the same context, retaining every raw response. */
 export async function repairConversationalReply(runtime: BankingAgentRuntime, buffer: TurnBuffer, now: () => number): Promise<void> {
+  if (buffer.operationClaim || buffer.balanceClaim) {
+    retireUnpublishedReply(buffer);
+    publishServerReply(runtime, buffer, now,
+      [buffer.operationExplanation, operationFactsReply(buffer)].filter(Boolean).join('\n\n'));
+    buffer.operationClaim = false;
+    return;
+  }
   if (!buffer.conversational || buffer.serverGuidance ||
       buffer.events.some(event => event.type === 'confirmation_required' || event.type === 'mfa_required')) return;
   const last = runtime.agent.state.messages.findLast(isAssistantMessage);

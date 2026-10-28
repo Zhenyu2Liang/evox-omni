@@ -24,6 +24,10 @@ overrides:
   '@earendil-works/pi-codemode': 1.2.0
   '@earendil-works/pi-mcp': 1.2.0
   '@earendil-works/pi-tui': 1.2.0
+  # Pin security patches while upstream packages retain their current dependency versions.
+  'undici@8.10.2': 8.12.2
+  'source-map-js@1.2.1': 1.2.2
+  'fast-uri@3.1.8': 3.1.9
 
 # 通道只使用 pi-weixinbot 的协议模块，不加载其旧版 Pi 扩展运行时。
 packageExtensions:

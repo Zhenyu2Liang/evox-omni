@@ -2,6 +2,8 @@ import type { Page, Response } from 'playwright-core';
 import type { ChatMessage } from '../../lib/contracts/agent';
 import { readDemoSessionId, SELECTORS, submitChat, waitFor } from './helpers';
 import { withDb } from './live-virtual-card.e2e-helper';
+import { presentationMessages } from '../../components/chat/presentation-messages';
+import { isVisibleChatMessage } from '../../components/chat/message-day';
 
 const TURN_TIMEOUT_MS = 120_000;
 
@@ -69,11 +71,15 @@ export async function submitCompletedLiveChatTurn(page: Page, message: string,
   if (!messages.length || messages.some(item => !item || typeof item.id !== 'string' || !item.id)) {
     throw new Error('The current chat run has no complete presentation messages');
   }
-  const messageIds = messages.map(item => item.id);
+  const decisions = messages.flatMap(item => item.cards ?? []);
+  const pending = run.status === 'waiting_confirmation' || run.status === 'waiting_verification';
+  const gate = pending ? decisions.findLast(card => card.type === 'confirmation' || card.type === 'mfa') : undefined;
+  const actionId = gate?.type === 'confirmation' ? gate.action.actionId : gate?.type === 'mfa' ? gate.actionId : undefined;
+  const messageIds = presentationMessages(messages, actionId).filter(isVisibleChatMessage).map(item => item.id);
   await waitFor(async () => await page.locator(SELECTORS.composer).isEnabled() &&
     await page.locator('[data-message-id]').evaluateAll((elements, ids) => {
       const rendered = new Set(elements.map(element => element.getAttribute('data-message-id')));
       return ids.every(id => rendered.has(id));
-    }, messageIds), { timeoutMs, description: 'Only this request’s completed messages are rendered' });
+    }, messageIds), { timeoutMs, description: 'The current request messages render, with pending decisions in the separate dock' });
   return { requestId, runId: run.id, sessionId, messages };
 }

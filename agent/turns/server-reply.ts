@@ -22,6 +22,8 @@ export function retireUnpublishedReply(buffer: TurnBuffer): void {
 
 /** Server rendering appends memory but never emits another tool call or provider usage. */
 export function publishServerReply(runtime: BankingAgentRuntime, buffer: TurnBuffer, now: () => number, content: string, retryRequest?: string): void {
+  buffer.operationClaim = false;
+  buffer.balanceClaim = false;
   const financialSummary = financialResponseSummary(buffer.factResults);
   const message = { ...newAssistantMessage(now()), content, ...(financialSummary ? { financialSummary } : {}), ...(retryRequest ? { retryRequest } : {}) };
   buffer.current = message;

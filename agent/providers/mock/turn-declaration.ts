@@ -14,7 +14,7 @@ export interface MockTurnDeclaration {
 }
 
 export function declareMockReadPreparation(readTool: string): AssistantMessage {
-  return fauxAssistantMessage([fauxToolCall('describe_turn', { purpose: 'operation', operations: [readTool] })], { stopReason: 'toolUse' });
+  return fauxAssistantMessage([fauxToolCall('describe_turn', { purpose: 'operation', operations: [readTool], needsInput: false })], { stopReason: 'toolUse' });
 }
 
 /** Only the deterministic offline model interprets natural-language scripts. */
@@ -36,7 +36,7 @@ export function declareMockTurn(text: string, proposal: AssistantMessage): Assis
   const declared = purpose === 'conversation' ? [] : purpose === 'advice'
     ? operations.filter(name => catalogEntry(name)?.effect === 'read') : operations;
   const allowProtocolExamples = purpose === 'conversation' && /\b(?:JSON|protocol|schema|envelope)\b|\u534f\u8bae|\u4ee3\u7801\u793a\u4f8b/i.test(text);
-  return fauxAssistantMessage([fauxToolCall('describe_turn', { purpose, operations: declared,
+  return fauxAssistantMessage([fauxToolCall('describe_turn', { purpose, operations: declared, needsInput: false,
     ...(workflow ? { workflow: true } : {}), ...(allowProtocolExamples ? { allowProtocolExamples: true } : {}) },
     )], { stopReason: 'toolUse' });
 }

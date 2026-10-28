@@ -8,9 +8,10 @@
 错误验证码不能冻结卡片，首张卡片验证不能授权后续卡片。
 浏览器分别检查刷新和后续对话，不以接口成功代替页面验证。
 联系人验收包含并发重复提交、所属用户隔离和审计回滚。
-安全中心验收检查开发者开关和无验证码的重置按钮。
+安全中心验收检查开发者开关、解锁条件和原操作终态。
 卡片页验收检查页面增删、独立验证和刷新恢复。
-Agent 增删请求只返回页面操作说明，不能生成执行步骤。
+新实体卡和删除卡片请求只返回页面操作说明。
+虚拟卡申请与挂失卡补办仍可通过 Agent 授权办理。
 人工核对验收先检查普通模式拒绝，再演示后台处理。
 
 运行环境见[开发指南](development.md)。
@@ -178,9 +179,10 @@ Prisma 命令在离线环境运行，并设置三个变量。
 注意：全部 Vitest 文件共享同一个可重置的 `prisma/test.db`。
 配置以 `fileParallelism: false` 让文件顺序执行。
 不得同时运行两个会重置同一测试库的进程。
-两个 `pnpm test`、Vitest 与浏览器验收、浏览器验收与 `pnpm build` 都算重叠。
-重叠执行会让一方读到另一方重置中的库，产生假失败。
-浏览器验收与开发服务、构建共享 Next.js 生成文件，因此也须单独运行。
+两个 `pnpm test` 会相互重置测试库，产生假失败。
+浏览器入口使用表中独立数据库，不能同时运行重置同一库的入口。
+开发、浏览器开发验收和生产验收分别使用 `.next`、`.next-e2e` 和 `.next-build`。
+构建期间不能运行使用同一输出目录的服务。
 
 数据库初始化失败时，查看初始化诊断。
 先检查 Prisma Client、schema 和隔离库路径。
@@ -204,7 +206,7 @@ Prisma 命令在离线环境运行，并设置三个变量。
 | `tests/fixtures/` | 共享的 `*.zh-CN.json` 对话与策略剧本 |
 | `tests/e2e/` | 运行中应用的浏览器操作与 HTTP 边界用例 |
 
-`tests/e2e/` 有四个可执行入口：`acceptance.e2e.ts`、`live-acceptance.e2e.ts`、`date-tamper-boundary.e2e.ts` 和 `weixin-live.e2e.ts`。
+`tests/e2e/` 的主要入口包括 `acceptance.e2e.ts`、`live-acceptance.e2e.ts`、`date-tamper-boundary.e2e.ts` 和 `weixin-live.e2e.ts`。
 `*.e2e-helper.ts` 与 `helpers.ts` 是入口共用的驱动与断言模块，自身不运行。
 
 路由测试直接调用实际处理器。
@@ -297,6 +299,34 @@ Prisma 命令在离线环境运行，并设置三个变量。
 净值与份额口径见[理财净值](investments.md)。
 锁定与熔断的判定顺序见[安全](security.md)。
 消费时刻和限额口径见[卡片管理](card-management.md)。
+
+## 安全修复回归
+
+修改安全机制时，按下表运行受影响的回归。
+用例检查真实待确认操作、资金、终态和执行回执。
+
+| 检查对象 | 必须保持的结果 | 测试入口 |
+| --- | --- | --- |
+| 办理状态与澄清 | 虚构提交不公开；缺少卡片时不猜测；纠错保留问题 | [声明与澄清](../../tests/integration/financial-claim-and-clarification.test.ts)、[回复检查](../../agent/reply-safety.test.ts) |
+| 已取消状态 | 当前用户和会话的终态替换请求视图中的旧等待状态，不改归档 | [当前状态](../../tests/integration/workflow-context.test.ts) |
+| 余额和持仓说明 | 使用真实余额与产品名称，内部持仓 ID 不进入公开摘要 | [财务依据](../../agent/grounding-integration.test.ts)、[持仓事实](../../agent/tools/redeem-investment.test.ts) |
+| 模型调用预算 | 重试和恢复共用预留量；超时停止输出 | [总预算](../../agent/model-budget.test.ts) |
+| 纠错声明 | 兼容模式只要求 `describe_turn`，不强制金融调用 | [声明约束](../../agent/providers/required-declaration.test.ts) |
+| Host 与同源 | 未知域名访问页面和 API 均被拒绝，合法本机请求保留 | [共享边界](../../tests/unit/security/http-write-boundary.test.ts)、[Proxy](../../tests/app/request-host-proxy.test.ts) |
+| 请求大小 | JSON 正文和聊天文本超限时拒绝，包含流式正文 | [消息长度](../../tests/app/chat-request-size.test.ts) |
+| 页面消费 | 首次提案不扣款；原参数绑定验证码、账户锁和原回执 | [消费授权](../../tests/app/card-consumption-security.test.ts) |
+| 分类限额与补办 | 跨次消费按月累计，补办继承限额，重放不覆盖新限额 | [分类限额](../../tests/unit/banking-sdk/card-category-limit.test.ts)、[补办重放](../../tests/integration/replace-card-replay.test.ts) |
+| 跨进程竞争 | 相同执行键只扣款一次；余额和分类限额不被并发突破 | [多进程事务](../../tests/integration/sdk-multiprocess-transaction.test.ts) |
+| 特殊计划节点 | 特殊名称可引用，路径分隔和控制字符被拒绝 | [节点校验](../../tests/unit/planner/dag.test.ts)、[条件执行](../../tests/unit/planner/executor.test.ts) |
+
+例如，只运行预算和声明修复的离线回归：
+
+```sh
+pnpm exec vitest run agent/model-budget.test.ts agent/providers/required-declaration.test.ts tests/integration/financial-claim-and-clarification.test.ts
+```
+
+近期执行结果与各轮证据见[安全修复验证](../../tests/e2e/LIVE-ACCEPTANCE-REPORT.md#安全修复验证)。
+测试数量以当次命令输出为准。
 
 ## 持久化与进程恢复回归
 
@@ -412,11 +442,29 @@ LIVE_SCENARIOS=1,3 pnpm exec tsx tests/e2e/live-acceptance.e2e.ts
 `LIVE_SCENARIOS` 选择场景编号。
 未设置时执行入口登记的全部场景编号。
 编号 `1`…`6` 是转账与多轮用例，`0` 和 `8`…`15` 是对话与上下文用例。
-`2p` 跟随 `2` 一起选中；`lA`…`lJ` 是卡片、理财、锁定与身份解析用例。
+`2p` 跟随 `2` 一起选中；`lA`…`lL` 覆盖卡片、理财、锁定、身份解析与旧草稿切换。
+多场景由独立子进程依次执行，每次重建专用验收库。
+`2`、`2p` 保留在同一进程，覆盖取消后的再次发起。
+每个子进程结束后关闭浏览器和服务器，避免账户锁定影响后续场景。
 默认保留配置中的模型标识。
 `LIVE_FORCE_MODEL` 可显式覆盖模型标识。
 覆盖后必须在验收记录中写明模型标识。
 入口见[真实模型浏览器验收](../../tests/e2e/live-acceptance.e2e.ts)。
+
+生产模式固定使用 `.next-build`。
+在 PowerShell 中先构建，再启动指定场景：
+
+```powershell
+$env:BANKING_NEXT_DIST_DIR = '.next-build'
+pnpm build
+$env:E2E_SERVER_MODE = 'production'
+$env:LIVE_SCENARIOS = '2,15'
+pnpm exec tsx tests/e2e/live-acceptance.e2e.ts
+```
+
+修改产品代码后必须重新构建该目录。
+默认 `pnpm build` 写入 `.next`，不会更新 `.next-build`。
+切回开发验收时，移除当前终端的 `E2E_SERVER_MODE`。
 
 故障注入验收区分错误响应和成功响应来源。
 HTTP 503 注入用于检查故障处理。

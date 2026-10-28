@@ -67,7 +67,7 @@
   "pages.cards.consumeAmount": "Amount",
   "pages.cards.consumeCategory": "Category",
   "pages.cards.consumeMerchant": "Merchant",
-  "pages.cards.consumeSubmit": "Submit spend",
+  "pages.cards.consumeSubmit": "Review spend",
   "pages.cards.consumeSuccess": "Spend succeeded",
   "pages.cards.consumeFailed": "Spend failed",
   "pages.cards.consumeInsufficient": "Insufficient account balance",

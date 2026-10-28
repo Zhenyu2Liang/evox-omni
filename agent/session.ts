@@ -14,6 +14,7 @@ import type { ContextCompactionState } from './context-compaction/types';
 import type { ReplyContext, ReplyRepairState, WriteContinuationState } from './reply-repair';
 import type { ChatMessage } from '@/lib/contracts/agent';
 import { newId } from '@/lib/ids';
+import type { ModelBudgetState } from './model-budget';
 import { safeParse, toJson } from '@/lib/json';
 import { redactSecrets } from '@/lib/sensitive';
 import type { ConversationIntent } from '@/lib/contracts/intent';
@@ -41,6 +42,7 @@ export interface SessionSnapshot {
   replyRepair?: ReplyRepairState;
   replyContext?: ReplyContext;
   writeContinuation?: WriteContinuationState;
+  modelBudget?: ModelBudgetState;
 }
 
 /** The JSON blob persisted under `stateJson` (everything needed to rebuild a `SessionSnapshot`). */
@@ -57,6 +59,7 @@ interface PersistedSession {
   replyRepair?: ReplyRepairState;
   replyContext?: ReplyContext;
   writeContinuation?: WriteContinuationState;
+  modelBudget?: ModelBudgetState;
 }
 
 /**
@@ -94,6 +97,7 @@ function serialize(snapshot: SessionSnapshot): string {
     replyRepair: snapshot.replyRepair,
     replyContext: snapshot.replyContext,
     writeContinuation: snapshot.writeContinuation,
+    modelBudget: snapshot.modelBudget,
   };
   return toJson(redactSecrets(persisted));
 }
@@ -134,6 +138,7 @@ export async function loadSession(sessionId: string): Promise<SessionSnapshot | 
     replyRepair: persisted.replyRepair,
     replyContext: persisted.replyContext,
     writeContinuation: persisted.writeContinuation,
+    modelBudget: persisted.modelBudget,
     historyGeneration: persisted.historyGeneration ?? createHash('sha256')
       .update(`${row.id}:${persisted.historyStartedAt ?? persisted.createdAt ?? row.createdAt.getTime()}`).digest('hex'),
   };

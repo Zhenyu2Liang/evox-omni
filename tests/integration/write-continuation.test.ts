@@ -158,7 +158,7 @@ describe('a declared write with a fabricated panel claim opens no fake gate', ()
     expect(await db.transaction.count({ where: { counterpartyId: 'contact_zhangwei', amountMinor: -20037n } })).toBe(0);
     // The pre-gate candidate prose is what the turn streamed before the real gate; it never becomes
     // recorded history, and the panel exists only because the parked `PendingAction` does.
-    expect(finalContent(turn)).toBe(panelClaim);
+    expect(finalContent(turn)).toContain('该操作尚未执行，等待确认');
     expect((await transcriptOf(turn.sessionId)).some(message => message.content.includes('确认面板'))).toBe(false);
   });
 

@@ -12,6 +12,7 @@
 | 安装、配置模型或启动服务 | [开发指南](development.md) |
 | 通过微信与银行智能体对话 | [微信通道](weixin.md) |
 | 核对依赖版本或升级开发工具 | [依赖版本与升级](development.md#依赖版本与升级) |
+| 配置反向代理、可信访问地址或单轮模型调用上限 | [可信访问地址](development.md#可信访问地址)、[单轮模型调用预算](development.md#单轮模型调用预算) |
 | 查找模块职责和请求执行流程 | [架构设计](architecture.md) |
 | 修改事件日志、重试或崩溃恢复 | [持久化与恢复](agent-durability.md) |
 | 修改对话归档、Pi 官方压缩或原话搜索 | [上下文压缩](context-compaction.md) |

@@ -1,5 +1,15 @@
 # Agent runtime context
 
+`model-budget.ts` reserves a persisted per-intent request/token/time budget before provider calls,
+including context summaries and HTTP retries. Recovery reuses reservations. Token reservations use
+UTF-8 input bytes plus framing and maximum output; aborted attempts remain charged conservatively.
+`reply-safety.ts` projects current-operation submission/completion assertions from server evidence,
+including when the provider omitted or misclassified `describe_turn`; explanatory examples remain prose.
+An operation declaration defaults to `needsInput=true` at the model tool boundary. Only explicit
+readiness permits writes and a missing-write continuation; clarification cannot be promoted to ready
+within the same finalized write declaration. Standalone domain declarations used by code/tests do
+not constitute a model boundary and retain their explicit readiness defaults.
+
 The agent layer assembles Pi Core, provider adapters, user context, workflow ports and server-authored presentation. It does not grant banking permission.
 
 Redemption summaries and confirmation fields display the product name, never a holding ID.
@@ -22,6 +32,10 @@ tool result nor saved conversation contains them.
 - `./workflows/`: workflow control, the parked-decision seal/refusal projections (`parked-actions.ts`) and cancellation.
 - `./context-compaction/`: historical summaries and bounded model-request projection.
 - `./current-turn-focus.ts`: server-owned per-request topic scope. Historical messages remain intact; a topic change suspends unsubmitted drafts, while an explicit banking resumption still uses normal declarations and authorization.
+- `./workflow-context.ts`: refresh owned workflow/action status evidence and project current terminal action states at their original tool-result positions. Original model-input replay remains immutable.
+- `./model-budget.ts`: reserve per-intent model request/token/time limits before every provider attempt; compaction shares the same wrapper.
+- `./reply-safety.ts`: check operation/balance assertions and render authoritative facts without granting execution rights.
+- `./write-continuation.ts`: persist one corrective request and preserve missing-choice questions after correction.
 - `./messages/`: presentation message catalogs.
 - `./session.ts`: `SessionSnapshot` persistence (`stateJson` = `agentState` + `transcript` + reply/compaction state; plus `intentJson`, `revision` column) through `lib/db/repositories/session`. `getDemoSession(userId)` is the single server-configured web workspace: it seeds `newSession`, sets `sessionId = demo:${userId}`, calls `ensureDemoSession` (a Prisma `upsert` on that explicit primary key with `update: {}` — it never resets state or leases) and returns `loadSession(row.id)`, so the same `userId` always resolves to the same `sessionId`, including across restarts; a row owned by another user throws `The demo conversation belongs to another user`. `saveSession`/`getOrCreateSession` instead ADOPT the repository-minted cuid (a `newId('sess')` is provisional), and a save carrying an `AgentRunLease` goes through `commitRunSession` with the revision fence.
 
@@ -29,7 +43,7 @@ tool result nor saved conversation contains them.
 
 The agent exposes exactly ONE card-spend write — `consume_virtual_card` (RED) — which pays a positive exact-CNY amount from an owned account-bound virtual card by debiting its linked checking account. There is no other card-consumption / card-spend / card-purchase / card-payment / card-debit capability.
 `consume_virtual_card` books at SERVER business time: its schema carries no date or time argument, and a model-supplied time field is rejected with a `VALIDATION` error carrying `消费入账时间由服务端决定`, writing no funds, no ledger row and no `CardConsumption` row.
-Its spendable amount is `min(account available cash, remaining monthly limit)`; a monthly limit of 0 blocks spending entirely, and a card with no monthly limit is bounded only by the linked account's cash.
+Its displayed payable amount is `min(account available cash, remaining monthly limit)`; a monthly limit of 0 blocks spending entirely. A missing total monthly limit removes only that cap: actual consumption still checks linked-account cash and any category cap across the replacement family.
 A repeated `executionKey` replays the persisted consumption instead of charging the linked account again.
 The card tool family otherwise reads and manages card records: `get_cards` (read), `set_card_limit` (per-category limit, no money movement), `freeze_card`, `unfreeze_card`, `report_lost_card`, `replace_card`, `apply_virtual_card`, plus the card-spend `consume_virtual_card` (see `tools/card.ts`, `card-emitter.ts`, `tools/index.ts`).
 `analyze_spending`, `get_transactions` and `detect_anomaly` are GREEN reads over already-booked ledger rows; `detect_anomaly` never freezes a card.
@@ -39,7 +53,7 @@ Manual-only, on the Cards page with its own page verification, means exactly two
 The Cards page has no 补办 action.
 `replace_card` (RED, `tools/card.ts:393-427`) is an ordinary agent capability for an owned `LOST` card of ANY type (DEBIT/CREDIT/VIRTUAL): the replacement inherits the source type and network, a CREDIT replacement inherits `creditLimitMinor`/`availableLimitMinor`, a VIRTUAL replacement keeps its linked settlement account and the month-continuous family allowance, the source card stays `LOST` with `replacedByCardId` set, and a repeat call returns that same replacement. No card-type gate exists in `agent/`, `lib/` or `security/`.
 The server-authored manual-only reply is the guidance vocabulary `card_management_required` / `capabilities` in `messages/conversation.zh-CN.json:7-8`; it limits page-only scope to brand-new physical card creation and card cancellation, and never denies 补办 of an already-lost card or 申请虚拟卡. A live model may emit that envelope and the server renders it verbatim (`banking-guidance.ts:22-56`, `turns/buffer.ts:25-36`); because `write-continuation.ts` returns early on a guidance envelope, such a reply is final and cannot self-correct.
-`write-continuation.ts` only rescues a DECLARED-but-unemitted write (`pendingDeclaredWrites`, live-only); `declaredWriteTools` selects every catalog entry with `effect: 'write'`, so a declared `replace_card` is covered exactly like any other write. A model that refuses without declaring the write is never corrected.
+`write-continuation.ts` rescues explicitly ready declared writes (`needsInput=false`, live-only), and permits one interpretation/tool correction for an undeclared submission claim; `declaredWriteTools` selects every catalog entry with `effect: 'write'`, so a declared `replace_card` is covered exactly like any other write. Missing or ambiguous input remains a clarification. A refusal without a submission claim is not corrected.
 
 ## Public entry points
 
@@ -69,8 +83,9 @@ declaration. `tools/plan-compiler.ts` validates declared write counts/order and 
 parameters, dates, conditions and output references before createTaskGraph persists the whole DAG.
 Production does not extract arguments or dependencies from the original user sentence.
 
-Fresh model requests include `current-turn-focus.ts` metadata after compaction. Its token cost is reserved in the projection budget. The metadata is journaled with the model input, never appended to the saved conversation or shown in the UI. Durable recovery retains the original recorded input. `scheduled-dispatcher.ts` and `scripts/scheduler.ts` default to `demoNow()`, matching creation validation; an explicit server-side `now` can advance a dispatch pass without changing security time.
+Fresh model requests include `current-turn-focus.ts` metadata after compaction. `workflow-context.ts` refreshes the ten most recently updated action statuses for this owner, session and registered chat tools, so cancelled actions supersede historical pending tool results. Manual-page payloads and authorization secrets are excluded. Its token cost is reserved in the projection budget. The metadata is journaled with the model input, never appended to the saved conversation or shown in the UI. Durable recovery retains the original recorded input. `scheduled-dispatcher.ts` and `scripts/scheduler.ts` default to `demoNow()`, matching creation validation; an explicit server-side `now` can advance a dispatch pass without changing security time.
 Topic focus is a model instruction rather than a semantic validator of arbitrary prose. Banking authorization remains enforced by the existing server gateways.
+Terminal statuses also replace stale blocked results in the request projection at their original tool-result positions. The persisted archive and tool-call adjacency are preserved. For an undeclared operation claim, the single corrective request can require `describe_turn` through `providers/required-declaration.ts` on DeepSeek non-thinking Chat Completions. This only requires interpretation, never a banking write or authorization; other providers and thinking modes retain their normal request policy.
 
 Preflight refusals remain model-facing corrections in `planningRejections` and Pi tool results.
 `turns/events.ts` projects them through `lib/tool-feedback.ts` into catalog-owned public summaries
@@ -92,7 +107,7 @@ After parking the same turn pays `prisma.pendingAction.findUniqueOrThrow` (`:317
 
 ## 投资写入能力
 
-`subscribe_investment` 与 `redeem_investment` 都是 RED 写入，经同一网关授权、逐次强验证与执行围栏，操作身份由服务器拥有的调用/动作/节点决定。对已持有产品的再次申购由 SDK 聚合进现有持仓（`InvestResult.addedToExisting = true`），不新建持仓。赎回必须带显式口径 `mode`：`SHARES` 配 6 位小数的 `shares`，`AMOUNT` 配精确 CNY 金额 `amount`（按当前净值折算份额，折算为零或超过市值都拒绝），`ALL` 两者都不带并关闭持仓；赎回不再有本金口径，`redeemAmount` 一律拒绝。确认快照（`expectedShares`/`expectedNetValue`/`expectedNetValueDate`/`expectedSettlementAmount`）在写事务内与最新净值、净值日期、持仓份额及重算到账金额逐项比对，任一不匹配都以 `CONFLICT` 拒绝：本次零写入，用户必须重新确认；同身份重放不重新报价，返回原始回执与原净值。金额绝不使用浮点，计算使用整数最小单位或十进制算术。`system-prompt.ts` 要求：用户只给一个数字时先澄清「按金额赎回」还是「按份额赎回」，不得当成本金、不得承诺赎回额外收益；确认与结果必须给出赎回份额、成交净值、预计到账金额与费用口径；收益为模拟估算、不承诺保本。`providers/mock/investment-intents.ts` 对「…份」发 `SHARES`、对带货币单位的数字发 `AMOUNT`、对无数字的整笔赎回发 `ALL`，只有裸数字时反问口径而非提交工具调用。工具层细节见 `./tools/CONTEXT.md`。
+`subscribe_investment` 与 `redeem_investment` 都是 RED 写入，经同一网关授权、逐次强验证与执行围栏，操作身份由服务器拥有的调用/动作/节点决定。对已持有产品的再次申购由 SDK 聚合进现有持仓（`InvestResult.addedToExisting = true`），不新建持仓。赎回必须带显式口径 `mode`：`SHARES` 配 6 位小数的 `shares`，`AMOUNT` 配精确 CNY 金额 `amount`（按当前净值折算份额，折算为零或超过市值都拒绝），`ALL` 两者都不带并关闭持仓；赎回不再有本金口径，`redeemAmount` 一律拒绝。确认快照（`expectedShares`/`expectedNetValue`/`expectedNetValueDate`/`expectedSettlementAmount`）在写事务内与最新净值、净值日期、持仓份额及重算到账金额逐项比对，任一不匹配都以 `CONFLICT` 拒绝：本次零写入，用户必须重新确认；同身份重放不重新报价，返回原始回执与原净值。金额绝不使用浮点，计算使用整数最小单位或十进制算术。`system-prompt.ts` 要求：用户只给一个数字时先澄清“按金额赎回”还是“按份额赎回”，不得当成本金、不得承诺赎回额外收益；确认与结果必须给出赎回份额、成交净值、预计到账金额与费用口径；收益为模拟估算、不承诺保本。`providers/mock/investment-intents.ts` 对“…份”发 `SHARES`、对带货币单位的数字发 `AMOUNT`、对无数字的整笔赎回发 `ALL`，只有裸数字时反问口径而非提交工具调用。工具层细节见 `./tools/CONTEXT.md`。
 
 `confirmation.ts` is the public decision facade. `confirmation/identity.ts` resolves persisted ownership;
 `confirmation/liveness.ts` owns decision leases; `confirmation/outcomes.ts` projects refusals and convergence; `confirmation/authorized-execution.ts`
@@ -216,8 +231,10 @@ Recorded model-request continuation bypasses both context adjustments.
 conversation-guidance/policy/advisory/amount modules may script local demonstrations; production
 business validation checks structured arguments through the same gateway and SDK used by live Pi.
 `conversation-evidence.ts` collects prior structured query/write outcomes for dated discussion.
-`conversational-response.ts` preserves model prose verbatim. It never infers intent, personal balance,
-execution success or draft revival from wording. Actual financial outcomes are typed tool entries,
+`conversational-response.ts` retains independent explanation. The turn adapter also uses
+`reply-safety.ts` to withhold current-operation and concrete-balance assertions until server facts
+are available; unsupported claims cannot create a panel or a receipt. Negated, conditional and
+quoted examples remain explanatory prose. Actual outcomes come from typed tool entries,
 authorization states and execution receipts. `reply-format.ts` recognizes complete protocol envelopes
 through JSON parsing and closed structure checks, rather than field words or embedded Markdown
 examples. Explicit typed allowProtocolExamples permits protocol teaching examples. A format-only
@@ -249,23 +266,23 @@ cannot redirect an older committed result into a newer operation.
 
 ## Wall-clock profile of one chat turn
 
-`POST /api/chat` finishes one whole turn inside one HTTP request in both modes (`app/api/chat/route.ts:74-100`: `await runTurn` for JSON, `ReadableStream.start` awaiting the same call for SSE); no route exports `maxDuration`/`runtime` and no `AbortSignal` reaches `@/agent`, so the only server caps are the provider deadline and the DB limits below.
-There is exactly ONE timer in `agent/`: `durable/journal.ts:223-230` `startHeartbeat(intervalMs = 20_000)` (started `turn-runtime.ts:44`, stopped in `finish`/`finally`); each tick enqueues `renewAgentRunLease` on the SAME FIFO `tail` as event writes (`journal.ts:107-117`) and holds the one SQLite connection. It fires 0 times for a turn under 20 000 ms.
-No `sleep`/`delay`/`setTimeout`/`await new Promise(...)`, no backoff retry loop and no polling `for(;;)` over run/lease rows exists on the turn path: every second is an awaited DB statement, a model round-trip, or CPU. `turn-runtime.ts:16-25` `presentationEvents` is a cursor paging loop (2 queries per 500 events), not a timed poll.
-Live model calls only: `providers/request-options.ts:8-9,13,44` `LLM_REQUEST_TIMEOUT_MS ?? 30000` clamped `1000..120000`, `AbortSignal.timeout(timeoutMs)`, `maxRetries: 1`, `maxRetryDelayMs: 1500` ⇒ ≤31_500 ms per model request (≤121_500 ms configured); `LLM_MODE=mock` (`providers/index.ts:14-19`, `provider-mock.ts:33` bare `streamSimple`) bypasses that wrapper (`provider-live.ts:222`) and therefore has NO request deadline and NO retry.
-One turn makes 2..5 sequential model round-trips (`turns/live-prompt.ts:77,88,89` prompt → declared-write continuation → format repair; the continuation is live-only, `write-continuation.ts:57`), and compaction adds `k` more sequential summary calls before the answer (`context-compaction/index.ts:65-74`, `k = pending.chunks.length`, bounded only by the model context window).
+`POST /api/chat` awaits the whole turn for JSON or SSE. Model generation is bounded by the persisted per-intent budget in `model-budget.ts`; that budget is not a universal timeout for all database work or HTTP request processing.
+Timers have separate owners: `durable/journal.ts#startHeartbeat` renews the run lease; `model-budget.ts` stops provider output at the remaining turn deadline; the live request adapter additionally bounds transport/body streaming. The model budget also applies to injected and mock runtimes.
+Presentation-history paging is a cursor loop, not a timed lease poll. Provider deadline handling does not authorize retrying a financial write; banking replay still requires verified receipts and execution ownership.
+The live transport uses `LLM_REQUEST_TIMEOUT_MS` plus its bounded retry policy in `providers/request-options.ts`. Mock mode has no external HTTP transport, but still uses the shared per-intent request/token/time reservations.
+A turn can contain multiple tool/model round-trips, compaction chunks and one-shot corrections. All share the original intent budget; do not describe compaction or tool loops as bounded only by the model context window.
 `durable/retry-policy.ts` is a pure decision function (no loop, no backoff wait) used only on recovery.
 DB: one `PrismaClient` on one serialized SQLite connection (`lib/db/serialized-connection.ts:5-21,35-56` FIFO mutex held for a whole interactive transaction, no acquire timeout) with `maxWait: 10000, timeout: 10000` (`lib/db/database.ts:23-25`), overridden to `{ maxWait: 10000, timeout: 20000 }` in `command-execution.ts:103` and `scheduled-dispatcher.ts:86`. A leaked interactive transaction therefore blocks a chat turn indefinitely with nothing to end it.
-`agent/` has exactly 11 `prisma.$transaction` call sites and every one of them is awaited or returned to an awaiting caller — there is no fire-and-forget transaction: `command-execution.ts:67`, `confirmation-recovery.ts:268`, `scheduled-dispatcher.ts:69`, `manual-review.ts:132,186`, `task-rollback.ts:11`, `task-fencing.ts:179`, `durable/workflow-resumption.ts:45`, `durable/standalone-workflow.ts:101`, `workflows/cancellation.ts:84`, `tools/planning.ts:280`. Only the two above pass explicit options; the other nine inherit the `timeout: 10000` default.
+Transaction call sites must be awaited or returned. Use the actual transaction options at the owning call site; do not infer a whole-turn deadline from one transaction timeout or rely on a static count of call sites.
 Inside an open interactive transaction every repository and fence call is threaded with the transaction client (`tx`/`client`), so `lib/db/client.ts:30-32` `dbClient()` and `banking-sdk/tx.ts:32` `currentTransaction()` resolve to that client instead of the global singleton; the sole `to: 'confirmed'` `claimPendingAction` in `agent/` passes `tx` (`confirmation-recovery.ts:269-272`), whereas the un-threaded `to:'confirmed'` claims live in `security/security-gateway.ts:1520,1555`.
 Journaling cost per turn: one interactive transaction PER event (`journal.ts:120-123` → `appendRuntimeEvent`, incl. lease assertions + sequence + insert), one per provider stream chunk (`providers/model-audit.ts:19-33` awaited from `request-options.ts:33`), and a full-snapshot `encodeCheckpoint` per assistant message and per tool result (`journal.ts:80,142`, `durable/checkpoint.ts:13-15`), so wall time scales with reply length × statement latency.
 Every turn also re-reads all presentation events page by page at the end: `turn-runtime.ts:16-25` `for(;;) readRunPresentation(runId, userId, cursor, 500)` called at `:73`.
 No lease is ever waited on: lease acquisition is a fail-fast CAS (`lib/db/repositories/agentRun.ts:52-70`), and a duplicate concurrent turn or an expired lease throws `CONFLICT` immediately (`:85-87`). TTL constants: `DEFAULT_LEASE_MS = 120_000` (`agentRun.ts:11`), `EXECUTION_LEASE_TTL_MS = 120_000` (`confirmation-recovery.ts:116`), `WORKFLOW_EXECUTION_LEASE_MS = 600_000` (`lib/contracts/runtime.ts:2`), `MFA_CHALLENGE_TTL_MS = 5 * 60_000` (`security/mfa.ts:34`).
 Background only, never on the chat path: the recovery worker (`recovery-worker.ts:74-99`, `intervalMs ?? 5000`, clamp `250..60000`, strictly sequential per candidate) and the persisted recovery backoff `Date.now() + 1000 * 2 ** recoveryAttempts` (`lib/db/repositories/agentRun.ts:397`, `:200` `+2000` ms).
 
-## Known Issues
+## Closed outcome interpretation
 
-- `planner/failure.ts:111` `sealReason` treats EVERY non-open `actionStatus` as `action_not_open`, including `executed`/`needs_reconciliation` — the two statuses `action-status.ts:59-63` `REPRESENTED_ACTION_STATUSES` says still represent their node.
+- `planner/failure.ts#sealReason` prevents re-driving a non-open action, including `executed` and `needs_reconciliation`. `workflows/parked-actions.ts#sealProjection` preserves an executed action as a successful node; a closed action does not by itself mean the bank operation failed.
 - `confirmation/outcomes.ts#conflictOutcome` (used by confirm/verify/cancel and by `confirmation/liveness.ts`) projects both `CONFLICT` and `MANUAL_REVIEW_HOLD` into a domain outcome: `ok:false` plus the persisted `status`, the original `code` and a structured `failure`. It funnels `error.message` through `lib/tool-feedback.ts#publicToolError` with the error `code`, so the rendered copy comes from `PUBLIC_ERROR_CODES` (`MANUAL_REVIEW_HOLD` → `chat.error.manualReviewHold`, `CONFLICT` → `chat.error.stateChanged`) and never from the raw gateway sentence.
 - `failureReasonFor` maps `MANUAL_REVIEW_HOLD` → `'manual_review_hold'`, deliberately not `'denied'`: an open manual review is a hold, not a security denial.
 - `confirmation/gated-execution.ts:154-157` attaches `failure: toPlanFailure(error)` (i.e. `{code}`) to EVERY thrown gated refusal, so a refused `manual_add_card`/`manual_delete_card` call carries `failure` in addition to `errorCode`/`error` (`GatedToolOutcome.failure` is a documented contract field).

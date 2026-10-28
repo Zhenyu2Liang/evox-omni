@@ -10,6 +10,8 @@ export interface ConversationIntent {
   purpose: TurnPurpose;
   allowProtocolExamples?: boolean;
   workflow?: boolean;
+  /** A write declaration is not ready until the model explicitly resolves required user choices. */
+  needsInput?: boolean;
   id: string;
   revision: number;
   requestText: string;

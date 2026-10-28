@@ -32,7 +32,7 @@
 | `e2e/date-tamper-boundary.e2e.ts` | 消费入账时间的纯 HTTP 边界用例，无模型、无浏览器 |
 
 `SCENARIOS` 的 id 为 `15,14,13,12,11,10,9,8,0,1,2,2p,3,5,6,4,lA,lB,lC,lD,lE,lF,lG,lH,lJ,lI`。
-`lA` 补办信用卡、`lB` 理财部分赎回、`lC`…`lE` 虚拟卡场景、`lF`/`lG` 挂失→补办链路场景（`lF` 新会话、`lG` 单会话完整链路）、`lH` 连错三次验证码→终态锁定、`lI` 号码与尾号身份解析、`lJ` 借记卡/虚拟卡只展示绑定活期账户的现金；选择 `2` 会同时选中 `2p`，场景 `7` 恒为最后阶段。
+`lA` 补办信用卡、`lB` 理财部分赎回、`lC`…`lE` 虚拟卡场景、`lF`/`lG` 挂失→补办流程场景（`lF` 新会话、`lG` 单会话完整流程）、`lH` 连错三次验证码→终态锁定、`lI` 号码与尾号身份解析、`lJ` 借记卡/虚拟卡只展示绑定活期账户的现金；选择 `2` 会同时选中 `2p`，场景 `7` 恒为最后阶段。
 `e2e/helpers.ts` 与 `*.e2e-helper.ts` 是入口共用的驱动与断言模块，自身不运行。
 入口细节见 [e2e/CONTEXT.md](e2e/CONTEXT.md)。
 
@@ -56,6 +56,10 @@
 
 ## 编写测试的不变量
 
+新增安全机制的回归入口见 [安全修复回归](../docs/cn/test-cases.md#安全修复回归)。
+预算与回复检查的测试位于 `agent/`，不能只运行 `tests/unit/` 代表全部覆盖。
+同机多进程写入探针使用专用数据库，不与 `prisma/test.db` 共用重置目标。
+真实模型证据必须区分逐项复测汇总和同一构建的完整验收。
 消费入账时间由服务端拥有：`POST /api/cards/[id]/consume` 与 `consume_virtual_card` 工具都不接受时间参数。
 请求体含 `occurredAt` 键返回 `400 VALIDATION`，工具参数含 `occurredAt` 等客户端时间字段则在调用 SDK 前抛出 `VALIDATION`。
 两种拒绝都不移动资金、不写流水与 `CardConsumption`。
@@ -64,9 +68,9 @@
 补办卡继承源卡的结算账户，缺失绑定只按显式前驱修复，绝不回退默认账户。
 补办卡与源卡共享同一连续月度额度（`banking-sdk/card-family.ts` 双向遍历 `replacedByCardId`），历史 `CardConsumption` 保持原卡归属不改写。
 
-卡片集合按 id/type/状态断言，不只数总数：`lF`/`lG` 的补办后预期按「基线 + 1」推导（`e2e/card-replace-chain.e2e-helper.ts:749`、`:1115`），`lA` 在类型/状态之外仍固定断言补办后共 4 张（`e2e/live-acceptance.e2e.ts:1323-1325`）。
+卡片集合按 id/type/状态断言，不只数总数：`lF`/`lG` 的补办后预期按“基线 + 1”推导（`e2e/card-replace-chain.e2e-helper.ts:749`、`:1115`），`lA` 在类型/状态之外仍固定断言补办后共 4 张（`e2e/live-acceptance.e2e.ts:1323-1325`）。
 mock 夹具播种 `card_credit` 与 `card_debit`，其中 `card_debit` 绑定 `acct_checking`（`linkedAccountId: 'acct_checking'`），演示种子（`prisma/seed.ts`）另有绑定同一账户的 `card_virtual`。
-`lA` 补办后为「补办 ACTIVE 信用卡 + LOST 源卡 + DEBIT + VIRTUAL」；`lC` 与 `lF` 的验证前基线要求卡片总数不变（`e2e/live-acceptance.e2e.ts:1477`、`e2e/card-replace-chain.e2e-helper.ts:531`）。
+`lA` 补办后为“补办 ACTIVE 信用卡 + LOST 源卡 + DEBIT + VIRTUAL”；`lC` 与 `lF` 的验证前基线要求卡片总数不变（`e2e/live-acceptance.e2e.ts:1477`、`e2e/card-replace-chain.e2e-helper.ts:531`）。
 
 `tests/helpers/db.ts#truncateAll()` 清空 `prisma/schema.prisma` 的每一个 model（含无关系的 `CardConsumption`）。
 套件不得在 `useFreshDatabase()`/`resetDatabase()` 之后再自行逐表清理。
@@ -75,19 +79,21 @@ mock 夹具播种 `card_credit` 与 `card_debit`，其中 `card_debit` 绑定 `a
 ## 面板声称的覆盖
 
 确认/MFA 面板只在安全网关从真实工具调用持久化 `PendingAction` 后出现；模型散文不创建面板。
-`unit/agent`（`write-continuation*.test.ts`、`system-prompt.test.ts`）与 `integration/write-continuation.test.ts` 覆盖「声明写操作却只用散文声称面板/等待确认、未发出工具调用」的场景：服务端做一次有界续接，仍无写入时以服务端叙述发布真实未提交状态，伪造声称绝不进入会话记录。
-同一覆盖断言「参数齐全→续接后真实发起（打开真实网关闸门）或被网关拦截」以及「信息不足→正常澄清，不消耗续接预算」。
+`unit/agent/write-continuation*.test.ts`、`unit/agent/system-prompt.test.ts` 与 `integration/write-continuation.test.ts` 覆盖“声明写操作却只用散文声称面板/等待确认、未发出工具调用”的场景。
+服务端做一次有界续接，仍无写入时发布真实未提交状态。
+公开会话正文不保留伪造声称，原始候选仍保留在内部归档中。
+同一覆盖断言“参数齐全→续接后真实发起（打开真实网关闸门）或被网关拦截”以及“信息不足→正常澄清，不消耗续接预算”。
 `e2e/panel-claim.e2e-helper.ts#findConfirmationPanelClaim` 纯文本判定助手散文是否声称确认/MFA 面板已存在，`unit/panel-claim.test.ts` 覆盖其正/负例；否定表述与普通追问不误判。
-`e2e/live-acceptance.e2e.ts#driveRedTool` 与相关场景经 `helpers.ts#assertNoFabricatedConfirmationPanel` 在「散文声称面板 + `/api/actions` 无待处理项 + DOM 无卡片」时显式判定失败，错误区分 cause=模型未发起受控工具与 cause=UI/测试原因。
-`unit/planner/mock-amount-clarification.test.ts` 与 `app/nl-entry-http.test.ts` 覆盖「信息不足→澄清，不产生工具调用」，但澄清为结构化 `missing_details` 或纯文本追问，非“面板”声称。
+`e2e/live-acceptance.e2e.ts#driveRedTool` 与相关场景经 `helpers.ts#assertNoFabricatedConfirmationPanel` 在“散文声称面板 + `/api/actions` 无待处理项 + DOM 无卡片”时显式判定失败，错误区分 cause=模型未发起受控工具与 cause=UI/测试原因。
+`unit/planner/mock-amount-clarification.test.ts` 与 `app/nl-entry-http.test.ts` 覆盖“信息不足→澄清，不产生工具调用”，但澄清为结构化 `missing_details` 或纯文本追问，非“面板”声称。
 细节见各子目录 CONTEXT.md。
 
 ## 投资净值与份额口径的覆盖
 
 `unit/banking-sdk/net-value-redemption.test.ts` 覆盖份额折算、按份额／金额／全额赎回的结算与成本守恒。
 `unit/security/redemption-stale-authorization.test.ts` 覆盖确认快照不一致时的 `CONFLICT`：本次零写入、`PendingAction` 为 `failed`，同身份重放返回原回执与原净值。
-`unit/banking-sdk/atomicity.test.ts:116-140` 覆盖同一持仓的并发赎回：两个 `Promise.allSettled` 的 `mode:'ALL'` 赎回恰一个成功、另一个抛 `CONFLICT`，账户只入账一次（不是排队，也不是部分成交）。
-单进程内两次事务由 `lib/db/serialized-connection.ts` 的单连接 FIFO 串行化，失败方随后在「已平仓」或旧 `shares` 的条件写处被拒；该用例只覆盖进程内竞态，不覆盖跨进程写者。
+`unit/banking-sdk/atomicity.test.ts:116-140` 覆盖同一持仓的并发赎回：两个 `Promise.allSettled` 的 `mode:'ALL'` 赎回恰一个成功、另一个抛 `CONFLICT`，账户只入账一次。
+单进程内两次事务由 `lib/db/serialized-connection.ts` 的单连接 FIFO 串行化，失败方随后在“已平仓”或旧 `shares` 的条件写处被拒；该用例只覆盖进程内竞态，不覆盖跨进程写者。
 `integration/node-recovery.test.ts` 覆盖同一 `idempotencyKey` 的并发重放返回同一结果、不同 key 的重复赎回被拒（后者是串行调用，不构成竞态）。
 
 ## 亏损持仓（负收益 / 负收益率）的覆盖
@@ -106,15 +112,15 @@ mock 夹具播种 `card_credit` 与 `card_debit`，其中 `card_debit` 绑定 `a
 | `unit/banking-sdk/net-value.test.ts:153-161` | `profitRateOf` 产出带符号比率（`'-23.45'/1000.00`→`'-0.02345'`，`'-1.00'/3.00`→`'-0.333333333333333333'`），零成本返回 `undefined` |
 | `unit/banking-sdk/net-value-redemption.test.ts:366-403` | 净值下跌仓位的负值口径：`profit` `'-0.000000928'`/`'-192.3076932'`、`realizedProfit` `'-192.31'`、`realizedProfitMinor` `-19_231n`（只断 SDK 数值） |
 | `unit/banking-sdk/net-value.test.ts:164-191`、`unit/banking-sdk/investment.test.ts:110-112`/`:124-129` | 负净值/负份额/负金额/负成本的 `VALIDATION` 拒绝 |
-| `e2e/live-investment.e2e-helper.ts:695-706` | B0 聊天卡：持仓收益与 `signedDecimalCNY(市值 − 剩余持仓成本)` 全等（`signedDecimalCNY` 见 `:229-231`，只对正值加 `+`），`持仓收益率` 匹配 `/^[+-]?\d+(\.\d+)?%$/`（失败文案写明「负收益率必须正常显示」），并断言本步零 pageerror |
-| `e2e/live-investment.e2e-helper.ts:441-473` | `/investments` 页逐行全等：金额 `/^[+-]?¥[\d,]+\.\d{2}$/` 允许负号且拒绝未结算高精度，持仓收益/累计收益按带符号 CNY 全等，已实现收益按不带符号 `formatDecimalCNY` 全等，并按「市值 − 持有金额」「已实现 + 持仓」双向自洽 |
+| `e2e/live-investment.e2e-helper.ts:695-706` | B0 聊天卡：持仓收益与 `signedDecimalCNY(市值 − 剩余持仓成本)` 全等（`signedDecimalCNY` 见 `:229-231`，只对正值加 `+`），`持仓收益率` 匹配 `/^[+-]?\d+(\.\d+)?%$/`（失败文案写明“负收益率必须正常显示”），并断言本步零 pageerror |
+| `e2e/live-investment.e2e-helper.ts:441-473` | `/investments` 页逐行全等：金额 `/^[+-]?¥[\d,]+\.\d{2}$/` 允许负号且拒绝未结算高精度，持仓收益/累计收益按带符号 CNY 全等，已实现收益按不带符号 `formatDecimalCNY` 全等，并按“市值 − 持有金额”“已实现 + 持仓”双向自洽 |
 
 已覆盖的层级：符号换算（`lib/decimal`）、SDK 数值（`banking-sdk/net-value.ts`）、组件两种布局（`HoldingFacts` 的 `card`/`tile`）、工具摘要（`agent/tools/redeem-investment.test.ts:375-399`：mock `listHoldings` 返回 `profit: '-60'`/`profitRate: '-0.012'`/`cumulativeProfit: '-60'`，断言 `持仓收益 -¥60.00`、`持仓收益率 -1.20%`、`累计收益 -¥60.00`）。
 
 已知缺口：
 
 - 夹具无亏损持仓：`helpers/fixtures.ts:427-431` 只有 `holding_wenjiana`（5050.000000 份 × 1.0000 = 5050.00，成本 5000.00，+50）；亏损持仓只在演示种子 `prisma/seed.ts:377-381` 的 `holding_wenjib`（10000.000000 份 × 0.9880 = 9880.00，成本 10000.00 → −¥120.00，收益率 −1.2%）。
-- 真实浏览器的亏损渲染只由演示种子的 `/investments` 顺带产生，没有任何断言读取它：`assertInvestmentsPage` 的行清单不含「持仓收益率」（`e2e/live-investment.e2e-helper.ts:424-433`），且 `lB` 步骤持仓是盈利的 `holding_wenjiana`，带符号正则同样接受正值。
+- 真实浏览器的亏损渲染只由演示种子的 `/investments` 顺带产生，没有任何断言读取它：`assertInvestmentsPage` 的行清单不含“持仓收益率”（`e2e/live-investment.e2e-helper.ts:424-433`），且 `lB` 步骤持仓是盈利的 `holding_wenjiana`，带符号正则同样接受正值。
 - `holdingProfitRate` 文案（`business.investments.holdingProfitRate`）只有 e2e 断言（`e2e/live-investment.e2e-helper.ts:90-91`、`:681`、`:699-700`），unit 层只断言百分比文本。
 - 微信通道是另一套渲染（`channels/weixin/presentation.ts` 的 `percentText`，`multiplyDecimal` 后 HALF_UP 到 2 位），`unit/weixin-presentation.test.ts:25`/`:87-104`/`:111` 只有非负或缺失收益率，无亏损用例。
 - 没有负 `HoldingView.cumulativeProfit`/`realizedProfit` 断言：负已实现收益只落在 `InvestResult` 层（`unit/banking-sdk/net-value-redemption.test.ts:394`/`:400`）。
@@ -138,7 +144,7 @@ mock 夹具播种 `card_credit` 与 `card_debit`，其中 `card_debit` 绑定 `a
 | `unit/agent/system-prompt.test.ts`（`system prompt card capability scope`） | 系统提示词的 `manual-only` 语句不得套用到已挂失卡的补办，实体卡人工规则限于新建 |
 | `integration/card-replace-capability-contract.test.ts` | 真实网关路径下三种卡类型的 RED + MFA 可达性、验证前无副作用、验证后仅一张新卡与类型继承；非 `LOST` 源卡的 CONFLICT 且不改状态；重复请求落到同一张补办卡并可重放 |
 | `integration/card-manual-only-management.test.ts` | `manual_add_card`/`manual_delete_card` 在代理路径上仍被拒绝：`executeGatedTool` 的拒绝结果由精确 `toEqual` 固定为 `{ok:false,errorCode,error,failure:{code:'SECURITY_DENIED'}}`，用户侧副作用快照不变 |
-| `scenarios/test-18-card-capability-consultation.test.ts` | 补办咨询与歧义目标只澄清、不产生动作；指引信封不创建 `PendingAction`；话术不得否认真实能力；生产提示的人工专属规则限于「新建实体卡 + 注销卡片」并声明集合封闭，`replace_card` 覆盖任意类型已挂失卡且从不说成页面专属 |
+| `scenarios/test-18-card-capability-consultation.test.ts` | 补办咨询与歧义目标只澄清、不产生动作；指引信封不创建 `PendingAction`；话术不得否认真实能力；生产提示的人工专属规则限于“新建实体卡 + 注销卡片”并声明集合封闭，`replace_card` 覆盖任意类型已挂失卡且从不说成页面专属 |
 | `scenarios/test-19-card-replace-credit-runtime.test.ts` | 生产运行时下已挂失信用卡的补办走 RED MFA，验证后仅一张补办卡、源卡仍 `LOST` |
 
 话术断言绑定产品原文：`test-18` 与 `unit/agent/card-capability-guidance.test.ts` 读取目录与提示词的真实渲染结果，
@@ -151,23 +157,23 @@ mock 夹具播种 `card_credit` 与 `card_debit`，其中 `card_debit` 绑定 `a
 `accountAvailableBalance` 是**账户**余额，`payableAmount = min(账户余额, 家庭本月剩余限额)`，两者都只在 `LINKED` 出现。
 `MISSING`/`UNTRUSTED` 不得带任何余额字段，也绝不以 `0.00` 冒充。
 `FROZEN`/`LOST` 保留真实余额而 `usable === false`；`CREDIT` 恒 `NOT_APPLICABLE`。
-UNTRUSTED 的可构造来源只有「他人账户」与「非 CHECKING 账户」；「账户不存在」在真外键下不可表示（删除账户走 `SetNull` → `MISSING`）。
+UNTRUSTED 的可构造来源只有“他人账户”与“非 CHECKING 账户”；“账户不存在”在真外键下不可表示（删除账户走 `SetNull` → `MISSING`）。
 `MISSING`/`UNTRUSTED` 只由直接写库构造（`db().card.create/update` 写 `linkedAccountId: null`、造他人或非 CHECKING 账户、删除已绑定账户触发 `SetNull`）；演示种子（`prisma/seed.ts`）与任何 API 路径都不产生这两种状态，因此相关覆盖是合成夹具而非可复现的用户流程。
 单账户多卡共享同一份余额，一张卡的消费同步反映到同账户的其它卡，资产汇总额只计该账户一次。
 
 | 文件 | 覆盖 |
 | --- | --- |
 | `unit/lib/mask.test.ts` | `lib/mask` 为唯一脱敏实现：末 4 位保留且长度不变、幂等、过短原样不抛错、`maskPhone(null) === ''`；`lib/phone.ts#maskPhone` 与 `lib/mask.ts#maskPhone` 是同一函数引用 |
-| `unit/banking-sdk/card-linked-account.test.ts` | LINKED 的名称/掩码/账户余额/应付金额、月限额截断、MISSING 与 UNTRUSTED 无余额字段、FK `SetNull` 后读为 MISSING、FROZEN/LOST 真实余额、CREDIT `NOT_APPLICABLE`、创建即绑定与 0 或多个活期账户时的 `VALIDATION`/`SECURITY_DENIED` |
+| `unit/banking-sdk/card-linked-account.test.ts` | LINKED 的名称/掩码/账户余额/可支付金额、月限额截断、MISSING 与 UNTRUSTED 无余额字段、FK `SetNull` 后读为 MISSING、FROZEN/LOST 真实余额、CREDIT `NOT_APPLICABLE`、创建即绑定与 0 或多个活期账户时的 `VALIDATION`/`SECURITY_DENIED` |
 | `integration/card-linked-account-projection.test.ts` | 他人账户的 owner 隔离与消费拒绝、多卡共享同一账户的余额同步与汇总只计一次、转账/消费/投资申购三条路径的卡视图余额与账户余额同口径 |
 | `app/card-links-http.test.ts` | `GET /api/cards` 报文层：只出现脱敏账号、他人余额/账号/户名不出现在 JSON、FROZEN/LOST 不序列化成 `0.00`、MISSING 与 CREDIT 无余额字段 |
 | `integration/card-dashboard-assets.test.ts` | 绑定借记卡仍不计入可用额度，资产汇总不重复计入 |
-| `integration/card-replacement-transaction.test.ts`、`card-replace-capability-contract.test.ts` | 补办继承结算账户；漂移只可能是「存在但不可信」或删除后 `SetNull`；写入无行 id 被外键拒绝 |
+| `integration/card-replacement-transaction.test.ts`、`card-replace-capability-contract.test.ts` | 补办继承结算账户；漂移只可能是“存在但不可信”或删除后 `SetNull`；写入无行 id 被外键拒绝 |
 | `scenarios/test-13/14/16/19` | 借记卡补办、虚拟卡申请与重放、家族限额、CREDIT 补办的绑定与 `NOT_APPLICABLE` 投影 |
 
 ## 号码与卡片身份解析的覆盖
 
-身份判定与候选筛选必须分开断言：身份用例只接受完整号码，候选用例必须同时断言「候选不唯一即不执行」。
+身份判定与候选筛选必须分开断言：身份用例只接受完整号码，候选用例必须同时断言“候选不唯一即不执行”。
 解析用例必须断言三件事：参数被规范化为唯一 id、澄清时不写 `PendingAction`、对外文本不含完整号码。
 涉及完整号码的用例读取 `Contact.phoneFull` 与 `Card.numberFull`，断言对象只到脱敏值。
 
@@ -182,7 +188,7 @@ UNTRUSTED 的可构造来源只有「他人账户」与「非 CHECKING 账户」
 | `unit/scripts/number-backfill.test.ts` | 复制完整值并以 `lib/mask` 规范化展示列、重复执行幂等、脱敏值报 `unrecoverable-masked`、已有完整值的行不被改写、回滚只清空仍持有写入值的行、报告只含脱敏值、CLI 参数严格 |
 | `unit/security/card-resolution.test.ts` | `resolveCardTarget` 直连：`cardId`、`cardType`、`cardTail`、`cardNumber` 各自命中，多个选择器必须指向同一张卡，`cardNumber` 只与 `numberFull` 精确相等；没有候选为 `not_found`、多个为 `ambiguous` 且候选只有 `id`/`type`/`numberMasked`；他人的 `cardId`、`cardTail`、`cardNumber` 均为 `not_found` 且不投影候选；尾号或完整卡号写进 `cardId` 为 `invalid`；`canonicalizeCardArgs` 只留 `cardId`，`buildCardClarifyMessage` 不含 12 至 19 位数字 |
 | `unit/security/card-selector-gateway.test.ts` | 网关 park 阶段：解析成功时持久化参数只有 `cardId`，确认摘要用脱敏尾号；`ambiguous`、`invalid` 与组合冲突只在 `blockReason` 给出纯文本澄清，`PendingAction` 与 `mfaChallenge` 计数不变 |
-| `scenarios/card-selector-consumption.test.ts` | 生产运行链路下 `consume_virtual_card` 分别用 `cardType: "VIRTUAL"` 与 `cardTail: "7788"` 解析到同一张虚拟卡，MFA 后扣减其绑定活期账户并写入 `channel` 为 `CARD` 的流水与 `CardConsumption` 行；完整卡号写进 `cardId` 在 park 前被拒；park 参数、确认摘要与叙述都不含 12 至 19 位数字 |
+| `scenarios/card-selector-consumption.test.ts` | 生产运行流程下 `consume_virtual_card` 分别用 `cardType: "VIRTUAL"` 与 `cardTail: "7788"` 解析到同一张虚拟卡，MFA 后扣减其绑定活期账户并写入 `channel` 为 `CARD` 的流水与 `CardConsumption` 行；完整卡号写进 `cardId` 在 park 前被拒；park 参数、确认摘要与叙述都不含 12 至 19 位数字 |
 | `scenarios/test-17-consumption-time-guard.test.ts` | `consume_virtual_card` 的参数键集合含 `cardId`、`cardType`、`cardTail` 与 `cardNumber` |
 | `app/contacts-http.test.ts` | `POST /api/contacts` 的完整号码只写入 `Contact.phoneFull`，响应与审计行只有脱敏值；同一完整号码重复提交返回 `409`，脱敏值或带符号号码返回 `400`；他人联系人不可删除 |
 
@@ -201,16 +207,16 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 | 会话/租约恢复入口 | 无 HTTP | `integration/locked-action-recovery.test.ts`（`recoverOwnedRun`、`resumeTask`、`retryTask`、`recoverAction` 均不得把 `locked` 变回 `pending`/`awaiting_mfa`） |
 | 渲染/文案层 | 无 HTTP | `unit/planner/locked-card-rendering.test.ts`、`unit/weixin-lock-presentation.test.ts`、`unit/security/unlock-panel-render.test.ts`、`unit/security/unlock-panel-notice.test.ts`（四段 `security.reset.*` 语义 + `data-unlock-reinitiate`）、`unit/security/developer-reset-panel-hook.test.ts`（`data-developer-breaker-reset-panel` 仅开发者模式）、`unit/lib/public-text.test.ts`、`unit/planner/tool-diagnostics.test.ts` |
 
-`GET /api/security` 的 `lock` 是账户级常量 `{ code:'CIRCUIT_OPEN', reason:'circuit_open' }`（`app/api/security/route.ts:72-77`）：只报告熔断原因，且刻意不带 attempts 计数（熔断按账户计，attempts 属该动作自己的 challenge）。per-action 的 `mfa_attempts_exhausted` 只出现在第 3 次错码的写操作响应里；两处分别由 `app/mfa-lock-http-contract.test.ts` 的读模型组与逐次阶梯组固定，不要把它们互相“对齐”。
+`GET /api/security` 的 `lock` 是账户级常量 `{ code:'CIRCUIT_OPEN', reason:'circuit_open' }`（`app/api/security/route.ts:72-77`）：只报告熔断原因，且刻意不带 attempts 计数（熔断按账户计，attempts 属该动作自己的 challenge）。per-action 的 `mfa_attempts_exhausted` 只出现在第 3 次错码的写操作响应里；两处分别由 `app/mfa-lock-http-contract.test.ts` 的读模型组与逐次阶梯组固定，不得把它们互相“对齐”。
 解锁审计写的是 `SecurityEvent`（`SECURITY_RESET`，`security/circuit-breaker.ts#commitAuditedReset`），不是 `AuditLog`：`app/mfa-lock-refresh-unlock-http.test.ts` 断言 `SECURITY_RESET` 增量恰 1 且 `AuditLog` 增量为 0。
 `SecurityEventKind`（`lib/contracts/audit.ts`）没有 `mfa_required` 成员，所以“锁定后不新增 `mfa_required` 事件”是空断言；真正的保证是会话 `SecurityEvent` 总数冻结，见 `app/mfa-lock-http-contract.test.ts`。
 锁定事实一律按 `status`、`mfaResult`、`PendingAction` 行、`GET /api/actions` 是否再surface 与 `SecurityEvent` 行断言。
 写操作路由（都在 `tests/app`）锁定路径上对 `events` 的断言只有负例（不再出现该 actionId 的 `mfa_required`）；锁定行的 `cancel`/`recover` 断言 `events` 为 `[]`；公开摘要断言在 agent turn 路径，见 `unit/agent/turn-security-event.test.ts:92-98`。
 `unit/planner/action-contract.test.ts`、`action-attention-state.test.ts` 用桩造的 `message`（如 `'Verification locked'`）断言客户端把服务端锁定消息透传成 `error` + `action_settled`。
 渲染层锁定不再是单点用例：`unit/planner/tool-diagnostics.test.ts` 仍唯一断言 `ConfirmationCard` 出 `cards.terminal.locked` 且无 `<button>`；`unit/planner/locked-card-rendering.test.ts:85-107` 断言 `MfaCard` 的 `data-mfa-locked`、目录锁因句、`href="/security"`、无 `<input>`/`<button>`/`123456`/`继续验证：`，`awaiting_mfa` 保留输入面见 `:109-118`，`ApprovalRecord` 见 `:120-132`，`security_event` 折叠见 `:134-155`；`unit/security/unlock-panel-render.test.ts:67-157` 覆盖 `/security` 解锁面板的钩子与输入形态（`data-unlock-*`、单一验证码输入、无内部诊断），`unit/security/unlock-panel-notice.test.ts:59-156` 覆盖四段 `security.reset.*` 语义与 `data-unlock-reinitiate`（字面量 `REINITIATE` 全等夹住整句），`unit/security/developer-reset-panel-hook.test.ts` 覆盖开发者模式下的 `data-developer-breaker-reset-panel`（非开发者渲染空串）。
-`e2e/acceptance.e2e.ts` 的 `j-circuit-breaker-lock` 在真实浏览器连错三码，用未限定 `[role="status"]` 的子串匹配断言 `cards.terminal.locked`，并核 `/security` 的「已熔断」「失败 3 / 3 次」与 `CIRCUIT_BREAKER_TRIPPED` 行；注意 `/security` 的解锁面板在两种状态都渲染常驻 `role="status"` live region（`unit/security/unlock-panel-render.test.ts:117` ↔ `app/security/UnlockPanel.tsx:213`），未限定范围的扫描会连带面板文本。
+`e2e/acceptance.e2e.ts` 的 `j-circuit-breaker-lock` 在真实浏览器连错三码，用未限定 `[role="status"]` 的子串匹配断言 `cards.terminal.locked`，并核 `/security` 的“已熔断”“失败 3 / 3 次”与 `CIRCUIT_BREAKER_TRIPPED` 行；注意 `/security` 的解锁面板在两种状态都渲染常驻 `role="status"` live region（`unit/security/unlock-panel-render.test.ts:117` ↔ `app/security/UnlockPanel.tsx:213`），未限定范围的扫描会连带面板文本。
 
-锁定文案既有子串断言也有全等断言：`scenarios/test-10-circuit-breaker.test.ts` 断言 `thirdAttempt.text` 含「锁定」、`auth.message` 含「熔断」；`integration/money-budget.test.ts` 断言执行栅栏的 `CIRCUIT_OPEN` 结果含「熔断」。
+锁定文案既有子串断言也有全等断言：`scenarios/test-10-circuit-breaker.test.ts` 断言 `thirdAttempt.text` 含“锁定”、`auth.message` 含“熔断”；`integration/money-budget.test.ts` 断言执行栅栏的 `CIRCUIT_OPEN` 结果含“熔断”。
 完整锁定句由 `unit/weixin-lock-presentation.test.ts:87-92` 的四段模板定义，并以 `:99`/`:112`/`:123`/`:157` 的 `toBe` 全等断言；单次错码的 `状态：等待验证码` + `继续验证：/验证 …` 见 `:134`，该入口只属 `awaiting_mfa` 见 `:144-152`。
 `chat.error.securityLocked` 由 `unit/lib/public-text.test.ts:79-87`（zh-CN/en 双语言）、`unit/planner/locked-card-rendering.test.ts:148-186`、`unit/weixin-lock-presentation.test.ts:112-183`、`unit/agent/turn-security-event.test.ts:98` 断言。
 `publicToolError` 由 `unit/planner/tool-feedback.test.ts`（通用失败 `chat.error.toolFailed`）与 `unit/lib/public-text.test.ts:33-60` 覆盖。
@@ -233,8 +239,8 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 
 | 文件 | 覆盖 |
 | --- | --- |
-| `unit/weixin-presentation.test.ts` | `renderEvents`/`renderBusinessCard`/`renderAttention`：17 种 `ChatCard` 的金额与掩码（`it.each` 参数化）且不回显 `NEVER_DISPLAY`/完整手机号、card 与 `message_end.cards` 去重、`action_settled` 后旧 gate 不复活、写操作成功后不再输出旧余额、已取消订阅不提下次扣费、`plan_update` generation 防回退、`processing/recoverable/reconciliation` 不称「尚未执行」、畸形字段兜底「字段不完整」、`blocked` 工具事件只发公开提示（不回显 `chat.error.`/`debugDetail`）、五个计划控制动词与 `/待办`、`/检查到期` 的银行调用参数 |
-| `unit/weixin-channel.test.ts` | 非受信/不完整消息丢弃、`message_state` 省略与 uint64 编号、`text_delta` 不外发、同消息重投与重启去重（`requestId` 形如 `weixin:<64 hex>`）、发送失败保留 outbox 且 `client_id` 不变、未展示编号「不是本通道」、先 `/确认` 后 `/验证`（验证码不落 state）、`status:'locked'` 回执含「已锁定」且不伪造「状态：executed」、网络异常「暂时无法确认」、verify 路由与请求体、URL 白名单、`WeixinStore` save/load 与双 worker 互斥 |
+| `unit/weixin-presentation.test.ts` | `renderEvents`/`renderBusinessCard`/`renderAttention`：17 种 `ChatCard` 的金额与掩码（`it.each` 参数化）且不回显 `NEVER_DISPLAY`/完整手机号、card 与 `message_end.cards` 去重、`action_settled` 后旧 gate 不复活、写操作成功后不再输出旧余额、已取消订阅不提下次扣费、`plan_update` generation 防回退、`processing/recoverable/reconciliation` 不称“尚未执行”、畸形字段兜底“字段不完整”、`blocked` 工具事件只发公开提示（不回显 `chat.error.`/`debugDetail`）、五个计划控制动词与 `/待办`、`/检查到期` 的银行调用参数 |
+| `unit/weixin-channel.test.ts` | 非受信/不完整消息丢弃、`message_state` 省略与 uint64 编号、`text_delta` 不外发、同消息重投与重启去重（`requestId` 形如 `weixin:<64 hex>`）、发送失败保留 outbox 且 `client_id` 不变、未展示编号“不是本通道”、先 `/确认` 后 `/验证`（验证码不落 state）、`status:'locked'` 回执含“已锁定”且不伪造“状态：executed”、网络异常“暂时无法确认”、verify 路由与请求体、URL 白名单、`WeixinStore` save/load 与双 worker 互斥 |
 | `unit/weixin-lock-presentation.test.ts` | 锁定终态四段回复全文（`toBe`）、熔断/解锁后仍锁、单次错码的 `等待验证码`+`继续验证：/验证 …`+剩余次数、`it.each` 七种 status 只 `awaiting_mfa` 给入口、locked 缺 `code`/`failure` 的兜底、`security_event{kind:'locked'}` 撤销 gate 且不可复活、`injection/audit/note` 静默、四类敌意 payload 不上屏、卡片/状态词兜底与去重 |
 | `integration/weixin-protocol.test.ts` | 固定版本 `pi-weixinbot` 线协议：轮询 Bearer+游标+uint64 编号、发送固定收件人/上下文/幂等 `client_id`、`ret:-14` 不视为已发送 |
 | `e2e/weixin-live.e2e.ts`、`e2e/weixin-capabilities.e2e-helper.ts` | live 模型 + Chrome + 本地微信协议服务器（非手机实测，每轮新建 `prisma/weixin-live-<UUID>.db`）：陌生人隔离、余额查询回复含真实金额、转账确认前不动账且重复投递不重复扣款、RED 确认→错码 `000000` 不改卡→正码执行、`/取消` 与网页待办一致；`WEIXIN_LIVE_EXTENDED=1` 追加 `runWeixinCapabilities` 的工具矩阵与 `/任务` 控制流 |
@@ -243,7 +249,7 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 
 - 锁定终态的四段全文由 `unit/weixin-lock-presentation.test.ts:87-92` 定义并以 `toBe` 全等断言：`状态：已锁定` 行、无 `继续验证：`/`/验证`、不回显服务端 `outcome.message`，见 `:99`/`:112`/`:123`/`:157`；`unit/weixin-channel.test.ts:91-92` 的弱断言仍并存。
 - `awaiting_mfa` 的 `状态：等待验证码` + `继续验证：/验证 <id> 六位验证码` + 剩余次数由 `unit/weixin-lock-presentation.test.ts:134` 全等断言，入口只属 `awaiting_mfa` 见 `:144-152`。
-- 微信入口无「连错三次验证码→锁定」的端到端用例：三次锁定只在网关层由 `unit/security/mfa-failure-contract.test.ts` 与 `integration/security-deny-redaction.test.ts:184` 覆盖，通道侧把结果桩喂给 `settle` 只断言文案（`unit/weixin-lock-presentation.test.ts:95-98`）。
+- 微信入口无“连错三次验证码→锁定”的端到端用例：三次锁定只在网关层由 `unit/security/mfa-failure-contract.test.ts` 与 `integration/security-deny-redaction.test.ts:184` 覆盖，通道侧把结果桩喂给 `settle` 只断言文案（`unit/weixin-lock-presentation.test.ts:95-98`）。
 - 无 `/验证 <id>`（缺码）、`/取消 <id>` 回执、`/恢复操作 <id>` 的 bridge 分派、`命令格式不正确`、非文字/超长消息、`BankingApiError`（`服务端提示（CODE）：…`，含 `CIRCUIT_OPEN` 信封）的用例。
 - 出站文本不含 `__SECURITY_BLOCK__` 由 `unit/weixin-lock-presentation.test.ts:200-248` 覆盖；`renderEvents` 对 `kind:'locked'` 渲染 `securityNotice` 并撤销 gate（`channels/weixin/banking-client.ts:135-142`），非 locked 的 kind 才静默。
 - 无 `worker.ts` 的游标提交与 `-14` 重扫码、outbox 1600 字切块与 2000 条淘汰的用例。
@@ -276,24 +282,32 @@ mock 路径没有内部 deadline：`agent/durable/journal.ts:223-228` 的 20 000
 
 `tests/deploy-db-push.test.ts` 干净机器实测：recreate+seed 27309ms（首次，冷 Prisma 引擎）/18442ms、缺失库自建 17145ms/16954ms（最慢一次分别为全局预算的 137% 与 86%），纯校验用例 1ms；`COLD_DB_PROVISION_TEST_TIMEOUT_MS = 120_000` 相对最慢一次留约 4 倍余量。
 
-已排除的成因（不必重新调查）：无第二个进程写同一 `prisma/test.db`、无锁竞争与 >1s 的可复现停顿、DB 与 WAL 规模正常、`tests/setup.ts` 的 schema 哈希标记匹配因而跑批中途不重建库、子进程只有四处 spawn 点且都在各自用例内 `await` + `kill`（`deploy-db-push` 用自己的库）。
+性能排查必须核对当次进程、隔离库路径、锁等待与 schema 准备状态。
+旧批次排除过的原因不能代替当前环境的检查。
 事件持久化当前是每事件一事务，把 ~101 次串行事务压到个位数才能从根上消除 I/O 争用放大；这属于产品代码，测试侧只能抬高预算下限。
 
 ## 串行化与时间预算（stall 归因）
 
 全进程只有一条 native SQLite 连接（`lib/db/client.ts:25-27`），所有语句与交互事务经 `lib/db/serialized-connection.ts` 的 FIFO `ConnectionMutex`（`:9-21`）排队；`startTransaction`（`:35-56`）在 `commit`/`rollback`/抛错时才释放（`:49-50`、`:52-55`），因此**一个被 `await` 的 `$transaction` 会在其整个生命周期内独占该锁**。`acquire()` 的 `await previous` 没有超时也没有取消：若存在未 await 的事务（fire-and-forget），后续每条语句都会无声挂死。`lib/` 当前没有任何 fire-and-forget 事务；`tests/integration/database-adapter-isolation.test.ts:67-111` 固定了 `maxWait`/`timeout` 到期后锁确实被释放（`P2028` 在 `maxWait` 阶段就产生，`callbackEntered === false`）。
 
-`$transaction` 一律继承 `lib/db/database.ts:25` 的 `{ maxWait: 10000, timeout: 10000 }`（例外：`agent/command-execution.ts:103`、`agent/scheduled-dispatcher.ts:86` 用 `timeout: 20000`）。测试进程内的挂钟成本 = 语句数 × 单语句延迟，没有内部截止时间：mock 模型（`agent/providers/provider-mock.ts:33` 无 `tokensPerSecond`）不产生任何 timer，`agent/durable/journal.ts:223-228` 的 20 000 ms 心跳在 20 s 内 0 次触发，`withLiveRequestLimits` 只在 live 模式生效。一次 chat turn 里每个 Pi 事件与每个流事件各开一个 `$transaction`（`lib/db/repositories/agentRun.ts:118`、`:140`、`:162`、`:181`、`:191`、`:313`、`:322`、`:341`、`:355`），故 `tests/app` 的「2 次 chat + 2 次 confirm + 1 次 verify」是数千条串行语句；单语句延迟放大 10 倍即从约 2 s 涨到超过 20 s 的 `testTimeout`。mock 模式没有请求级 deadline，所以超时是唯一边界。
+数据库事务的默认等待与执行时限见 `lib/db/database.ts`，特定调用可覆盖时限。
+Pi 事件和模型流事件的持久化会增加串行数据库往返。
+mock 不产生外部 HTTP 请求，但 Agent 仍创建模型总预算的截止计时器。
+模型调用预算不覆盖整个测试、数据库初始化或全部工具执行。
+`tests/helpers/timeouts.ts` 的测试超时继续约束完整用例。
 
 PRAGMA 分层：`lib/db/database.ts:12` 每次 `connect()` 只设 `foreign_keys`/`journal_mode=WAL`；`synchronous=NORMAL` 与 `busy_timeout=10000` 是**连接级**且**只**由 `tests/helpers/db.ts:65-78#ensureTestPragmas()` 经 `truncateAll()`（`:98`）施加，即每个进程的第一次 `resetDatabase()` 才生效。因此任何不调 `truncateAll` 而同用 `prisma/test.db` 的执行者（`tests/helpers/restart-process.ts`、`tests/helpers/standalone-restart-process.ts` 的 fork 子进程，`tests/deploy-db-push.test.ts` 的自建文件）跑在默认 `synchronous=FULL`、无 `busy_timeout` 上；`journal_mode=WAL` 写在文件里会被继承，`synchronous`/`busy_timeout` 不会。
 
 `tests/setup.ts:123` 在**每个测试文件进程**执行 `ensurePrismaClientGenerated`（`tests/helpers/prisma-cli.ts:233-239`），其 `prismaClientUsable`（`:215-224`）会 `spawnSync(process.execPath, ['--import','tsx','-e', …])`——一次约 1-2 s 的阻塞子进程，位于 `setupFiles`，不计入 `testTimeout`。`tests/deploy-db-push.test.ts:59-75` 另有两个 `spawnSync`（`db-push.ts`、`seed.ts`）。
 
-子进程清单（排除 `tests/e2e/**`）只有四处 `node:child_process`：`tests/integration/process-restart.test.ts:24-28`（`fork` `restart-process.ts`）、`tests/integration/standalone-workflow-restart.test.ts:22-26`（`fork` `standalone-restart-process.ts`）、`tests/deploy-db-push.test.ts:59-75`（`spawnSync`）、`tests/helpers/prisma-cli.ts:112-120,218-222,409-414`（`spawnSync`）。两个 `fork` 消费者都 `await` 子进程 `exit` 并在 `afterEach` 对其 `SIGKILL`（`process-restart.test.ts:64-70,82-94`、`standalone-workflow-restart.test.ts:60-65`），等待上限各 15 000 ms；`tests/helpers/restart-process.ts` 自身不 spawn，只用 `setInterval`（`:26`）+ `new Promise(() => undefined)`（`:29`）把自己的 `start` 场景永久停住。没有任何子进程能越过其所在文件的最后一个测试继续写 `prisma/test.db`。
+进程恢复探针位于 `integration/process-restart.test.ts` 与 `integration/standalone-workflow-restart.test.ts`。
+`integration/sdk-multiprocess-transaction.test.ts` 另用 `helpers/sdk-race-worker.ts` 驱动独立连接竞争。
+Prisma 准备与部署用例还会运行 CLI 子进程。
+每个调用方负责等待和清理自己创建的子进程；不得把进程数量固化为测试契约。
 
 ## wedge 故障注入的接缝
 
-「副作用已提交、结果+状态落定事务回滚」的 wedge 只能注入生产确认路径实际调用的符号。
+“副作用已提交、结果+状态落定事务回滚”的 wedge 只能注入生产确认路径实际调用的符号。
 生产落定走 `agent/confirmation-recovery.ts#settlePendingAction`（由 `agent/confirmation/authorized-execution.ts:62-73` 调用），事务内顺序为 `claimPendingAction` 的 CAS → `tx.pendingAction.update({ resultJson })`（无 repository 包装，不可 spy）→ strict 执行审计（`audit/audit-logger.ts:102` 的 `auditStore.insertAuditLog`）。
 `claimPendingAction` 是多点调用（授权 CAS、`locked`、`cancelled`、`recordActionResult` 都走它）：注入必须按 `actionId` + `from` 含 `'confirmed'` + `to` 非 `confirmed` + 一次性 flag 过滤，否则打偏到授权阶段，wedge 变假。
 `lib/db/repositories/pendingAction.ts:181-194` 仍导出 `updatePendingActionStatus` 与其别名 `setPendingActionStatus`，但没有任何生产模块调用它们：`vi.spyOn` 到这两个符号永不命中，期望的 `500` 与 `confirmed` + `resultJson:null` 都不会出现。
@@ -301,9 +315,14 @@ PRAGMA 分层：`lib/db/database.ts:12` 每次 `connect()` 只设 `foreign_keys`
 `security/security-gateway.ts:1268` 的 `recordActionResult` 在落定之后调用，只用于观察时序窗口，不能制造 wedge。
 逐文件注入点与 `fired()` 自检见 [integration/CONTEXT.md](integration/CONTEXT.md)。
 
-## 与当前生产契约不一致的既有断言（已知缺口）
+## 已提交结果的恢复约束
 
-- `app/actions-recovery-http.test.ts:301-302` 断言 wedge 恢复后 `plan.status`/`node.status` 为 `success`，实测当前为 `failed`（同用例 `:292` 的 `ok:true` 通过）。期望值权威：`recoverAction`（`agent/index.ts:209-227`）先把计划关联行结清为 `executed`，再 `resumeTask`；`resumeTask`（`agent/workflows/controls.ts:82-89`）经 `sealedParkedNodes` + `sealSettledNodes` 把已结清动作的停靠节点写为 `failed`（`agent/workflows/parked-actions.ts:80-94`、`planner/failure.ts:111-116` 的 `action_not_open`、`planner/executor.ts:481`/`:665`），计划随之为 `failed`；`agent/index.ts:234-235` 仍把「计划 failed + 动作 executed」判为成功。不得把断言改成 `failed`，也不得把「计划 failed」固化成生产契约。
+`app/actions-recovery-http.test.ts` 检查提交后状态落定失败的恢复。
+原回执证明操作已提交时，恢复保留计划与节点的 `success`、动作的 `executed`。
+重复恢复不得再次执行业务或创建新授权。
+`agent/workflows/parked-actions.ts#sealProjection` 区分已执行事实与锁定拒绝。
+不能仅因动作已关闭就把成功节点改成失败。
+
 
 ## 组件渲染测试（React SSR，无 DOM 环境）
 
@@ -362,15 +381,16 @@ i18n 不需要 Provider：`lib/i18n/LocaleProvider.tsx:15` 的默认上下文是
 `pnpm typecheck` 检查类型。
 它**必须**在 `pnpm db:generate` 之后运行：陈旧 Prisma Client 会让 `tests/` 报出伪造的 TS2305（`has no exported member 'PendingAction'` / `'Prisma'`），并非真实类型错误。
 
-合并后回归集（不含 live e2e、不含全量）：
+常用专项回归集：
 `pnpm exec vitest run tests/unit/security tests/unit/agent tests/unit/planner tests/unit/lib tests/unit/weixin-lock-presentation.test.ts tests/integration tests/app/mfa-lock-http-contract.test.ts tests/app/mfa-lock-refresh-unlock-http.test.ts tests/app/mfa-terminal-lock-http.test.ts tests/app/security-workflow-http.test.ts tests/app/actions-http.test.ts`
-该集合耗时约 16 分钟，需单独占用测试库。
+该命令只运行所列离线文件，执行时独占测试库。
+耗时以当前环境的命令输出为准。
 合并后分两批串行的完整回归入口（覆盖 `tests/**` 全目录，且不碰 `tests/e2e`）：
 批 A `pnpm exec vitest run tests/app tests/unit`；批 B `pnpm exec vitest run tests/integration tests/scenarios`。
-两批各自独占测试库，批间不重叠；`vitest` 的 `fileParallelism:false` 不足以免除「不并行起两个 vitest 进程」。
+两批各自独占测试库，批间不重叠；`vitest` 的 `fileParallelism:false` 不足以免除“不并行起两个 vitest 进程”。
 节点本地三文件：`pnpm exec vitest run security/mfa-lock-reason-authority.test.ts planner/plan-failure-contract.test.ts planner/plan-drive-guard.test.ts`（根 `vitest.config.ts` 已收集 `security/**`、`planner/**`）。
-当前预期失败只有上文「已知缺口」一条：`app/actions-recovery-http.test.ts:301-302`，其余全绿。
-失败项归因写在「已知缺口」各条内；注入接缝与再驱动入口规则见上文 wedge 小节与 [integration/CONTEXT.md](integration/CONTEXT.md)。
+当前预期失败只有上文“已知缺口”一条：`app/actions-recovery-http.test.ts:301-302`，其余全绿。
+失败项归因写在“已知缺口”各条内；注入接缝与再驱动入口规则见上文 wedge 小节与 [integration/CONTEXT.md](integration/CONTEXT.md)。
 `pnpm exec tsx tests/e2e/acceptance.e2e.ts` 运行浏览器验收。
 
 ## 证据范围

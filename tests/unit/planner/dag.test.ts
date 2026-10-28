@@ -37,6 +37,9 @@ function expectValidationError(res: Result<unknown>): void {
 }
 
 describe('planner/dag · validatePlan', () => {
+  it.each([' a', 'a ', 'a.b', 'a[b]', 'a\u0000b'])('rejects node ID %j whose path identity is ambiguous', id => {
+    expectValidationError(validatePlan([toolNode(id)], new Set(['get_balance'])));
+  });
   it('valid acyclic plan referencing known tools → ok(undefined)', () => {
     const nodes = [toolNode('a'), toolNode('b', { dependencies: ['a'] })];
     const res = validatePlan(nodes, new Set(['get_balance']));

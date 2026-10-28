@@ -12,11 +12,12 @@
 | `scripted-provider.ts` | 注入生产运行入口的模型响应 |
 | `prisma-cli.ts` | 客户端准备、隔离库清理与命令诊断（`cliCommand`/`prismaCliEnv`/`resolvePrismaBin`/`resolveRepoRoot`/`resolveTsxBin`/`SCHEMA_ENGINE_RUST_LOG`/`CliInvocation` 由 `lib/prisma-cli-env` 再导出，`prisma-cli.ts:21`–`:29`） |
 | `restart-process.ts`、`standalone-restart-process.ts` | 独立进程恢复探针 |
+| `sdk-race-worker.ts` | 使用调用方指定的隔离库，执行跨进程转账与消费竞争 |
 | `write-failure.ts` | 保留真实事务的写入失败注入 |
 | `locked-action.ts` | 终止锁定用例的 RED/YELLOW 计划动作播种、网关验证码阶梯与只读探针 |
 | `timeouts.ts` | 显式 `it(...)` 超时预算的唯一来源：`CHAT_DRIVEN_TEST_TIMEOUT_MS`（真实 `POST /api/chat` turn）与 `COLD_DB_PROVISION_TEST_TIMEOUT_MS`（体内 spawn 冷库自建 CLI） |
 
-`timeouts.ts` 只有常量与文档注释，不含业务逻辑；取值依据、实测与「新用例必须套用」规则写在模块注释与 [../CONTEXT.md](../CONTEXT.md) 的「时间预算与环境放大」。
+`timeouts.ts` 只有常量与文档注释，不含业务逻辑；取值依据、实测与“新用例必须套用”规则写在模块注释与 [../CONTEXT.md](../CONTEXT.md) 的“时间预算与环境放大”。
 ### fixtures.ts 的账户与卡片标识
 标识全是固定字符串常量（无工厂、无随机后缀），可直接在断言中写死：
 `ACCOUNTS`（`fixtures.ts:82-85`）只有 `acct_checking`（活期账户、`number: '****8821'`、`balance: '23580.00'`）与 `acct_savings`（储蓄账户、`****3309`、`50000.00`）；
@@ -27,13 +28,13 @@
 
 ### locked-action.ts
 
-`locked-action.ts` 为「MFA 三码锁定」的终止锁定用例提供共享基础设施：经生产 `submit_plan` 播种到计划节点的 RED（¥5000，`awaiting_mfa`）与 YELLOW（¥500 及以下，`pending`、`requiresMfa:false`）待处理动作，
+`locked-action.ts` 为“MFA 三码锁定”的终止锁定用例提供共享基础设施：经生产 `submit_plan` 播种到计划节点的 RED（¥5000，`awaiting_mfa`）与 YELLOW（¥500 及以下，`pending`、`requiresMfa:false`）待处理动作，
 经网关 `authorizeAction` 驱动的错误验证码阶梯（第 1/2 次非终止、第 3 次 `status:'locked'` 并落库），
 以及 `pendingActionRow`/`mfaChallengesFor`/`checkingBalance`/`zhangweiTransfers`/`auditLogCount`/`securityEventsOfKind`/`transactionsCount` 等只读探针。
 它不含 `describe`/`it`，也只用于播种失败时给出诊断，不清库也不播种：每个用例仍须在 `beforeEach` 自行 `resetDatabase()`（熔断按 owner 持久化，残留锁定会串场）。
 错误验证码一律经 `securityGateway.authorizeAction` 提交，不得改用 `security/mfa.ts#verify`（只锁挑战、不落终端状态）。
 
-参数面是封闭的，没有「任选 status / attempts / expiresAt / userId / sessionId」的入口：
+参数面是封闭的，没有“任选 status / attempts / expiresAt / userId / sessionId”的入口：
 `parkRedTransferPlan(goal?)`（`locked-action.ts:110`）金额固定 ¥5000（`:45`）→ `awaiting_mfa` + `RED` + `requiresMfa:true`（`:113-118`）；
 `parkConfirmOnlyTransfer(amount = '500'?)`（`:126`）→ `pending` + `requiresMfa:false`（`:129-133`）；
 两者都硬编码 `userId: DEMO_USER_ID`、接收人张伟、节点 id `n1`，`sessionId` 恒取 `demoSessionId()`（`:64-66`，即 `demo:user_liming`，同时是熔断 owner）。
@@ -76,11 +77,20 @@
 
 ### 脚本化模型驱动生产 `runTurn`
 
+原始 `faux-agent.ts` 与 `scenario.ts` 不覆盖生产轮次的全部检查。
+信息完整性、模型总预算和回复事实必须通过生产 `runTurn` 验证。
+
 `scriptedProvider(declaration, steps)` 返回 `{ provider, calls() }`；`provider` 即 `RunTurnDeps.provider`
 （`{ model, streamFn }`，类型见 `agent/providers/types.ts`），与网关、SQLite、执行器全部保持真实。
 首条响应固定是 `turnDeclaration(declaration)` 的 `describe_turn` 工具调用，`steps` 是**其后**的响应序列。
+脚本辅助默认显式提供 `needsInput:false`，表示测试脚本认为信息完整。
+生产工具对遗漏该字段的办理声明默认按 `true` 处理，两者不能混同。
+测试缺省拒绝时，必须直接构造遗漏字段的原始调用。
+测试缺少用户选择时，必须明确声明 `needsInput:true`。
 一次模型调用消费一条响应，脚本全部消费时 `calls() === 1 + steps.length`。
-调用形如 `runTurn({ sessionId?, message }, { config, provider })`：首轮省略 `sessionId` 由 `getOrCreateSession` 建行，不要传 `requestId`。
+调用形如 `runTurn({ sessionId?, message, requestId? }, { config, provider })`。
+首轮可省略 `sessionId`，由 `getOrCreateSession` 创建会话。
+`requestId` 用于需要检查入场去重的用例，普通轮次可省略。
 返回值只有 `{ sessionId, events }`：助手文本取 `events` 中最后一条 `message_end` 的 `message.content`，
 工具与闸门信号取 `tool_end`、`confirmation_required`、`mfa_required` 事件。
 `config.llmMode` 决定生产分支：声明写操作却未发出受控工具调用时的一次有界续接
@@ -136,7 +146,7 @@ HTTP 路由层不在本目录：进程内真实路由客户端是 `tests/app/har
 `runTurn` 会把 `sessionId` upsert 成 `DEMO_USER_ID` 的 `AgentSession` 行（`scenario.ts:429`），
 因此 `security/circuit-breaker.ts#resolveBreakerOwner` 解析出的是 `user:user_liming`——
 所有 scenario 测试**共享同一个熔断 owner**。
-`newSessionId()` 不隔离熔断，`scenario.ts:615` 关于「in-process keyed by sessionId」的注释是过时说法。
+`newSessionId()` 不隔离熔断，`scenario.ts:615` 关于“in-process keyed by sessionId”的注释是过时说法。
 隔离只靠 `useFreshDatabase()` 清 `CircuitBreakerState`；同理，`getState(sessionId)`/`isLocked(sessionId)` 读的是那个 owner 的行，
 不是 `session:<id>`。真正按 `session:<actor>` 计键的只有既无 `AgentSession` 又无 `User` 行的裸 actor。
 
@@ -154,7 +164,7 @@ HTTP 路由层不在本目录：进程内真实路由客户端是 `tests/app/har
 `localizeChatError`（`lib/i18n/display.ts:7`）对未知字符串原样透传——渲染它就会泄漏原始载荷。
 
 三码锁定有两条可参照的既有路径：
-`tests/scenarios/test-10-circuit-breaker.test.ts:44`+`:61`（`buildFauxAgent` + `runTurn` + 三次 `verifyAction`，断 `attempts`/`securityEvent`/`text` 含「锁定」），
+`tests/scenarios/test-10-circuit-breaker.test.ts:44`+`:61`（`buildFauxAgent` + `runTurn` + 三次 `verifyAction`，断 `attempts`/`securityEvent`/`text` 含“锁定”），
 `tests/app/mfa-terminal-lock-http.test.ts:273`（真实 verify 路由：`status:'locked'`、`mfaResult:'failed'`、行持久化、`GET /api/actions` 不再 surface）。
 
 ## 数据库与事务

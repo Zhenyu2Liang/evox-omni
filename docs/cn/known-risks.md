@@ -12,6 +12,7 @@
 | 认证 | 原操作绑定、有效期、失败次数和消费状态 | 短信、人脸或生产认证服务 |
 | 银行写入 | 本地事务原子提交变更、审计和执行回执 | 真实银行、支付和商户接口 |
 | 模型恢复 | 保存请求与结果，按次数上限重新生成 | 从半截输出的精确令牌位置继续生成 |
+| 模型调用限制 | 单轮共享次数、预留 token 与总时长上限 | 供应商计费金额的精确预算 |
 | 结果恢复 | 核验执行回执后恢复原结果 | 自动判定外部未知效果 |
 | 工作流 | 保存原图、节点调用和提交校验 | 自动解除人工暂停或代替用户授权 |
 | 定时任务 | 保存分发状态、提醒和到期付款工作流 | Web 服务内置常驻调度 |
@@ -43,13 +44,16 @@ Decimal 最多支持 40 位整数和 18 位小数。
 演示种子与接口、页面流程都不产生这两个分支，因此没有可复现的用户流程证据。
 口径见 [卡片管理](card-management.md)。
 
-live 验收的结论只对已运行场景成立。
-证据表与每轮认证范围见 [LIVE-ACCEPTANCE-REPORT.md](../../tests/e2e/LIVE-ACCEPTANCE-REPORT.md)。
-每行证据只认证报告标注的产品树。
-产品代码改动后，需要在该产品树上重跑。
-报告列出的未验证内容见 [NOT verified by these runs](../../tests/e2e/LIVE-ACCEPTANCE-REPORT.md#not-verified-by-these-runs)。
-这批内容包括生产构建、集群并发、真实银行接口与其他节点的 Vitest。
-模型稳定性、`DEBIT` 卡补办的 live 路径与 `MISSING`、`UNTRUSTED` 绑定的页面渲染也属于这批内容。
+live 验收的结论只对已运行场景和对应产品树成立。
+最近安全修复的范围见[安全修复验证](../../tests/e2e/LIVE-ACCEPTANCE-REPORT.md#安全修复验证)。
+各场景的最新通过记录由逐项修复复测汇总，不是最终构建的一次全套验收。
+完整回归后还有产品修改，末尾修改另跑专项回归和指定 live 场景。
+产品代码再次变化后，需要重跑受影响的用例。
+
+已验证同机双服务器消费竞争、重复请求和提交后重启恢复。
+这些结果不覆盖多主机部署、持续负载或全部金融工具的跨进程竞争。
+自然语言表达不能穷举，真实银行与真实微信投递仍未验证。
+较早的分组证据仅适用于报告标注的原产品树。
 
 ## 业务结果的含义
 
@@ -75,11 +79,12 @@ live 验收的结论只对已运行场景成立。
 - 赎回结果保留 `feeAmount`（恒 `0.00`）与 `feeRule`（恒 `SIMULATED_NONE`）两个展示字段，金额不是计算出来的。
 - 到账金额是 `HALF_UP(赎回份额 × 成交净值)`，不扣减费用。申购与虚拟卡消费只按请求金额记账。
 - 费用字段不在赎回的确认快照里，费率口径变化不会让挂起动作失效。真实费率、最低收费与费用归还规则未验证。
-- 并发赎回在 SQLite 下只有进程内串行保证。同一进程只有一个数据库连接，`lib/db/serialized-connection.ts` 的 FIFO 互斥量覆盖普通语句与整段交互式事务。
+- 同一进程的 SQLite 语句和事务通过 FIFO 互斥量串行执行，入口是 `lib/db/serialized-connection.ts`。
 - 第二笔赎回在第一笔提交后才开始，被带旧 `shares` 与 `status: 'HOLDING'` 的条件写拒绝，整笔回滚并抛 `CONFLICT`（`该持仓已发生变化，请重新确认。`）。
-- 该串行保证不跨进程：`pnpm agent:worker`、`pnpm scheduler:tick` 与微信通道各持独立连接。
-- 第二个写进程在原生锁上等待 10 秒后以 `SQLITE_BUSY` 失败，应用层没有映射成类型化冲突。换成支持并发的后端前，不能假设高并发安全。
-- 用例见 `tests/unit/banking-sdk/atomicity.test.ts`，覆盖一次成功、一次 `CONFLICT` 与账户只入账一次。该用例不含跨进程与 HTTP 层竞态。
+- 不同进程持有独立连接。SDK 写入在读取业务快照前先取得 SQLite 写入权，嵌套调用共用外层事务。
+- 跨进程消费已覆盖原回执重放、透支竞争和分类限额竞争，见 `tests/integration/sdk-multiprocess-transaction.test.ts`。
+- SQLite 仍只有单个写入者。持续竞争可能达到锁等待或事务超时，消费用例通过不能证明任意负载可用。
+- 赎回用例 `tests/unit/banking-sdk/atomicity.test.ts` 检查一次成功、一次 `CONFLICT` 与账户只入账一次，未覆盖跨进程赎回。
 
 代码入口见 [理财](../../banking-sdk/investment.ts)、[卡片](../../banking-sdk/card.ts) 和 [资产汇总](../../banking-sdk/dashboard.ts)。
 异常处理见 [本人交易确认](../../app/api/transactions/[id]/acknowledge/route.ts) 和 [异常交易卡片](../../components/chat/cards/AnomalyCard.tsx)。

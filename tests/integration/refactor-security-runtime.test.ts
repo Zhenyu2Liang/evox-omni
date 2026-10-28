@@ -90,7 +90,7 @@ it('replays a transport request from its run journal and preserves separate pros
   expect(page.events.every(event => event.channel === 'ui')).toBe(true);
 });
 
-it('publishes an authoritative balance tool entry before the complete unmodified provider prose', async () => {
+it('publishes the authoritative balance and never streams the provider fabricated balance', async () => {
   const session = await getOrCreateSession(userId);
   const delivered: AgentStreamEvent[] = [];
   const turn = await runTurn({ sessionId: session.sessionId, requestId: 'live-presentation', message: 'Read my balance.' }, {
@@ -99,13 +99,13 @@ it('publishes an authoritative balance tool entry before the complete unmodified
     onEvent(event) { delivered.push(event); },
   });
   expect(delivered).toEqual(turn.events);
-  expect(JSON.stringify(delivered)).toContain('999999.99');
+  expect(JSON.stringify(delivered)).not.toContain('999999.99');
   const state = reduceAgentEvents(initialChatUIState(), delivered);
   expect(state.messages.flatMap(message => message.cards ?? []).filter(card => card.type === 'balance')).toHaveLength(1);
   expect(delivered.findIndex(event => event.type === 'tool_start')).toBeLessThan(delivered.findIndex(event => event.type === 'card'));
   const balance = state.messages.find(message => message.role === 'tool' && message.cards?.some(card => card.type === 'balance'));
   expect(balance?.cards).toContainEqual({ type: 'balance', data: expect.objectContaining({ totalAvailable: '73580.00' }) });
-  const prose = state.messages.find(message => message.role === 'assistant' && message.content === 'The balance is 999999.99.');
+  const prose = state.messages.find(message => message.role === 'assistant' && message.content.includes('73,580.00'));
   expect(prose).toBeDefined();
   expect(state.messages.indexOf(balance!)).toBeLessThan(state.messages.indexOf(prose!));
   expect(await getTestPrisma().executionReceipt.count()).toBe(0);

@@ -31,7 +31,8 @@
  * A filename ending in `.e2e.ts` does NOT match vitest's `tests/**\/*.{test,spec}.ts` glob, so this
  * harness never runs under `npm run test`.
  */
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync } from 'node:fs';
 import nextEnv from '@next/env';
 
@@ -1284,7 +1285,7 @@ async function scenarioCreditReplace(ctx: Ctx): Promise<string> {
       await waitForElementHydration(page, '[data-card-add] button');
       const newRows = await readCardTileRows(page, newId);
       const newTileText = (await page.locator(`[data-card-id="${newId}"]`).first().innerText()).replace(/\s+/g, ' ');
-      const sourceTileText = (await page.locator(`[data-card-id="${CREDIT_CARD_ID}"]`).first().innerText()).replace(/\s+/g, ' ');
+      const sourceTileText = await readCardTileText(page, CREDIT_CARD_ID);
       const cardsShot = await captureLive(page, 'lA-cards');
       if (newRows[CARD_LABEL.creditLimit] !== '¥18,000.00' || newRows[CARD_LABEL.availableLimit] !== '¥18,000.00') {
         throw new Error(`补办信用卡 ${newId} 应显示 信用额度=可用额度=¥18,000.00，实际 ${JSON.stringify(newRows)}`);
@@ -1505,7 +1506,7 @@ async function scenarioVirtualCardConsume(ctx: Ctx): Promise<string> {
       if (summary[CARD_LABEL.monthlyLimit] !== formatCNY(monthlyLimit)) {
         throw new Error(`消费弹窗「${CARD_LABEL.monthlyLimit}」应为 ${formatCNY(monthlyLimit)}，实际 ${summary[CARD_LABEL.monthlyLimit]}（${JSON.stringify(summary)}）`);
       }
-      if (summary[CARD_LABEL.linkedAccount] !== '****8821') {
+      if (!summary[CARD_LABEL.linkedAccount]?.endsWith('****8821')) {
         throw new Error(`消费弹窗「${CARD_LABEL.linkedAccount}」应为 ****8821，实际 ${summary[CARD_LABEL.linkedAccount]}（${JSON.stringify(summary)}）`);
       }
       if (summary[CARD_LABEL.usableBalance] !== formatCNY(payableBefore)) {
@@ -1527,12 +1528,11 @@ async function scenarioVirtualCardConsume(ctx: Ctx): Promise<string> {
       await form.locator('input[name="merchant"]').fill(VIRTUAL_CONSUME_MERCHANT);
       const formShot = await captureLive(page, 'lC-consume-form');
       // Capture the EXACT body the dialog sends: it must carry no booking time.
-      const consumeRequest = page.waitForRequest(
+      const [consumeRequest] = await Promise.all([page.waitForRequest(
         (req) => req.method() === 'POST' && req.url().includes(`/api/cards/${VIRTUAL_CARD_ID}/consume`),
         { timeout: 60_000 },
-      );
-      await form.getByRole('button', { name: '提交消费', exact: true }).click();
-      const sentBodyText = (await consumeRequest).postData() ?? '';
+      ), form.getByRole('button', { name: '核对消费', exact: true }).click()]);
+      const sentBodyText = consumeRequest.postData() ?? '';
       if (sentBodyText === '') throw new Error('消费请求没有请求体，无法核对是否提交了记账时间');
       const sentBody = JSON.parse(sentBodyText) as Record<string, unknown>;
       if ('occurredAt' in sentBody) {
@@ -1559,6 +1559,14 @@ async function scenarioVirtualCardConsume(ctx: Ctx): Promise<string> {
       if (sentBody['amount'] !== VIRTUAL_CONSUME_AMOUNT) {
         throw new Error(`消费请求体 amount 应为 ${VIRTUAL_CONSUME_AMOUNT}，实际 ${String(sentBody['amount'])}`);
       }
+      const proposed = await readVirtualConsumeSnapshot();
+      if (proposed.balanceMinor !== before.balanceMinor || proposed.cardDebits.length !== before.cardDebits.length ||
+          proposed.consumptions.length !== before.consumptions.length) throw new Error('消费提案在验证前改变了余额或账本');
+      const verification = page.locator('[data-card-consume-verification]').first();
+      await verification.waitFor();
+      await verification.locator('input[type="checkbox"]').check();
+      await verification.locator('input[name="code"]').fill('123456');
+      await verification.getByRole('button', { name: '验证并确认', exact: true }).click();
       await waitForStatusText(page, '消费成功', 60_000);
       // The dialog reloads this card's consumptions after a successful spend → exactly ONE new record.
       await waitFor(
@@ -2143,6 +2151,42 @@ async function main(): Promise<void> {
     ? SCENARIOS.filter((s) => only.includes(s.id) || (s.id === '2p' && only.includes('2')))
     : SCENARIOS;
   const runSeven = !only || only.includes('7');
+  if (only?.some(id => id !== '7' && !SCENARIOS.some(scenario => scenario.id === id))) {
+    throw new Error('Unknown live scenario selection.');
+  }
+  const isolatedJobs = chosen.filter(scenario => scenario.id !== '2p' || !chosen.some(item => item.id === '2'))
+    .map(scenario => scenario.id);
+  if (runSeven) isolatedJobs.push('7');
+  // Each journey assumes seeded balances/cards and some deliberately lock the account. A new
+  // process per journey provisions the dedicated DB after the previous server/browser is closed.
+  // Keep 2 + 2p together: cancellation followed by a new phone transfer is one intentional journey.
+  if (isolatedJobs.length > 1) {
+    const failed: string[] = [];
+    let child: ChildProcess | undefined;
+    const stopChild = () => {
+      if (!child?.pid) return;
+      if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+      else child.kill('SIGTERM');
+    };
+    process.once('exit', stopChild);
+    try {
+      for (const id of isolatedJobs) {
+        console.log(`== Isolated live journey ${id} ==`);
+        child = spawn(process.execPath, ['--import', 'tsx', fileURLToPath(import.meta.url)], {
+          windowsHide: true, stdio: 'inherit', env: { ...process.env, LIVE_SCENARIOS: id },
+        });
+        const code = await new Promise<number | null>((resolve, reject) => {
+          child!.once('exit', resolve);
+          child!.once('error', reject);
+        });
+        child = undefined;
+        if (code !== 0) failed.push(id);
+      }
+    } finally { stopChild(); process.off('exit', stopChild); }
+    console.log(`== Isolated journeys: ${isolatedJobs.length - failed.length} completed without errors, ${failed.length} failed ==`);
+    process.exitCode = failed.length ? 1 : 0;
+    return;
+  }
   const originalKey = process.env['DEEPSEEK_API_KEY'];
 
   let browser: Browser | undefined;

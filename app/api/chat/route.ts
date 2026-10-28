@@ -41,7 +41,7 @@ import { requireIdentity } from '../_lib/session';
 const chatTurnRequestSchema = z.object({
   sessionId: z.string().min(1).optional(),
   requestId: z.string().min(1).max(128).optional(),
-  message: z.string().min(1),
+  message: z.string().min(1).max(4000),
 });
 export type ChatTurnBody = z.infer<typeof chatTurnRequestSchema>;
 
