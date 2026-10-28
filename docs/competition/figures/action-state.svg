@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1030" viewBox="0 0 1440 1030" role="img" aria-labelledby="title desc">
+<title id="title">原操作授权与执行状态</title>
+<desc id="desc">黄色操作进入待确认，红色操作进入待验证；通过授权后才可执行。执行结果区分成功、确认未提交的失败与待核对。取消和锁定不能恢复原执行权。</desc>
+<defs>
+<style>text{font-family:"Microsoft YaHei","PingFang SC","Noto Sans CJK SC",Arial,sans-serif} .wire{fill:none;stroke-linecap:round;stroke-linejoin:round}</style>
+<marker id="a-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="#25343A" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></marker>
+<marker id="a-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="#65737A" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></marker>
+<marker id="a-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="#BB563F" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></marker>
+<marker id="a-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="#32786E" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></marker>
+<marker id="a-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="#547A96" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></marker>
+<marker id="a-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="#996D2C" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></marker>
+<marker id="a-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="#77858C" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></marker>
+</defs>
+<rect x="0" y="0" width="1440" height="1030" rx="0" fill="#FBFAF7"/>
+<rect x="48" y="39" width="47" height="47" rx="13" fill="#BB563F"/>
+<text x="71.5" y="70" font-size="20" font-weight="700" fill="#FFFFFF" text-anchor="middle">04</text>
+<text x="112" y="75" font-size="34" font-weight="700" fill="#25343A" text-anchor="start">原操作授权与执行状态</text>
+<text x="1368" y="62" font-size="21" font-weight="700" fill="#25343A" text-anchor="end">万象柜坊</text>
+<text x="1368" y="87" font-size="15" font-weight="600" fill="#65737A" text-anchor="end">EvoX Omni</text>
+<text x="112" y="109" font-size="18" font-weight="400" fill="#65737A" text-anchor="start">确认、验证与结果分离，终态由持久化业务事实决定</text>
+<path class="wire" d="M48 135 L1392 135" stroke="#D9DEDC" stroke-width="1"/>
+<path class="wire" d="M48 135 L140 135" stroke="#BB563F" stroke-width="3"/>
+<rect x="100" y="166" width="90" height="30" rx="8" fill="#FAEDE7"/>
+<text x="145.0" y="187" font-size="16" font-weight="600" fill="#BB563F" text-anchor="middle">授权阶段</text>
+<rect x="660" y="166" width="90" height="30" rx="8" fill="#EDF3F7"/>
+<text x="705.0" y="187" font-size="16" font-weight="600" fill="#547A96" text-anchor="middle">执行阶段</text>
+<rect x="1070" y="166" width="106" height="30" rx="8" fill="#EAF4F0"/>
+<text x="1123.0" y="187" font-size="16" font-weight="600" fill="#32786E" text-anchor="middle">结果与证据</text>
+<path class="wire" d="M400 275 L660 275" stroke="#547A96" stroke-width="2" marker-end="url(#a-blue)"/>
+<text x="530" y="254" font-size="18" font-weight="600" fill="#547A96" text-anchor="middle">明确确认 · 风险满足</text>
+<path class="wire" d="M100 275 L51 275 L51 575 L100 575" stroke="#BB563F" stroke-width="2" marker-end="url(#a-red)"/>
+<text x="64" y="377" font-size="16" font-weight="400" fill="#BB563F" text-anchor="start">风险</text>
+<text x="64" y="401" font-size="16" font-weight="400" fill="#BB563F" text-anchor="start">升级</text>
+<path class="wire" d="M250 330 L250 398" stroke="#77858C" stroke-width="2" marker-end="url(#a-gray)"/>
+<text x="268" y="374" font-size="17" font-weight="400" fill="#65737A" text-anchor="start">取消</text>
+<path class="wire" d="M250 535 L250 483" stroke="#77858C" stroke-width="2" marker-end="url(#a-gray)"/>
+<text x="268" y="518" font-size="17" font-weight="400" fill="#65737A" text-anchor="start">取消</text>
+<path class="wire" d="M400 590 L562 590 L562 300 L660 300" stroke="#BB563F" stroke-width="2" marker-end="url(#a-red)"/>
+<text x="477" y="620" font-size="18" font-weight="600" fill="#BB563F" text-anchor="middle">授权与验证通过</text>
+<path class="wire" d="M100 610 L72 610 L72 707 L150 707 L150 645" stroke="#996D2C" stroke-width="2" marker-end="url(#a-amber)"/>
+<text x="168" y="732" font-size="17" font-weight="400" fill="#996D2C" text-anchor="middle">第 1、2 次错误</text>
+<text x="168" y="756" font-size="17" font-weight="400" fill="#996D2C" text-anchor="middle">继续待验证</text>
+<path class="wire" d="M300 645 L300 795" stroke="#BB563F" stroke-width="2" marker-end="url(#a-red)"/>
+<text x="320" y="710" font-size="18" font-weight="600" fill="#BB563F" text-anchor="start">第 3 次错误</text>
+<path class="wire" d="M960 275 L1010 275" stroke="#547A96" stroke-width="2"/>
+<path class="wire" d="M1010 275 L1070 275" stroke="#32786E" stroke-width="2" marker-end="url(#a-teal)"/>
+<path class="wire" d="M1010 275 L1010 490 L1070 490" stroke="#77858C" stroke-width="2" marker-end="url(#a-gray)"/>
+<path class="wire" d="M1010 490 L1010 705 L1070 705" stroke="#996D2C" stroke-width="2" marker-end="url(#a-amber)"/>
+<rect x="100" y="220" width="300" height="110" rx="16" fill="#FBF3E3" stroke="#D9DEDC" stroke-width="1"/>
+<text x="250.0" y="262" font-size="24" font-weight="600" fill="#996D2C" text-anchor="middle">待确认</text>
+<text x="250.0" y="295" font-size="18" font-weight="400" fill="#65737A" text-anchor="middle">黄色操作 · 核对原详情</text>
+<rect x="100" y="398" width="300" height="85" rx="16" fill="#F0F3F3" stroke="#D9DEDC" stroke-width="1"/>
+<text x="250.0" y="440" font-size="24" font-weight="600" fill="#77858C" text-anchor="middle">已取消</text>
+<text x="250.0" y="473" font-size="18" font-weight="400" fill="#65737A" text-anchor="middle">撤销尚未执行的授权</text>
+<rect x="100" y="535" width="300" height="110" rx="16" fill="#FAEDE7" stroke="#D9DEDC" stroke-width="1"/>
+<text x="250.0" y="577" font-size="24" font-weight="600" fill="#BB563F" text-anchor="middle">待验证</text>
+<text x="250.0" y="610" font-size="18" font-weight="400" fill="#65737A" text-anchor="middle">红色操作 · 绑定原挑战</text>
+<rect x="100" y="795" width="300" height="110" rx="16" fill="#FAEDE7" stroke="#D9DEDC" stroke-width="1"/>
+<text x="250.0" y="837" font-size="24" font-weight="600" fill="#BB563F" text-anchor="middle">已锁定</text>
+<text x="250.0" y="870" font-size="18" font-weight="400" fill="#65737A" text-anchor="middle">原操作终态 · 不可复活</text>
+<rect x="660" y="220" width="300" height="110" rx="16" fill="#EDF3F7" stroke="#D9DEDC" stroke-width="1"/>
+<text x="810.0" y="262" font-size="24" font-weight="600" fill="#547A96" text-anchor="middle">已授权 · 待执行</text>
+<text x="810.0" y="295" font-size="18" font-weight="400" fill="#65737A" text-anchor="middle">认领执行权并复核业务</text>
+<rect x="1070" y="220" width="300" height="110" rx="16" fill="#EAF4F0" stroke="#D9DEDC" stroke-width="1"/>
+<text x="1220.0" y="262" font-size="24" font-weight="600" fill="#32786E" text-anchor="middle">已执行</text>
+<text x="1220.0" y="295" font-size="18" font-weight="400" fill="#65737A" text-anchor="middle">事务已提交，回执已保存</text>
+<rect x="1070" y="435" width="300" height="110" rx="16" fill="#F0F3F3" stroke="#D9DEDC" stroke-width="1"/>
+<text x="1220.0" y="477" font-size="24" font-weight="600" fill="#77858C" text-anchor="middle">已失败</text>
+<text x="1220.0" y="510" font-size="18" font-weight="400" fill="#65737A" text-anchor="middle">可证明业务未提交</text>
+<rect x="1070" y="650" width="300" height="110" rx="16" fill="#FBF3E3" stroke="#D9DEDC" stroke-width="1"/>
+<text x="1220.0" y="692" font-size="24" font-weight="600" fill="#996D2C" text-anchor="middle">待核对</text>
+<text x="1220.0" y="725" font-size="18" font-weight="400" fill="#65737A" text-anchor="middle">无法证明是否已提交</text>
+<rect x="660" y="795" width="710" height="69" rx="12" fill="#EAF4F0"/>
+<text x="680" y="823" font-size="18" font-weight="600" fill="#32786E" text-anchor="start">终态与未知结果</text>
+<text x="680" y="847" font-size="17" font-weight="400" fill="#65737A" text-anchor="start">取消计划不改写已入账事实；待核对不能视为失败或资金未变化。</text>
+<path class="wire" d="M48 956 L1392 956" stroke="#D9DEDC" stroke-width="1"/>
+<text x="48" y="984" font-size="16" font-weight="400" fill="#65737A" text-anchor="start">主要状态路径：界面刷新不重置操作；解除账户熔断也不会重新开启已锁定的原操作。</text>
+<text x="1392" y="984" font-size="15" font-weight="400" fill="#65737A" text-anchor="end">EvoX Omni  /  技术与安全</text>
+</svg>
