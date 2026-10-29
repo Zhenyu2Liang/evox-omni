@@ -1,16 +1,38 @@
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="public/brand/omni-x-dark.svg">
-  <img src="public/brand/omni-x.svg" alt="万象柜坊标识" width="72">
-</picture>
+<h1 align="center">
+  <a href="https://github.com/Zhenyu2Liang/banking-agent">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/images/evox_brand_light.svg">
+      <source media="(prefers-color-scheme: light)" srcset="docs/images/evox_brand_dark.svg">
+      <img src="docs/images/evox_brand_dark.svg" alt="EvoX Logo" width="420" height="140">
+    </picture>
+  </a>
+</h1>
 
-# 万象柜坊 · EvoX Omni
+<h2 align="center">万象柜坊 · EvoX Omni</h2>
 
-[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+<p align="center">通过自然语言办理模拟银行业务的 AI 智能体，支持 Web 和微信文字对话。</p>
 
-通过自然语言办理模拟银行业务的 AI 智能体，支持 Web 和微信文字对话。
+<div align="center">
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/License-Apache--2.0-blue?style=for-the-badge" alt="Apache-2.0 License">
+  </a>
+  <a href="docs/cn/README.md">
+    <img src="https://img.shields.io/badge/docs-Documentation-2E8B57?style=for-the-badge&amp;logo=readthedocs" alt="开发文档">
+  </a>
+  <a href="https://github.com/Zhenyu2Liang/banking-agent/issues">
+    <img src="https://img.shields.io/badge/GitHub-Issues-5865F2?style=for-the-badge&amp;logo=github" alt="问题反馈">
+  </a>
+</div>
+
+<p align="center">
+  <a href="#快速开始">快速开始</a> ·
+  <a href="#功能">功能</a> ·
+  <a href="#模型配置">模型配置</a> ·
+  <a href="#微信接入">微信接入</a> ·
+  <a href="docs/cn/README.md">开发文档</a>
+</p>
+
 从余额查询、账单分析到转账和卡片控制，操作经过服务端授权，并保存执行回执。
-
-[快速开始](#快速开始) · [功能](#功能) · [模型配置](#模型配置) · [微信接入](#微信接入) · [开发文档](docs/cn/README.md)
 
 项目用于学习、研究和业务流程演示，未接入真实银行或支付服务。
 账户、交易和验证码均为模拟服务。
