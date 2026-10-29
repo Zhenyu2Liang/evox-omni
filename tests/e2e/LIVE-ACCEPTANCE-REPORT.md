@@ -1,5 +1,16 @@
 # 真实模型验收证据
 
+本文件保留历史验收结论，不代表当前版本已通过验收。
+下文的 `output/playwright/` 路径对应历史产物，已从当前源码树移除。
+历史文件可从清理前的提交读取：
+
+```sh
+git ls-tree -r 0fd9a38f -- output/playwright
+git show 0fd9a38f:output/playwright/REPORT-mock-suite.md
+```
+
+当前验收入口与记录要求见[测试用例](../../docs/cn/test-cases.md)。
+
 ## 安全修复验证
 
 执行日期为 `2026-10-28`，文档核对日期为 `2026-10-29`。

@@ -327,7 +327,7 @@ Prisma 命令在离线环境运行，并设置三个变量。
 pnpm exec vitest run agent/model-budget.test.ts agent/providers/required-declaration.test.ts tests/integration/financial-claim-and-clarification.test.ts
 ```
 
-近期执行结果与各轮证据见[安全修复验证](../../tests/e2e/LIVE-ACCEPTANCE-REPORT.md#安全修复验证)。
+历史执行结果见[安全修复验证](../../tests/e2e/LIVE-ACCEPTANCE-REPORT.md#安全修复验证)。
 测试数量以当次命令输出为准。
 
 ## 持久化与进程恢复回归
@@ -486,9 +486,9 @@ HTTP 503 注入用于检查故障处理。
 7. 记录模型请求数，区分重新规划和原操作继续。
 8. 记录隔离库路径、配置覆盖和故障注入方式。
 
-真实模型验收的结论范围见 [LIVE-ACCEPTANCE-REPORT.md](../../tests/e2e/LIVE-ACCEPTANCE-REPORT.md)。
-该文件只列出当前证据集覆盖的场景、认证提交和判定。
-逐轮记录留在 Git 历史。
+历史真实模型验收的结论范围见 [LIVE-ACCEPTANCE-REPORT.md](../../tests/e2e/LIVE-ACCEPTANCE-REPORT.md)。
+该文件保留历史场景、认证提交、判定与产物恢复命令。
+新的逐轮记录写入忽略目录，随本次验收单独保存。
 账本口径、测试总数和构建结果以重新执行为准。
 被认证的提交与当前 HEAD 的产品树不一致时，该结论不延伸到当前版本。
 

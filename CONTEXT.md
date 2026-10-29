@@ -32,6 +32,10 @@ A competition simulator for natural-language banking with server-controlled perm
 
 ## Routing Table
 
+- `README.md`: public project overview, first-run setup, contribution workflow and license scope. `LICENSE` is the official Apache-2.0 text; `NOTICE` preserves project and third-party attribution. Files with separate license notices retain their own terms.
+
+Generated screenshots, run logs and local exports belong in ignored `output/` or `logs/`; do not force-add them to Git. Historical acceptance artifacts remain available in Git history. Shared library and test helper modules use direct imports rather than unused root barrel files.
+
 - `tests/e2e/`: real-browser acceptance — `acceptance.e2e.ts` (mock model) and `live-acceptance.e2e.ts` (live model), plus `*.e2e-helper.ts` scenario modules.
 - `tests/unit/`, `tests/scenarios/`, `tests/integration/`, `tests/app/`: pure, scenario, SQLite-backed and HTTP coverage.
 - `tests/helpers/`, `tests/fixtures/`: shared scenario harness and seeded-fixture ids.

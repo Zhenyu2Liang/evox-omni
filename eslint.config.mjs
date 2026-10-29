@@ -25,6 +25,6 @@ export default defineConfig([
   globalIgnores([
     '.next*/**', 'next-env.d.ts', 'node_modules/**', 'dist/**', 'coverage/**',
     '.pnpm-store/**', '.npm-cache/**', '.vitest/**', '.agents/**', '.codex/**',
-    'test-results/**', 'logs/**', 'output/**', 'lib/db/generated/**',
+    'test-results/**', 'logs/**', 'output/**', '.local/**', 'lib/db/generated/**',
   ]),
 ]);

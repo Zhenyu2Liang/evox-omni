@@ -416,7 +416,9 @@ harness 的截图文件名固定，下一轮会覆盖，因此每轮截图需复
 目录名带上被认证的产品树提交，不同提交的证据因此不会互相覆盖。
 每轮的结论文本证据写 `output/playwright/live/REPORT-<场景>-head<产品树提交>-round<N>.md`（含命令、退出码、汇总行、逐字提示词、工具调用与参数、`PendingAction`/`MfaChallenge` 行、DB 数字、截图路径）。
 mock 与日期边界报告写 `output/playwright/REPORT-mock-suite.md`、`output/playwright/REPORT-date-tamper-boundary.md`。
-`output/playwright/` 与 `logs/` 都在 `.gitignore` 中：提交证据需 `git add -f` 指定具体文件，惯例只提交上述文本报告与选定的截图。
+`output/`、`logs/` 和本目录的 `screenshots/` 均有忽略规则。
+生成的截图、日志与逐轮报告不得通过 `git add -f` 提交。
+历史产物从 Git 历史读取，不能作为当前构建的验收结论。
 原始 stdout、evidence JSON、DB dump 只放仓库 `logs/`，不提交；不得提交 `.env.local` 或任何 `*.db`。
 
 ## 可复用断言原语（新增场景时先读本节）
@@ -449,7 +451,8 @@ FROZEN/LOST 的 `LINKED` 卡照常渲染真实 `账户余额` + `可用余额`�
 
 ## 结果解释
 
-`LIVE-ACCEPTANCE-REPORT.md` 记录当前工作周期的逐轮结果（每场景每轮的 PASS/FAIL、提示词、DB 数字、截图路径与退出码）；历史结果留在 Git 历史。
+`LIVE-ACCEPTANCE-REPORT.md` 保留历史验收结论与产物恢复命令。
+本次运行的逐轮记录写入忽略目录，不得把历史结论当作当前结果。
 必须记录实际提交、模式、场景与本次运行结果。
 每套证据必须声明它认证的**产品树提交**，因为记录证据本身的提交会让 HEAD 前移。
 等价性一律在仓库根用排除文档的 pathspec 魔法形式测量：`git --no-pager diff --stat <产品树提交> HEAD -- ':(exclude)*.md' banking-sdk agent security planner lib app components prisma scripts` 输出为空，即证明该提交与 HEAD 的产品树相同（例：`88d38550` 对 `cab32956` 为空；单个 `*` 同时覆盖仓库根与任意深度的 `.md`，而 `**/*.md` 只覆盖至少带一层目录的路径、漏掉根级 `CONTEXT.md`——实测漏项在 `88d38550` 对 HEAD 为 24 个文件、本写法为 23 个，`d26b2636` 对 HEAD 由 86 降为 85）。漏项数字取自不带产品路径列表的整树 diff；带上 `banking-sdk … scripts` 后两种写法输出完全相同（根级 `.md` 本就不在这些路径里），因此该写法只收紧排除式的覆盖面，不改变任何已记录的等价性结论。

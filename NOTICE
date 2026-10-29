@@ -1,0 +1,15 @@
+EvoX Omni (万象柜坊)
+Copyright 2026 EvoX Omni contributors
+
+Original project code is licensed under the Apache License, Version 2.0.
+Third-party dependencies and files carrying separate license notices retain
+their respective licenses. Third-party trademarks and brand artwork are not
+licensed by this notice.
+
+Third-party materials distributed in this repository include:
+- STC by Daimonia (杭州代梦智能科技有限公司): writing rules and dictionaries
+  under CC BY 4.0; see .agents/skills/stc/LICENSE. Code under MIT;
+  see .agents/skills/stc/LICENSE-CODE.
+- WeChat icon: CC0 1.0; see docs/competition/figures/assets/README.md and
+  docs/competition/figures/assets/LICENSE-simple-icons.md.
+- Brand artwork provenance: see public/brand/README.md.

@@ -7,7 +7,7 @@
  *
  * LOAD-SAFE: `@/lib/db/client` (which constructs the Prisma singleton) is resolved LAZILY inside
  * `getTestPrisma()` — importing this module never constructs Prisma, so pure unit suites can import
- * it (directly or via the `./helpers` barrel) without a database.
+ * this module directly without a database.
  */
 import { createRequire } from 'node:module';
 import { afterAll, beforeEach } from 'vitest';
