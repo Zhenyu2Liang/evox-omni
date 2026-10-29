@@ -15,7 +15,6 @@
 | `number-backfill.ts` | 补全 `Contact.phoneFull` 与 `Card.numberFull`，支持 `--dry-run` 与 `--rollback=<文件>` |
 | `demo-reference-backfill.ts` | 按显式模拟清单补齐空净值与完整号码；默认预演，`--apply` 写入 |
 | `database-file.mjs` | 备份与份额回填共用的环境加载、SQLite 文件解析 |
-| `generate-competition-figures.mjs` | `node scripts/generate-competition-figures.mjs` 生成竞赛文档插图及 PPT 架构图 |
 | `db-backup.mjs` | 在线快照与恢复说明；随机文件名、独占创建，不覆盖已有备份 |
 
 ## 数据库命令

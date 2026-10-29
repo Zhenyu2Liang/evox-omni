@@ -251,5 +251,4 @@ Web 服务不内置常驻定时调度；定时检查需要单独配置[调度入
 第三方依赖和仓库内已有独立许可的文件继续适用各自的许可证。
 
 - [STC 文字规则与词表](.agents/skills/stc/LICENSE)采用 CC BY 4.0，代码采用其 [MIT 许可证](.agents/skills/stc/LICENSE-CODE)。
-- 竞赛插图中的微信图标许可及来源见[素材说明](docs/competition/figures/assets/README.md)。
 - 品牌标识来源见[品牌资源说明](public/brand/README.md)；项目许可证不授予第三方商标或品牌标识的使用权。
