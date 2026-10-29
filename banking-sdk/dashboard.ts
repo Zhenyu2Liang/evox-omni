@@ -11,9 +11,16 @@ import { analyzeSpending, listAnomalies, listTransactions } from './transaction'
 import type { DashboardSummary } from './types';
 import { holdingMarketValue } from './investment';
 import { runInTransaction } from './tx';
+import { getAccounts } from './account';
+import type { AccountView } from './types';
 
 /** How many recent transactions the dashboard surfaces. */
 const RECENT_TRANSACTION_LIMIT = 5;
+
+/** Page overview and deposit details share one transaction snapshot. */
+export async function getOverview(userId: string): Promise<{ summary: DashboardSummary; accounts: AccountView[] }> {
+  return runInTransaction(async () => ({ summary: await getDashboardSummary(userId), accounts: await getAccounts(userId) }));
+}
 
 /** Aggregate overview: assets, checking balance, credit available, month spend, anomalies. */
 export async function getDashboardSummary(userId: string): Promise<DashboardSummary> {

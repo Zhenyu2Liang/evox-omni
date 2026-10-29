@@ -9,6 +9,8 @@
 
 模型覆盖账户、流水、联系人、卡片、订阅和理财。
 本地刷卡消费流水另存于 `CardConsumption`。
+`BillReportAnalysis` 保存按用户与报告快照隔离的模型分析、生成租约和调用预算。
+分析记录属于派生数据，不修改银行余额或流水。
 持仓记录附带购买与部分赎回历史的 JSON 文本列
 （`purchaseHistory`、`redemptionHistory`），记录结构由 `banking-sdk` 维护。
 任务、授权、审计、人工接管与定时通知也在此持久化。
@@ -64,7 +66,7 @@
 `CardConsumption` 是本地模拟刷卡消费台账，一次成功消费一行；
 `executionKey` 为重放与幂等标识（可为空），`resultJson` 保存原始消费结果快照。
 `Card` 通过 `userId` 归属用户，并经 `linkedAccountId` 外键关联到结算活期账户（列名 `linked_account_id` 未变）。
-该外键由 `db push` 引入，是兼容式变更（列名未变、可回滚），不要把 `linkedAccountId` 回退成无关系的裸字符串。
+该外键由 `db push` 引入，是兼容式变更（列名未变、可回滚），不得把 `linkedAccountId` 回退成无关系的裸字符串。
 SQLite 无原生枚举，字符串枚举的允许值见 `schema.prisma` 文件头注释。
 
 ## 完整号码列

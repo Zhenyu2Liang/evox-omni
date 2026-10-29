@@ -1,5 +1,13 @@
 # 银行业务展示组件
 
+`TransactionRemark` 供最近交易、月度账单和报告明细的最右侧备注列共用。
+备注保留原文和换行，并由 React 转义；空备注显示“—”。
+窄屏表格可横向滚动，备注列不得隐藏。
+
+`AccountBalances` 供资产页和卡片页共用，展示真实存款账户与脱敏账户尾号。
+卡片页根据实际关联显示银行卡；无关联记录时显示“未关联银行卡”。
+账户余额与银行卡实体必须分开，不得因存在账户而推造发卡记录。
+
 ## 组件职责
 
 `BankCardFace` 为页面与对话卡片提供相同的浅色卡面。
@@ -80,7 +88,7 @@ SDK 类型通过类型导入使用。
 收益口径见 [investments.md](../../docs/cn/investments.md)。
 
 缺失的事实渲染 `business.investments.insufficient`（历史数据不足），不渲染 0。
-该占位串与 `business.investments.valueBasis.insufficient` 同文（中文均「历史数据不足」，英文均 "Insufficient history"），
+该占位串与 `business.investments.valueBasis.insufficient` 同文（中文均“历史数据不足”，英文均 "Insufficient history"），
 所以 `valueBasis === 'HISTORICAL_DATA_INSUFFICIENT'` 时净值/份额/收益类行都显示这四个字，`realizedProfit` 有值时仍显示真实金额。
 符号只由格式化函数体现：持仓收益与累计收益走 `DecimalMoney signed`（正数加 `+`，负数由 `formatDecimalCNY` 加 `-`），
 已实现收益、市值不加 `+`；持仓收益率经 `signedRateToPercent` 只做 ×100，正数不加 `+`（`-3.5%` / `3.5%` / `0%`）。
@@ -178,7 +186,7 @@ e2e 行读取器按标签 `span` 的文本精确定位，再取同一父元素�
 
 | `linkedAccountStatus` | 关联账户行 | 账户金额区块 | 提示 |
 | --- | --- | --- | --- |
-| `LINKED` | `linkedAccountName` · 脱敏账号（`linkedAccountNumber`，缺失回退 `linkedAccountId`） | 「账户余额」=`Money(accountAvailableBalance)`、「可用余额」=`Money(payableAmount)`，各自按字段存在渲染 | 无 |
+| `LINKED` | `linkedAccountName` · 脱敏账号（`linkedAccountNumber`，缺失回退 `linkedAccountId`） | “账户余额”=`Money(accountAvailableBalance)`、“可用余额”=`Money(payableAmount)`，各自按字段存在渲染 | 无 |
 | `MISSING` | 不渲染 | **不渲染任何金额，绝不显示 0** | `business.cards.linkedAccountMissing` |
 | `UNTRUSTED` | 不渲染 | **不渲染任何金额，绝不显示 0**（余额未知） | `business.cards.linkedAccountUntrusted` |
 | `NOT_APPLICABLE` | 不渲染 | 不渲染；信用卡改走下列信用额度区块 | 无 |
@@ -212,14 +220,14 @@ DOM 定位只能靠文本 + 调用方 wrapper：`/cards` 页的 `[data-card-list
 | 区块 | 元素与行号 | 内容 |
 | --- | --- | --- |
 | 头部左 | `div` :81-88 | `div.text-sm.font-medium.text-banking-navy` = `{t(类型键)} · {card.network}`（如 `信用卡 · UnionPay`，分隔符是字面 ` · `，整段不是纯标签文本）；其下 `div.font-mono.text-lg.tracking-widest` = `card.numberMasked` |
-| 头部右 | `div.flex.items-center.gap-2` :89-94 | 「已补卡」`Badge`（:91，仅 `replacedByCardId !== undefined`，tone `info`）+ 状态 `Badge`（:93，tone 见 `STATUS_TONE`） |
+| 头部右 | `div.flex.items-center.gap-2` :89-94 | “已补卡”`Badge`（:91，仅 `replacedByCardId !== undefined`，tone `info`）+ 状态 `Badge`（:93，tone 见 `STATUS_TONE`） |
 | 不可用徽章 | `Badge` :97-99 | 仅 `usable === false`，文案取 `cardUnavailableNoticeKey` |
 | 信用额度 | `dl.grid-cols-2` :101-121 | `<dt>` 标签 + `<dd><Money/></dd>`，仅 `CREDIT` 卡且 `creditLimit`/`availableLimit` 存在 |
 | 关联账户行 | `div.flex.items-center.justify-between` :123-128 | `<span class="text-banking-navy/60">` 标签 + `<span class="font-semibold">` = `{linkedAccountName} · {脱敏账号}`（同款 ` · `） |
 | 账户金额 | `dl.grid-cols-2` :130-150 | `<dt>` 标签 + `<dd><Money/></dd>`，仅 `LINKED` |
-| 关联账户提示 | `<p class="text-sm text-banking-navy/60">` :152-154 | 「未关联账户」/「账户暂不可用」 |
+| 关联账户提示 | `<p class="text-sm text-banking-navy/60">` :152-154 | “未关联账户”/“账户暂不可用” |
 | 月限额 | `div.flex.items-center.justify-between` :156-163 | `<span>` 标签 + `<span><Money/></span>`，所有卡类型，仅 `monthlyLimit` 存在时 |
-| 分类限额 | `div.border-t` :165-182 | 小标题 `div.text-xs` = 「分类限额」 + `ul>li.flex`（`limit.category` 原始串 + `Money`，非 i18n） |
+| 分类限额 | `div.border-t` :165-182 | 小标题 `div.text-xs` = “分类限额” + `ul>li.flex`（`limit.category` 原始串 + `Money`，非 i18n） |
 
 标签与金额永远在不同元素（`<dt>`/`<span>` 标签，`<dd>`/`<span>` 值）。
 `dt` 恒为 `text-xs text-banking-navy/60`，`dd` 恒为 `text-sm font-semibold text-banking-deep`；`Money` 只渲染一个 `span.tabular-nums`，输出形状见 `ui/CONTEXT.md`（`¥18,000.00`）。
@@ -228,7 +236,7 @@ DOM 定位只能靠文本 + 调用方 wrapper：`/cards` 页的 `[data-card-list
 断言注意：账户名与脱敏账号被合成**一个** `span` 文本（`accountName · accountNumber`），无法分别定位，只能按完整字符串（如 `活期账户 · ****8821`）或不含换行的 `hasText` 子串匹配；种子数据中 `acct_checking.number === card_debit.numberMasked === '****8821'`，只用 `****8821` 无法区分卡号与账号。
 不可用提示（`cardFrozenNotice`/`cardLostNotice`/`cardUnavailable`）是 `Badge` 里的 `span`，`MISSING`/`UNTRUSTED` 提示才是 `<p>`。
 `business.cards.accountAvailable`（账户可用余额）、`business.cards.payableAmount`（当前可支付金额）与 `business.cards.balanceFromAccount`（余额来自关联账户）在目录中存在但无任何组件渲染；
-本卡的「账户余额」= `CardView.accountAvailableBalance`，「可用余额」= `CardView.payableAmount`。
+本卡的“账户余额”= `CardView.accountAvailableBalance`，“可用余额”= `CardView.payableAmount`。
 
 脱敏卡号 `numberMasked` 由服务端给出并逐字渲染（`CardTile.tsx:85-87`），形状固定为 4 个 `*` + 4 位数字（`****6688`）：无空格、无分组、界面不做二次脱敏。
 来源是 `banking-sdk/card.ts#generateCardIdentity` 对完整卡号末尾 8 位调用 `lib/mask.ts#maskCardNumber`（`CARD_MASK_SOURCE_LENGTH = 8`，算法保留长度只替换前部）。

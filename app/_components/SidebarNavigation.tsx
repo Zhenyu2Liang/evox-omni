@@ -23,9 +23,10 @@ export function Brand({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
-export default function SidebarNavigation({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
+export default function SidebarNavigation({ pathname, onNavigate, userName }: { pathname: string; onNavigate?: () => void; userName?: string }) {
   const { t } = useI18n();
   const { enabled } = useDeveloperMode();
+  const displayName = userName?.trim() || t('app.currentUser');
   return (
     <>
       <nav aria-label={t('app.mainNavigation')} className="min-h-0 flex-1 space-y-7 overflow-y-auto px-4 py-5">
@@ -51,9 +52,9 @@ export default function SidebarNavigation({ pathname, onNavigate }: { pathname: 
         ))}
       </nav>
       <div className="space-y-2 border-t border-banking-border px-5 pt-3"><LanguageSwitcher /><ThemeSwitcher /><DeveloperModeToggle /></div>
-      <div className="m-4 rounded-2xl border border-banking-border bg-banking-light p-3.5">
-        <p className="flex items-center gap-2 text-banking-caption font-semibold text-banking-deep"><span aria-hidden="true" className="h-2 w-2 rounded-full bg-banking-navy" />{t('app.demoWorkspace')}</p>
-        <p className="mt-1.5 text-banking-caption leading-5 text-banking-navy">{t('app.demoDescription')}</p>
+      <div data-current-user className="m-4 flex min-w-0 items-center gap-3 rounded-2xl border border-banking-border bg-banking-light p-3.5" aria-label={t('app.currentUser')}>
+        <span aria-hidden="true" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-banking-blue-soft text-base font-semibold text-banking-blue">{Array.from(displayName)[0]}</span>
+        <p className="min-w-0 truncate text-sm font-semibold text-banking-deep" title={displayName}>{displayName}</p>
       </div>
     </>
   );

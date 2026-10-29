@@ -48,6 +48,7 @@ import { safeParse } from '@/lib/json';
 import { errorResponse, jsonResponse } from '../_lib/http';
 import { requireIdentity } from '../_lib/session';
 import type { ActionAttention, SurfacedPendingAction } from '../_lib/types';
+import { projectScheduledSummary } from '@/security/scheduled-summary';
 
 /**
  * The TWO non-terminal statuses this endpoint surfaces UNCONDITIONALLY — the human still has to
@@ -133,7 +134,8 @@ export async function GET(req: NextRequest): Promise<Response> {
       if (isManualCardCommand(row.toolName)) continue;
       const attention = attentionFor(row, nowMs);
       if (attention === undefined) continue;
-      actions.push({ ...toContractPendingAction(row), attention });
+      const action = toContractPendingAction(row);
+      actions.push({ ...action, summary: await projectScheduledSummary(identity.userId, action.summary), attention });
     }
 
     return jsonResponse<SurfacedPendingAction[]>(actions);

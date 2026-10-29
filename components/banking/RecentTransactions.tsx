@@ -16,6 +16,7 @@ import { EmptyState } from '../ui/EmptyState';
 import { formatDateTime } from '@/lib/date';
 import type { TransactionView } from '@/banking-sdk';
 import { useI18n } from '@/lib/i18n/LocaleProvider';
+import { TransactionRemark } from './TransactionRemark';
 
 export interface RecentTransactionsProps {
   transactions: TransactionView[];
@@ -27,7 +28,7 @@ export interface RecentTransactionsProps {
 export function RecentTransactions({ transactions, limit, title, className }: RecentTransactionsProps) {
   const { t } = useI18n();
   const columns: TableColumn<TransactionView>[] = [
-    { key: 'merchant', header: t('business.transactions.merchant'), render: (row) => row.merchant },
+    { key: 'merchant', header: t('business.transactions.merchant') },
     { key: 'category', header: t('business.transactions.category'), render: (row) => row.category },
     { key: 'occurredAt', header: t('business.transactions.time'), render: (row) => formatDateTime(row.occurredAt) },
     {
@@ -36,6 +37,7 @@ export function RecentTransactions({ transactions, limit, title, className }: Re
       align: 'right',
       render: (row) => <Money amount={row.amount} signed />,
     },
+    { key: 'remark', header: t('business.transactions.remark'), className: 'w-24', render: row => <TransactionRemark remark={row.remark} /> },
   ];
   const rows = limit === undefined ? transactions : transactions.slice(0, Math.max(0, limit));
 
@@ -44,7 +46,7 @@ export function RecentTransactions({ transactions, limit, title, className }: Re
       {rows.length === 0 ? (
         <EmptyState title={t('business.transactions.empty')} description={t('business.transactions.emptyDescription')} />
       ) : (
-        <Table columns={columns} rows={rows} rowKey={(row) => row.id} />
+        <div className="overflow-x-auto"><Table className="min-w-[640px]" columns={columns} rows={rows} rowKey={(row) => row.id} /></div>
       )}
     </Card>
   );

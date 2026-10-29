@@ -43,6 +43,7 @@ import { modelToolError } from './tools/result';
 import { AppError } from '@/lib/errors';
 import type { ConversationIntent } from '@/lib/contracts/intent';
 import { advanceConversationIntent, requiresDeclaredPlan } from './intent-context';
+import { guardScheduledTimeChoice } from './scheduled-input';
 import { createTurnIntentTool, TURN_INTENT_TOOL } from './tools/turn-intent';
 import type { AgentRunJournal } from './durable';
 import { ledgerKeyForAction } from '@/lib/ledger';
@@ -52,7 +53,7 @@ import { restoreConversationUserMemory } from './conversation-context';
 import { currentTurnFocus, withCurrentTurnFocus } from './current-turn-focus';
 import { withModelBudget } from './model-budget';
 import { runtimeRequestDigest } from './durable/serialization';
-import { CONVERSATION_TOOL_REJECTION } from '@/lib/tool-feedback';
+import { CONVERSATION_TOOL_REJECTION, PARAMETER_PREFLIGHT_PREFIX } from '@/lib/tool-feedback';
 import { createContextCompactor, type ContextCompactionState } from './context-compaction';
 import { estimateContextTokens } from './context-compaction/projection';
 import type { ReplyContext, ReplyRepairState, WriteContinuationState } from './reply-repair';
@@ -175,12 +176,14 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
     }
     return turnIntent;
   };
-  const intentTool = createTurnIntentTool(readTurnIntent, async intent => {
+  const updateTurnIntent = async (intent: ConversationIntent) => {
     turnIntent = intent;
     if (options.snapshot) options.snapshot.intent = intent;
     options.onTurnIntent?.(intent);
+    if (intent.requiredInput === 'scheduled_time') stopAfterDecision = true;
     await options.journal?.checkpoint('turn_intent');
-  });
+  };
+  const intentTool = createTurnIntentTool(readTurnIntent, updateTurnIntent, guardScheduledTimeChoice);
 
   /** Current user request, read lazily so it always reflects the live transcript (audit-only). */
   const latestUserRequest = (): string => latestUserText(agent.state.messages);
@@ -279,10 +282,16 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
       try { validateBankingParameters(toolName, context.toolCall.arguments, context.toolCall.id); }
       catch (error) {
         if (!(error instanceof AppError)) throw error;
+        planningRejections.set(context.toolCall.id, PARAMETER_PREFLIGHT_PREFIX + modelToolError(error));
         return { block: true, reason: modelToolError(error) };
       }
     }
-    const intent = readTurnIntent();
+    let intent = readTurnIntent();
+    const guardedIntent = guardScheduledTimeChoice(intent);
+    if (guardedIntent !== intent) {
+      await updateTurnIntent(guardedIntent);
+      intent = guardedIntent;
+    }
     if (intent.needsInput && (isWriteTool(toolName) || toolName === 'submit_plan')) {
       const rejection = modelToolError(new AppError('VALIDATION', '请先补充本次办理所缺少的信息，不能代替用户选择。'));
       planningRejections.set(context.toolCall.id, rejection);
@@ -360,7 +369,7 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
   const finishTurn: FinishTurn = turn => {
     const stop = stopAfterDecision || turn.toolResults.some(result => result.toolName === 'submit_plan' && !planningRejections.has(result.toolCallId));
     stopAfterDecision = false;
-    return config.llmMode === 'live' && stop ? { action: 'end' } : undefined;
+    return (config.llmMode === 'live' && stop || readTurnIntent().requiredInput === 'scheduled_time') ? { action: 'end' } : undefined;
   };
 
   /** Listeners registered by THIS module, removed by `dispose()`. */

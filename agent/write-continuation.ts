@@ -24,6 +24,7 @@ import { publishServerReply, retireUnpublishedReply } from './turns/server-reply
 import { renderFinancialResponse } from './financial-response';
 import { businessProse, operationExplanation, operationFactsReply } from './reply-safety';
 import { runtimeRequestDigest, snapshotRuntimeValue } from './durable/serialization';
+import { asksForExecutionTime, hasExplicitTimeChoice, SCHEDULE_TIME_QUESTION } from './scheduled-input';
 
 /** Declared write capabilities for the current turn; model interpretation, never authorization. */
 export function declaredWriteTools(intent: ConversationIntent | undefined): string[] {
@@ -136,6 +137,11 @@ export async function continueDeclaredWrites(runtime: BankingAgentRuntime, buffe
   // rather than unverified prose that could claim a panel no operation record backs.
   const corrected = runtime.agent.state.messages.findLast(isAssistantMessage);
   const correctedProse = corrected ? textOfContent(corrected.content) : '';
+  if (!hasExplicitTimeChoice(runtime.serialize().intent?.latestMessage ?? '') && asksForExecutionTime(correctedProse)) {
+    retireUnpublishedReply(buffer);
+    publishServerReply(runtime, buffer, now, SCHEDULE_TIME_QUESTION);
+    return;
+  }
   const clarification = runtime.serialize().intent?.needsInput === true &&
     !inspectReplyFormat(correctedProse, { allowProtocolExamples: buffer.allowProtocolExamples }).length
     ? businessProse(operationExplanation(correctedProse), buffer.allowProtocolExamples) : '';

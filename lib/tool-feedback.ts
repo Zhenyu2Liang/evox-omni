@@ -36,8 +36,12 @@ const PUBLIC_BUSINESS_ERRORS: Record<string, MessageKey> = {
 /** Provider correction stays in model context and diagnostics, never in public status text. */
 export const CONVERSATION_TOOL_REJECTION = 'This banking call is outside the declared purpose and capabilities of the current turn, or is not allowed during output-format correction. Declare the current request before proposing a sensitive read or write. Never resume an earlier write from history or change the declaration to acquire additional permissions. Answer the current question using the available context.';
 
+/** Internal classification for validation completed before any banking side effect. */
+export const PARAMETER_PREFLIGHT_PREFIX = '[Banking parameter preflight] ';
+
 /** This adapter receives only server-owned preflight refusals, before any business side effect. */
 export function projectToolRejection(reason: string): Pick<ToolEventView, 'summary' | 'debugDetail'> {
+  if (reason.startsWith(PARAMETER_PREFLIGHT_PREFIX)) return { summary: 'chat.error.parametersNotSubmitted', debugDetail: reason.slice(PARAMETER_PREFLIGHT_PREFIX.length) };
   return { summary: reason === CONVERSATION_TOOL_REJECTION ? 'chat.error.newBankingRequest' : 'chat.error.planNotSubmitted', debugDetail: reason };
 }
 
@@ -90,6 +94,7 @@ export function publicSecurityError(failure: SecurityNoticeInput | undefined, t:
 export function publicToolSummary(event: ToolEventView, t: Translator): string | undefined {
   if (event.toolName === 'search_conversation_history' && event.status === 'success') return t('chat.activity.historyRead');
   if (event.status === 'blocked') {
+    if (!event.actionId && event.summary === 'chat.error.parametersNotSubmitted') return t('chat.error.parametersNotSubmitted');
     if (event.errorCode) return publicToolError(event.summary, t, 'chat.error.operationNotStarted', event.errorCode, event.errorParams);
     if (!event.actionId) return publicToolError(event.summary, t, 'chat.error.operationNotStarted');
     return localizeChatError(event.summary, t);

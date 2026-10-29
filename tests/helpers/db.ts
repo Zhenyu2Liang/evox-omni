@@ -97,6 +97,7 @@ export function ensureTestPragmas(): Promise<void> {
 export async function truncateAll(): Promise<void> {
   await ensureTestPragmas();
   const prisma = getTestPrisma();
+  await prisma.billReportAnalysis.deleteMany();
   await prisma.agentRunEvent.deleteMany();
   await prisma.toolInvocation.deleteMany();
   await prisma.modelRequest.deleteMany();

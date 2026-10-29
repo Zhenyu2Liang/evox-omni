@@ -16,7 +16,7 @@ function isOperationClaim(source: string): boolean {
     if (/^\s*(?:>|[“"「]|例如|示例|假设|如果|若|当|历史|原话|你(?:之前|刚才)说|用户(?:之前)?说|if\b|when\b|an? example\b|for example\b|you (?:said|asked)\b)/iu.test(clause)) return false;
     if (/[?？]\s*$/.test(clause)) return false;
     if (/\b(?:has not|have not|was not|not yet|never|hasn't|haven't)\b/iu.test(clause) && !/\b(?:but|however)\b/iu.test(clause)) return false;
-    const operation = /转账|汇款|付款|扣款|到账|冻结|挂失|补办|开卡|申购|赎回|订阅|限额|操作|transfer|payment|transaction|card|subscription|redemption|investment/iu;
+    const operation = /转账|汇款|付款|扣款|到账|冻结|挂失|补办|开卡|申购|赎回|订阅|限额|操作|任务|提交|transfer|payment|transaction|card|subscription|redemption|investment|schedule|request/iu;
     // “已实现收益 ... 未做过赎回” and “已到期，可以赎回” describe a position, not a completed
     // redemption. Check the intervening phrase rather than joining distant keyword matches.
     const completed = [...clause.matchAll(/(?:已(?:经)?|成功)([^。！？!?\n]{0,35}?)(提交|发起|办理|完成|转账|汇款|付款|支付|转出|转入|扣除|到账|冻结|挂失|补办|开通|取消|设置|调整|赎回|认购)/gu)]

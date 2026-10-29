@@ -52,6 +52,6 @@ function summarizeBalance(balance: BalanceView): string {
   if (balance.accounts.length === 0) {
     return `可用余额合计 ${total}，暂无账户。`;
   }
-  const parts = balance.accounts.map((account) => `${account.name} ${formatCNY(account.balance)}`);
+  const parts = balance.accounts.map((account) => `${account.name}（账户尾号 ${account.numberMasked}）${formatCNY(account.balance)}`);
   return `可用余额合计 ${total}，共 ${balance.accounts.length} 个账户：${parts.join('、')}。`;
 }

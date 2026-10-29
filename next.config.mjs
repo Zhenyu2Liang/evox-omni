@@ -7,7 +7,7 @@ const nextConfig = {
   devIndicators: false,
   // Database and Pi runtimes execute on Node.js. External packages preserve their native
   // module loading under Next.js 16's default Turbopack bundler.
-  serverExternalPackages: ['@prisma/client', '@prisma/adapter-better-sqlite3', 'better-sqlite3',
+  serverExternalPackages: ['playwright-core', '@prisma/client', '@prisma/adapter-better-sqlite3', 'better-sqlite3',
     '@earendil-works/pi-ai', '@earendil-works/pi-agent-core', '@earendil-works/pi-coding-agent'],
 };
 

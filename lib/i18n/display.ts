@@ -28,6 +28,10 @@ export function localizeActionFieldLabel(label: string, t: Translator): string {
 /** Only closed, server-defined policy fields have translated values. Facts are never rewritten. */
 export function localizeActionFieldValue(field: { label: string; value: string }, t: Translator): string {
   const labelKey = sources.fields[field.label as keyof typeof sources.fields];
+  if (labelKey === 'chat.field.taskType') {
+    const kindKey = `tasks.schedules.kind.${field.value}`;
+    return isMessageKey(kindKey) ? t(kindKey) : field.value;
+  }
   if (labelKey === 'chat.field.risk') return lookup(sources.riskValues, field.value, t);
   if (labelKey === 'chat.field.operation') return localizeActionTitle(field.value, t);
   if (['chat.field.redemptionScope', 'chat.field.amountChange', 'chat.field.monthlyLimit',

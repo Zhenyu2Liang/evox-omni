@@ -11,6 +11,10 @@ It also has NO banking-fee concept: no fee argument, fee field, fee rule constan
 
 ## Ownership
 
+`events.ts` records original-argument validation refusals for display because Pi may reject the schema before the gateway hook. Only error results use this classification; successful outcomes are never replaced. Preflight rejection is shown as not started, with no execution-failure card. Original invocation errors remain in the runtime journal. This display check never grants or blocks execution.
+
+`authorization-view.ts` uses `security/scheduled-summary.ts` to project legacy scheduled-payment JSON into owned business references for display only. Stored arguments, summaries, challenge digests and action states stay unchanged.
+
 - `operationClaim`, `balanceClaim` and `operationExplanation` retain presentation-check state. Withhold unsupported claims before public text deltas, keep independent explanation, and use `../reply-safety.ts` for authoritative replacement.
 - `live-prompt.ts` sequences the controlled-write correction before format repair. If correction ends with `needsInput:true`, `../write-continuation.ts` retains the concrete question with the true unsubmitted state; it never supplies the missing choice.
 - `server-reply.ts` clears claim flags before publishing a server-owned reply and appends that reply to model memory. Raw provider candidates remain in the journal.

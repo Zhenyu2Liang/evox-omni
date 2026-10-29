@@ -8,7 +8,9 @@ former dashboard composition and is linked under the sidebar's Banking group.
 ## Data and boundaries
 
 The page is a Server Component with `dynamic = 'force-dynamic'`. It reads
-`banking.dashboard.getDashboardSummary(getConfig().demoUserId)` directly on each request.
+`banking.dashboard.getOverview(getConfig().demoUserId)` directly on each request.
+The summary and masked deposit-account list share one database transaction snapshot.
+`AccountBalances` lists checking and savings deposits independently of issued card records.
 It composes `AssetSummaryCard`, the optional display-only `AnomalyBanner`, and
 `RecentTransactions`. No banking mutation, financial arithmetic, permission decision, or browser
 transport belongs here. Displayed balances come from the read model; the page creates no estimates.

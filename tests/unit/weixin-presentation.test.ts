@@ -3,7 +3,7 @@ import type { ChatCard, AgentStreamEvent } from '../../lib/contracts/agent';
 import type { TaskPlan } from '../../lib/contracts/task';
 import { renderBusinessCard, renderAttention } from '../../channels/weixin/presentation';
 import { handleChannelCommand } from '../../channels/weixin/commands';
-import { renderEvents, BankingHttpClient, type BankingChannel } from '../../channels/weixin/banking-client';
+import { renderAction, renderEvents, BankingHttpClient, type BankingChannel } from '../../channels/weixin/banking-client';
 import { emptyState } from '../../channels/weixin/state';
 
 const time = Date.UTC(2026, 8, 25, 4);
@@ -35,6 +35,50 @@ const cases: Array<[ChatCard, string]> = [
 ];
 
 describe('微信完整业务结果展示', () => {
+  it('numbers separate transaction blocks and retains multiline recorded notes', () => {
+    const text = renderBusinessCard({ type: 'transactions', data: [
+      { ...transaction, remark: '打车\n返程' }, { ...transaction, id: 'second', merchant: '便利店' },
+    ] });
+    expect(text).toContain('1. ');
+    expect(text).toContain('\n\n2. ');
+    expect(text).toContain('备注：打车\n返程');
+    expect(text).toContain('-¥28.50');
+  });
+  it('does not imply every undispatched schedule is still in the future', () => {
+    const text = renderBusinessCard({ type: 'scheduled', created: false, data: [{ name: '已到期待分发', kind: 'TRANSFER', runAt: time, status: 'SCHEDULED', requiresConfirmation: true }] });
+    expect(text).toContain('状态：待执行');
+    expect(text).not.toContain('尚未到期');
+  });
+  it('localizes sensitive subscription confirmation once while preserving the original decision commands', () => {
+    const action = { title: 'Read active subscriptions.', toolName: 'list_subscriptions' as const, tier: 'YELLOW' as const,
+      requiresMfa: false, fields: [{ label: '操作', value: 'Read active subscriptions.' }, { label: '风险等级', value: '🟡 黄色' }] };
+    const events: AgentStreamEvent[] = [{ type: 'confirmation_required', actionId: 'subscription_original', action }];
+    const result = renderEvents(events);
+    expect(result.text).toContain('查询当前有效订阅。');
+    expect(result.text).not.toContain('Read active subscriptions.');
+    expect(result.text).not.toContain('YELLOW');
+    expect(result.text.match(/风险等级：/g)).toHaveLength(1);
+    expect(result.text.match(/查询当前有效订阅。/g)).toHaveLength(1);
+    expect(result.text).toContain('/确认 subscription_original');
+    expect(result.text).toContain('/取消 subscription_original');
+    expect(result.text).toContain('尚未执行');
+    expect(result.actionIds).toEqual(['subscription_original']);
+  });
+  it('translates known action fields without rewriting user-authored notes or monetary facts', () => {
+    const result = renderAction('original', { ...summary, fields: [
+      { label: '金额', value: '¥100.25' }, { label: '备注', value: 'Read active subscriptions. / YELLOW' },
+    ] });
+    expect(result).toContain('金额：¥100.25');
+    expect(result).toContain('备注：Read active subscriptions. / YELLOW');
+  });
+  it('also localizes historical attention titles without reopening the original approval', () => {
+    const result = renderAttention({ id: 'read', sessionId: 's', toolName: 'list_subscriptions', args: {}, tier: 'YELLOW',
+      requiresMfa: false, status: 'confirmed', createdAt: time, updatedAt: time, attention: 'recoverable',
+      summary: { ...summary, toolName: 'list_subscriptions', title: 'Read active subscriptions.' } });
+    expect(result).toContain('查询当前有效订阅。');
+    expect(result).not.toContain('Read active subscriptions.');
+    expect(result).not.toContain('/确认');
+  });
   it.each(cases)('仅有 %j 卡片时仍展示真实结果', (card, expected) => {
     const events: AgentStreamEvent[] = [{ type: 'card', card }];
     const result = renderEvents(events);
@@ -139,7 +183,7 @@ describe('微信工作流、恢复与到期入口', () => {
     const { bank, state } = setup(); await handleChannelCommand('/任务', bank, state);
     const reply = await handleChannelCommand(`/${verb} plan_1`, bank, state);
     expect(bank.controlPlan).toHaveBeenCalledWith('plan_1', action);
-    expect(reply).toContain('/确认 action_1'); expect(state.offered.action_1).toBeDefined();
+    expect(reply).toContain('确认：/确认\n'); expect(state.offered.action_1).toMatchObject({ shortId: 1 });
   });
   it('未展示的任务不直接控制', async () => {
     const { bank, state } = setup(); expect(await handleChannelCommand('/继续 unknown', bank, state)).toContain('先发送 /任务');
@@ -151,7 +195,7 @@ describe('微信工作流、恢复与到期入口', () => {
   });
   it('显式检查到期展示通知和到期付款的真实确认入口，不自动确认', async () => {
     const { bank, state } = setup(); const reply = await handleChannelCommand('/检查到期', bank, state);
-    expect(reply).toContain('应缴费'); expect(reply).toContain('/确认 action_1');
+    expect(reply).toContain('应缴费'); expect(reply).toContain('确认：/确认\n');
     expect(bank.tickSchedules).toHaveBeenCalledOnce(); expect(bank.settle).not.toHaveBeenCalled();
   });
   it('HTTP 调用的工作流与恢复参数不能绕开既有接口', async () => {

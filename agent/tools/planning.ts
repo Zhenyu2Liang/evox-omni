@@ -33,6 +33,7 @@ import { AppError } from '@/lib/errors';
 import { resolveBankingArgs } from '@/lib/banking-selectors';
 import { listHoldings } from '@/lib/db/repositories/investment';
 import { resolveTransferRecipient, canonicalizeTransferArgs } from '@/security/recipient-resolution';
+import { CARD_TARGET_TOOLS, resolveCardTarget, canonicalizeCardArgs, buildCardClarifyMessage } from '@/security/card-resolution';
 import { demoNow } from '@/lib/clock';
 import { newId } from '@/lib/ids';
 import {
@@ -222,7 +223,13 @@ export async function preflightRequestedPlan(userId: string, args: Record<string
     ? new Set((await listHoldings(userId, 'HOLDING')).map(row => row.id)) : undefined;
   return Promise.all(nodes.map(async node => {
     if (node.kind !== 'tool') return node;
-    let canonical = await resolveBankingArgs(userId, node.tool as ToolName, node.args ?? {});
+    let selected = node.args ?? {};
+    if (CARD_TARGET_TOOLS.includes(node.tool ?? '')) {
+      const card = await resolveCardTarget(userId, selected);
+      if (card.status !== 'resolved') throw new AppError('VALIDATION', buildCardClarifyMessage(card), { nodeId: node.id, resolution: card.status });
+      selected = canonicalizeCardArgs(selected, card.card.id);
+    }
+    let canonical = await resolveBankingArgs(userId, node.tool as ToolName, selected);
     if (node.tool === 'transfer_money') {
       const recipient = await resolveTransferRecipient(userId, canonical);
       if (recipient.status !== 'resolved') {

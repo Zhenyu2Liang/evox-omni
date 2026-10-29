@@ -1,5 +1,14 @@
 # Agent runtime context
 
+`scheduled-input.ts` enforces an explicit time in the latest customer message before a scheduled-write declaration can be ready. The server-only `requiredInput=scheduled_time` survives checkpoints and produces a direct clarification without another model request. Old conversation times do not satisfy a new request. No command values or permissions are inferred by this presence check. A corrected missing-time question is preserved even when the provider mislabels it as conversation; old schedule previews are removed from that clarification.
+
+`bill-report-analysis.ts` is an explicit, tool-free report interpretation path, separate from chat.
+Only summary facts enter the model. Amounts, rates and counts remain host-rendered evidence.
+Each attempt persists its `withModelBudget` reservation in `BillReportAnalysis` before transport;
+caps are two requests, 16000 reserved tokens, 45 seconds and 1800 output tokens, further tightened
+by configured limits. A fenced lease coalesces requests across tabs/processes. Cache identity includes
+owner, full ledger snapshot, locale and provider. Exports read caches and never generate analysis.
+
 `model-budget.ts` reserves a persisted per-intent request/token/time budget before provider calls,
 including context summaries and HTTP retries. Recovery reuses reservations. Token reservations use
 UTF-8 input bytes plus framing and maximum output; aborted attempts remain charged conservatively.

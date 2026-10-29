@@ -9,6 +9,7 @@
  * Usage: `import { banking } from '<root>/banking-sdk'; await banking.account.getBalance(userId);`
  */
 import * as account from './account';
+import * as report from './bill-report';
 import * as budget from './budget';
 import * as card from './card';
 import * as contact from './contact';
@@ -21,6 +22,7 @@ import * as transfer from './transfer';
 
 /** Grouped access to every banking capability module. */
 export const banking = {
+  report,
   account,
   transaction,
   transfer,
@@ -35,6 +37,7 @@ export const banking = {
 
 /** Public DTOs / view models (see `./types`). */
 export * from './types';
+export type { BillReport, BillReportQuery, BillReportEntry, ReportTotals } from './bill-report';
 
 /**
  * 「净值 + 份额」 math (see `./net-value`): `NET_VALUE_DECIMALS`, `SHARE_DECIMALS`,

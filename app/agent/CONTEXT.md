@@ -7,6 +7,8 @@
 Web 身份规则见 [../api/CONTEXT.md](../api/CONTEXT.md)。
 
 `history.ts` 提供历史分页读取。
+旧定时付款卡片的参数 JSON 经 `security/scheduled-summary.ts` 转为业务字段。
+转换只用于展示，不写回摘要、参数或授权状态。
 页面向 `ChatWindow` 传入最新历史页和旧页游标。
 `historyGeneration` 区分当前历史代次。
 当前可恢复任务也通过服务端读取。

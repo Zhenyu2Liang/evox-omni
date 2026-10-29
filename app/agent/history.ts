@@ -9,6 +9,7 @@ import { selectChatHistoryPage } from '@/lib/chat-history';
 import { readConversationPlans } from './plan-history';
 import { approvalCard, decisionSummary, verificationCard, type DecisionRow } from './decision-record';
 import { AppError } from '@/lib/errors';
+import { projectScheduledSummary } from '@/security/scheduled-summary';
 
 /** The generation changes only when the developer starts a new conversation history. */
 export function conversationHistoryGeneration(snapshot: SessionSnapshot): string {
@@ -61,7 +62,11 @@ export async function readChatHistoryPage(snapshot: SessionSnapshot,
     sessionId: snapshot.sessionId, userId: snapshot.userId, revision: snapshot.revision,
     historyGeneration: conversationHistoryGeneration(snapshot),
   }, options);
-  const decisions = new Map<string, DecisionRow>(rows.map(row => [row.id, row]));
+  const decisions = new Map<string, DecisionRow>(await Promise.all(rows.map(async row => {
+    const summary = decisionSummary(row);
+    const projected = summary ? await projectScheduledSummary(snapshot.userId, summary) : undefined;
+    return [row.id, projected && projected !== summary ? { ...row, summaryJson: JSON.stringify(projected) } : row] as const;
+  })));
   const acknowledged = new Set(acknowledgements.map(row => row.detail));
   return { ...page, messages: page.messages.map(message => ({ ...message,
     cards: (message.cards ?? []).map(card =>

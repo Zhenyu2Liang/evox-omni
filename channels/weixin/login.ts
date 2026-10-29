@@ -43,7 +43,7 @@ export async function loginWeixin(store: WeixinStore, force: boolean, signal: Ab
       if (!status.bot_token || !status.ilink_bot_id || !status.ilink_user_id) {
         throw new Error('微信登录缺少机器人令牌或扫码用户身份，未建立绑定。');
       }
-      const state = previous.auth?.botId === status.ilink_bot_id && previous.auth.ownerId === status.ilink_user_id ? previous : emptyState();
+      const state = previous.auth?.botId === status.ilink_bot_id && previous.auth.ownerId === status.ilink_user_id ? previous : emptyState(previous.nextActionNumber);
       state.auth = { botId: status.ilink_bot_id, token: status.bot_token, ownerId: status.ilink_user_id,
         baseUrl: weixinBaseUrl(status.baseurl || baseUrl) };
       await store.save(state);

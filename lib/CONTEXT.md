@@ -11,6 +11,8 @@
 | `contracts/tool-output.ts` | 工具结果的结构校验 |
 | `contracts/` | 对话、授权、任务、审计与运行契约 |
 | `money.ts`、`decimal.ts` | 金额、比例与估值计算 |
+| `bill-report-export.ts`、`bill-report-html.ts` | 账单 CSV 与含 SVG、数据摘要、已保存分析的 HTML |
+| `bill-report-presentation.ts`、`bill-report-pdf.ts` | 共用分段图表、事实摘要与禁用网络的 PDF 渲染 |
 | `date.ts`、`clock.ts` | 业务日历与时钟 |
 | `config.ts`、`constants.ts` | 运行配置与演示常量 |
 | `ledger.ts` | 执行身份、流水身份与输入摘要 |

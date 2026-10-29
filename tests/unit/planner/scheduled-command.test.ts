@@ -1,7 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { scheduledTransferArgs, validateScheduledPayload } from '@/lib/contracts/scheduled-command';
+import { validateBankingParameters } from '@/agent/tools/plan-parameters';
 
 describe('scheduled payment compilation', () => {
+  it('rejects mixed selectors and display-only fields at the model schema boundary', () => {
+    const outer = { name: 'Transfer', kind: 'TRANSFER', runAtLocal: '2026-10-30T10:00' };
+    for (const payload of [
+      { contactId: 'contact_mama', amount: '300.00', phone: '136****0004', recipientName: '妈妈' },
+      { phone: '136****0004', amount: '300.00' },
+      { contactId: 'contact_mama', name: '妈妈', amount: '300.00' },
+    ]) expect(() => validateBankingParameters('create_scheduled_task', { ...outer, payload }, 'call')).toThrow();
+    expect(() => validateBankingParameters('create_scheduled_task', { ...outer, payload: { contactId: 'contact_mama', amount: '300.00' } }, 'call')).not.toThrow();
+    expect(() => validateBankingParameters('create_scheduled_task', { ...outer, kind: 'REMINDER', payload: { note: 'Reminder' } }, 'call')).not.toThrow();
+  });
   it('preserves exact decimal text and explicitly provided recipient selectors', () => {
     expect(scheduledTransferArgs('TRANSFER', { contactId: 'contact', amount: '90071992547409.01' }))
       .toEqual({ contactId: 'contact', amount: '90071992547409.01' });

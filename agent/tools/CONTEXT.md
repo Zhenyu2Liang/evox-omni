@@ -2,6 +2,10 @@
 
 ## Responsibility
 
+`task.ts` advertises a closed scheduled-payment payload schema: amount plus exactly one of contactId/phone/name, optional sourceAccountId and remark. Masked phone strings and display-only metadata are rejected. Reminder payloads contain only note. Server validation still enforces the selected task kind.
+
+Scheduled-task creation requires a customer-selected date and time. `agent/scheduled-input.ts` checks the latest customer message for an explicit clock time or relative delay; historical user/assistant times cannot satisfy this prerequisite. It never derives command parameters or authorizes a write. A ready declaration without a time is forced to `needsInput=true` with server-owned `requiredInput=scheduled_time`; the declaration and pre-write paths both enforce this rule. The reply renderer asks for the time without another model request, including after durable recovery. Bare approval words do not supply a time. Preserve the recipient, amount and date on a later explicit time reply. One unconditional schedule can use the direct tool with `workflow=false`; a declared workflow must use `submit_plan`.
+
 This directory defines banking capabilities, parameter schemas, SDK runners, and their Pi result adapters.
 It does not authorize financial operations. The agent routes calls through the security gateway;
 the gateway decides confirmation, MFA, ownership, financial limits, and execution rights.
@@ -202,7 +206,7 @@ No file in this directory schedules a wall-clock wait: zero `setTimeout`/`setInt
 `planning.ts:96` declares `signal?: AbortSignal` only to forward `{ signal: deps.signal, now: deps.now }` into `executor.runPlan` (`:385`); it constructs no deadline.
 `createToolRegistry` (`index.ts:236-406`) awaits nothing at construction (two literal factory maps + one `for (const name of TOOL_NAMES)` rewrite). Its awaits (`:393` `automaticWriteFence`, `:395` `operationIdentity`) are per call.
 `validateBankingParameters`/`validateSchemaParameters` (`plan-parameters.ts:44-80`), `compileRequestedPlan` (`plan-compiler.ts:10-34`) and the `planner/dag.ts` checks are synchronous CPU only.
-`preflightRequestedPlan` (`planning.ts:215-238`) executes NO tool and opens no transaction: it compiles, validates parameters, then does at most one unbounded `listHoldings` read (only when a node uses `redeem_investment`) plus one `resolveBankingArgs` read per tool node INSIDE a `Promise.all`. N declared steps therefore cost O(1) sequential DB round trips (1 for a plain multi-write plan, 2 with a redemption, +1 `listContacts` for a transfer), never N.
+`preflightRequestedPlan` executes no banking tool and creates no task or pending action. After graph and parameter validation, card mutations use the same owned-selector resolver and `CARD_TARGET_TOOLS` list as the direct security gateway, then canonicalize to cardId before exact-ID validation. Type/suffix conflicts and ambiguous or foreign targets fail before any plan is persisted. Transfer recipients and active redemption holdings retain their existing checks. Nodes prepare concurrently with `Promise.all`; each card node performs its own selector and ID reads, so database reads scale with the node count.
 Every read on that path is unbounded (`lib/banking-selectors.ts:16,20,24,28,37`, `lib/db/repositories/investment.ts:41-47`, `lib/db/repositories/contact.ts:19-24` — no `take`); the bounded read is `get_transactions` (`transaction.ts:47` `limit: query.limit ?? 50`, schema max `MAX_TRANSACTION_READ_LIMIT = 200`).
 Unbounded GREEN reads are NOT on the pre-park path because they are model-driven tool executions: `analyze_spending` scans a 6-month window (`banking-sdk/transaction.ts:38` `TREND_MONTHS = 6`, `:72`) and `detect_anomaly` scans the whole history plus an unfiltered-by-take `auditLog.findMany` (`:102`, `:113`).
 

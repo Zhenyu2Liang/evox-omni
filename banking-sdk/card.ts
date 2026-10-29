@@ -73,6 +73,8 @@ import { maskCardNumber } from '../lib/mask';
 import { demoNow } from '../lib/clock';
 import { idempotentCardId, isUniqueViolation, normalizeIdempotencyKey } from './idempotent';
 import { runInTransaction, type Tx } from './tx';
+import { getAccounts } from './account';
+import type { AccountView } from './types';
 import type { AddDemoCardRequest } from '../lib/contracts/card-management';
 import { safeParse, toJson } from '../lib/json';
 import { SPENDING_CATEGORIES } from './categories';
@@ -391,6 +393,11 @@ async function transitionTo(
 }
 
 /** All cards owned by the user (with per-category limits). */
+/** Cards and deposit accounts for one page refresh, from the same transaction snapshot. */
+export async function getCardPage(userId: string): Promise<{ cards: CardView[]; accounts: AccountView[] }> {
+  return runInTransaction(async () => ({ cards: await getCards(userId), accounts: await getAccounts(userId) }));
+}
+
 export async function getCards(userId: string): Promise<CardView[]> {
   return runInTransaction(async () => {
     const rows = await cards.listCards(userId);

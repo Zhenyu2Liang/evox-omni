@@ -1,5 +1,10 @@
 # 账单页面
 
+## 报告入口
+
+账单页链接到 `reports/`，并保留当前月份。
+月度与年度报告的页面、表单及分页约束见 [reports/CONTEXT.md](reports/CONTEXT.md)。
+
 ## 数据与显示
 
 `page.tsx` 是按请求渲染的服务端页面。
@@ -13,6 +18,8 @@
 有效格式为 `YYYY-MM`。
 缺失或格式无效时使用演示业务月份。
 页面已提供月份表单、分类图、趋势图与流水表。
+最右侧备注列复用 `TransactionRemark`，空备注显示“—”。
+备注来自 `TransactionView.remark`，必须按纯文本保留，不得重新解释或执行。
 
 图表使用 `components/charts` 的原生 SVG 组件。
 账单页面只显示一张完整趋势图，不再重复显示相同数据的缩略曲线。

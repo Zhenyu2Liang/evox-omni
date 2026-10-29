@@ -1,4 +1,5 @@
 {
+  "business.transactions.remark": "Note",
   "business.presentation.details": "View transaction details",
   "business.presentation.resultExplanation": "View result explanation",
   "business.presentation.resultInCard": "See the result card above for details.",

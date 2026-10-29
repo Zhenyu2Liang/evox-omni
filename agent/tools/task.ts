@@ -18,6 +18,7 @@ import type {
 } from '@/banking-sdk';
 import { formatDateTime } from '@/lib/date';
 import { scheduledTime } from '@/lib/scheduled-time';
+import { MoneyParameter } from './money-schema';
 import type { ToolExecutionResult, ToolRunOptions } from './index';
 import { toModelToolResult, toolFailure } from './result';
 
@@ -84,13 +85,25 @@ export async function runListScheduledTasks(
 
 /* --------------------------------------------------- create_scheduled_task */
 
+const paymentFields = {
+  amount: MoneyParameter,
+  sourceAccountId: Type.Optional(Type.String({ minLength: 1 })),
+  remark: Type.Optional(Type.String()),
+};
+const ScheduledPayload = Type.Union([
+  Type.Object({ contactId: Type.String({ minLength: 1 }), ...paymentFields }, { additionalProperties: false }),
+  Type.Object({ phone: Type.String({ minLength: 1, pattern: '^[^*]+$', description: 'Full recipient phone, never the masked display value.' }), ...paymentFields }, { additionalProperties: false }),
+  Type.Object({ name: Type.String({ minLength: 1 }), ...paymentFields }, { additionalProperties: false }),
+  Type.Object({ note: Type.Optional(Type.String()) }, { additionalProperties: false }),
+], { description: 'TRANSFER/PAYMENT requires amount and exactly ONE recipient selector: contactId, phone or name. No recipientName, bank or display metadata. REMINDER uses only note.' });
+
 /** `create_scheduled_task` params (SDK `CreateScheduledTaskInput` minus the server-injected `userId`). */
 export const CreateScheduledTaskParams = Type.Object({
   name: Type.String({ minLength: 1, description: 'Scheduled intent name.' }),
   kind: Type.Union([Type.Literal('REMINDER'), Type.Literal('PAYMENT'), Type.Literal('TRANSFER')]),
   runAt: Type.Optional(Type.Integer({ description: 'Explicit future UTC epoch milliseconds, supplied as an integer.' })),
-  runAtLocal: Type.Optional(Type.String({ description: '北京时间，例如 2026-10-15T09:00。保留用户明确指定的年份、月份和时间。' })),
-  payload: Type.Optional(Type.Object({}, { description: '任务载荷（JSON）' })),
+  runAtLocal: Type.Optional(Type.String({ description: '北京时间，例如 2026-10-15T09:00。日期和具体时刻必须由用户指定；只有日期时先追问几点，不能自行补成 09:00 或 00:00。' })),
+  payload: Type.Optional(ScheduledPayload),
 });
 export type CreateScheduledTaskArgs = Static<typeof CreateScheduledTaskParams>;
 

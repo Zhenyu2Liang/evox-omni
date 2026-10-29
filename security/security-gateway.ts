@@ -79,6 +79,7 @@ import { realNow } from '../lib/clock';
 import mfaMessages from './messages/mfa.zh-CN.json';
 import { resolveBankingArgs } from '../lib/banking-selectors';
 import {
+  CARD_TARGET_TOOLS,
   buildCardClarifyMessage,
   canonicalizeCardArgs,
   cardTypeLabel,
@@ -86,8 +87,9 @@ import {
 } from './card-resolution';
 import { withActionPolicy } from '../lib/action-summary';
 import { scheduledTime } from '../lib/scheduled-time';
-import { redactRequest, redactSecrets } from '../lib/sensitive';
+import { redactRequest } from '../lib/sensitive';
 import { businessCalendarParts, formatDateTime } from '../lib/date';
+import { scheduledTaskFields } from './scheduled-summary';
 import type { ErrorCode } from '../lib/errors';
 
 /** Prefix wrapped around the serialized block reason so `parseBlockReason` is exact. */
@@ -817,16 +819,6 @@ type CreatePendingActionResult =
   | { kind: 'plan_cancelled' }
   | { kind: 'clarify'; message: string };
 
-/** Tools whose target card may be named by selectors (`cardType`/`cardTail`/`cardNumber`) instead of an id. */
-const CARD_TARGET_TOOLS: readonly string[] = [
-  'set_card_limit',
-  'freeze_card',
-  'unfreeze_card',
-  'consume_virtual_card',
-  'report_lost_card',
-  'replace_card',
-];
-
 /**
  * Persist a gated call as a `PendingAction` with a `PendingActionSummary`.
  *
@@ -964,7 +956,7 @@ async function gatewayCreatePendingAction(
   if (ctx.toolName === 'create_scheduled_task') summary.fields.push({ label: '执行时间（北京时间）', value: formatDateTime(Number(ctx.args.runAt)) });
   if (ctx.toolName === 'create_scheduled_task') {
     summary.fields.push({ label: '任务类型', value: String(ctx.args.kind) });
-    if (ctx.args.payload) summary.fields.push({ label: '任务内容', value: JSON.stringify(redactSecrets(ctx.args.payload)) });
+    summary.fields.push(...await scheduledTaskFields(ctx.userId, String(ctx.args.kind), ctx.args.payload));
     summary.fields.push({ label: '演示范围', value: '仅保存任务记录，不承诺到期执行' });
   }
   const status: PendingActionStatus = ev.requiresMfa ? 'awaiting_mfa' : 'pending';

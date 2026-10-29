@@ -52,6 +52,25 @@ model User {
   scheduledTasks ScheduledTask[]
   auditLogs      AuditLog[]
   securityEvents SecurityEvent[]
+  reportAnalyses BillReportAnalysis[]
+}
+
+// Cached analysis is bound to the owner, locale, provider and exact report snapshot.
+model BillReportAnalysis {
+  id             String   @id
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  snapshot       String
+  status         String   // running | completed | failed
+  attemptId      String
+  leaseExpiresAt DateTime
+  contentJson    String?
+  budgetJson     String?
+  httpStatus     Int?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([userId, updatedAt])
 }
 
 model Account {

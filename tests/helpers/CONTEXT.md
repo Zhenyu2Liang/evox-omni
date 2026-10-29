@@ -1,5 +1,7 @@
 # 测试辅助模块
 
+`db.ts#truncateAll` 必须显式清空 `BillReportAnalysis`，避免模型缓存与生成租约串入后续测试。
+
 ## 模块选择
 
 | 模块 | 用途 |

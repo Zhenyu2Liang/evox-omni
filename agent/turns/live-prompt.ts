@@ -11,11 +11,20 @@ import type { ReplyRepairState } from '../reply-repair';
 import { continueDeclaredWrites } from '../write-continuation';
 import { operationFactsReply } from '../reply-safety';
 import dialogueMessages from '../messages/dialogue.zh-CN.json';
+import { SCHEDULE_TIME_QUESTION } from '../scheduled-input';
+import { catalogEntry } from '@/lib/contracts/tool-catalog';
 
 export { publishServerReply, retireUnpublishedReply } from './server-reply';
 
 /** Correct an invalid conversational candidate once in the same context, retaining every raw response. */
 export async function repairConversationalReply(runtime: BankingAgentRuntime, buffer: TurnBuffer, now: () => number): Promise<void> {
+  const hasBankingOutcome = buffer.factResults.some(entry => catalogEntry(entry.toolName)?.effect === 'write') ||
+    buffer.events.some(event => event.type === 'confirmation_required' || event.type === 'mfa_required');
+  if (runtime.serialize().intent?.requiredInput === 'scheduled_time' && !hasBankingOutcome) {
+    retireUnpublishedReply(buffer);
+    publishServerReply(runtime, buffer, now, SCHEDULE_TIME_QUESTION);
+    return;
+  }
   if (buffer.operationClaim || buffer.balanceClaim) {
     retireUnpublishedReply(buffer);
     publishServerReply(runtime, buffer, now,

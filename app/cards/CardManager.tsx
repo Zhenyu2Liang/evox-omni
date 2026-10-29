@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { CardView } from '@/banking-sdk';
+import type { AccountView, CardView } from '@/banking-sdk';
+import { AccountBalances } from '@/components/banking/AccountBalances';
 import { Button, CardTile, EmptyState } from '@/components';
 import { createRequestId } from '@/components/chat/request-id';
 import type { AddDemoCardRequest, CardChange, CardChangeResponse } from '@/lib/contracts/card-management';
@@ -15,9 +16,10 @@ interface Envelope<T> { ok: boolean; data?: T; error?: { code: string } }
 interface Notice { key: MessageKey; error: boolean; attempts?: number }
 
 /** Preserve a proposal's admission ID when a network response is lost. */
-export default function CardManager({ initialCards }: { initialCards: CardView[] }) {
+export default function CardManager({ initialCards, initialAccounts }: { initialCards: CardView[]; initialAccounts: AccountView[] }) {
   const { t } = useI18n();
   const [cards, setCards] = useState(initialCards);
+  const [accounts, setAccounts] = useState(initialAccounts);
   const [changes, setChanges] = useState<CardChange[]>([]);
   const [selection, setSelection] = useState<CardDialogSelection | null>(null);
   const [consume, setConsume] = useState<CardView | null>(null);
@@ -39,12 +41,13 @@ export default function CardManager({ initialCards }: { initialCards: CardView[]
         fetch('/api/cards/changes', { cache: 'no-store', signal }),
       ]);
       const [cardResult, changeResult] = await Promise.all([
-        responses[0].json() as Promise<Envelope<{ cards: CardView[] }>>,
+        responses[0].json() as Promise<Envelope<{ cards: CardView[]; accounts: AccountView[] }>>,
         responses[1].json() as Promise<Envelope<{ changes: CardChange[] }>>,
       ]);
       if (!responses.every(response => response.ok) || !cardResult.ok || !changeResult.ok || !cardResult.data || !changeResult.data) throw new Error('Card refresh failed.');
       if (!mounted.current || signal?.aborted || sequence !== refreshSequence.current) return;
       setCards(cardResult.data.cards);
+      setAccounts(cardResult.data.accounts);
       setChanges(changeResult.data.changes);
       setLoaded(true);
       setSelection(previous => {
@@ -191,6 +194,7 @@ export default function CardManager({ initialCards }: { initialCards: CardView[]
         <div><h1 className="bank-page-heading text-2xl font-semibold tracking-tight text-banking-deep">{t('pages.cards.title')}</h1><p className="mt-1 text-sm text-banking-navy">{t('pages.cards.summary', { count: cards.length })}</p></div>
         <div className="flex flex-wrap gap-2"><span data-card-refresh><Button variant="secondary" loading={refreshing} disabled={busy} onClick={() => { setNotice(null); void refresh(); }}>{t('pages.cards.refresh')}</Button></span><span data-card-add><Button disabled={disabled} onClick={() => open({ kind: 'add' })}>{t('pages.cards.add')}</Button></span></div>
       </header>
+      <AccountBalances accounts={accounts} cards={cards} />
       <p className="rounded-xl bg-banking-light p-4 text-sm leading-6 text-banking-navy">{t('pages.cards.demoDescription')}</p>
       {notice ? <p role={notice.error ? 'alert' : 'status'} className={`rounded-xl border p-3 text-sm ${notice.error ? 'border-banking-danger/20 bg-red-50 text-banking-danger' : 'border-banking-success/20 bg-green-50 text-banking-success'}`}>{t(notice.key, notice.attempts === undefined ? {} : { attempts: notice.attempts })}</p> : null}
       {changes.length ? <section data-card-pending-changes className="rounded-2xl border border-banking-navy/10 bg-banking-surface p-5"><h2 className="font-semibold text-banking-deep">{t('pages.cards.pending')}</h2><ul className="mt-3 space-y-3">{changes.map(change => <li key={change.id} data-card-pending-change-id={change.id} className="flex flex-wrap items-center justify-between gap-3 border-t border-banking-light pt-3"><div className="text-sm text-banking-navy">{t(change.kind === 'add' ? 'pages.cards.reviewAdd' : 'pages.cards.reviewDelete')}{change.card ? <span className="ml-2 font-mono">{change.card.numberMasked}</span> : null}{change.status === 'locked' ? <p className="mt-1 text-banking-danger">{t('pages.cards.locked')}</p> : null}</div><Button variant="secondary" disabled={disabled} onClick={() => open({ kind: 'change', change })}>{t('pages.cards.resume')}</Button></li>)}</ul></section> : null}

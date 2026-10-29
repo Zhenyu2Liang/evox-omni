@@ -12,6 +12,8 @@ export interface ConversationIntent {
   workflow?: boolean;
   /** A write declaration is not ready until the model explicitly resolves required user choices. */
   needsInput?: boolean;
+  /** Server-owned missing-input prerequisite, never granted by a model declaration. */
+  requiredInput?: 'scheduled_time';
   id: string;
   revision: number;
   requestText: string;

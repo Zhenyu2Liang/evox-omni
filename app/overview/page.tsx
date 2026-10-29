@@ -2,13 +2,14 @@ import Link from 'next/link';
 import { getConfig } from '@/lib/config';
 import { banking } from '@/banking-sdk';
 import { AnomalyBanner, AssetSummaryCard, RecentTransactions } from '@/components';
+import { AccountBalances } from '@/components/banking/AccountBalances';
 import { getServerI18n } from '@/lib/i18n/server';
 
 export const dynamic = 'force-dynamic';
 
 export default async function OverviewPage() {
   const { t } = await getServerI18n();
-  const summary = await banking.dashboard.getDashboardSummary(getConfig().demoUserId);
+  const { summary, accounts } = await banking.dashboard.getOverview(getConfig().demoUserId);
 
   return (
     <main className="mx-auto flex w-full min-w-0 max-w-6xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
@@ -24,6 +25,7 @@ export default async function OverviewPage() {
         </Link>
       </header>
       <AssetSummaryCard summary={summary} />
+      <AccountBalances accounts={accounts} />
       {summary.latestAnomaly ? <AnomalyBanner anomaly={summary.latestAnomaly} /> : null}
       <RecentTransactions transactions={summary.recentTransactions} title={t('pages.overview.recentTransactions')} />
     </main>

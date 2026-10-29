@@ -13,7 +13,7 @@
  * Card status and category limits remain separate security-gated agent operations.
  */
 import type { NextRequest } from 'next/server';
-import { banking, type CardView } from '@/banking-sdk';
+import { banking, type CardView, type AccountView } from '@/banking-sdk';
 import { errorResponse, jsonResponse, parseBody } from '../_lib/http';
 import { resolveUserId, requireIdentity } from '../_lib/session';
 import { addDemoCardSchema, proposeCardChange } from '@/security/manual-card-management';
@@ -21,6 +21,7 @@ import { addDemoCardSchema, proposeCardChange } from '@/security/manual-card-man
 /** Success payload shape for `GET /api/cards`. */
 export interface CardsData {
   cards: CardView[];
+  accounts: AccountView[];
 }
 
 export async function POST(req: NextRequest): Promise<Response> {
@@ -33,8 +34,7 @@ export async function POST(req: NextRequest): Promise<Response> {
 export async function GET(_req: NextRequest): Promise<Response> {
   try {
     const userId = resolveUserId();
-    const cards = await banking.card.getCards(userId);
-    const data: CardsData = { cards };
+    const data: CardsData = await banking.card.getCardPage(userId);
     return jsonResponse(data);
   } catch (e) {
     return errorResponse(e);

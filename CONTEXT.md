@@ -7,13 +7,14 @@ A competition simulator for natural-language banking with server-controlled perm
 ## Module boundaries
 
 - `lib/contracts/tool-catalog.ts`: tool names, effects, tiers and replay metadata.
-- `channels/weixin/`: pi-weixinbot protocol transport, QR-owner binding, durable reply outbox, public business-card projection and explicit action/workflow/schedule commands through the existing local banking HTTP API. See `docs/cn/weixin.md`.
+- `channels/weixin/`: pi-weixinbot protocol transport, QR-owner binding, durable reply outbox, public business-card projection and explicit action/workflow/schedule commands through the existing local banking HTTP API. A persisted confirmation queue shows one decision at a time: `/确认`, `/取消`, and `/验证 <code>` address the displayed action after a fresh server check. Completion shows the next decision without authorizing it; stale targets require another preview. Full IDs and stable short references remain compatible. See `docs/cn/weixin.md`.
 - `agent/durable/`: every observed Pi event, run lease, stable invocation, explicit retry/recovery.
 - `agent/intent-context.ts`, `agent/tools/plan-compiler.ts`, `agent/tools/plan-parameters.ts`: user-authored context, pre-persistence plan/condition/output validation and tool-schema argument validation before any effect.
 - `planner/` and agent adapters: DAG transitions, persistent ownership and checkpoints.
 - `security/`: permissions, cumulative risk, verification, incidents and locks.
 - `agent/command-execution.ts`: mutation, mandatory audit, original receipt and invocation completion in one transaction.
 - `banking-sdk/`: exact domain arithmetic and mutations through trusted execution context.
+- `banking-sdk/bill-report.ts`: monthly/annual CNY ledger reports; `lib/bill-report-presentation.ts` groups monthly display into seven-day buckets and embeds shared SVG charts. `app/api/bills/reports/` exports JSON/CSV/HTML/PDF. Explicit analysis uses `agent/bill-report-analysis.ts`, a tool-free bounded model call cached by owner, snapshot, locale and provider. See `docs/cn/bill-reports.md`.
 - `banking-sdk/net-value.ts`: BigInt fixed-point net value and share conversions — 4 dp net value, 6 dp shares, unrounded valuation, one HALF_UP settlement to cents.
 - `components/banking/HoldingFacts.tsx`: the single render source for a holding's net value and share facts (`card` and `tile` layouts).
 - `lib/db/unit-of-work.ts`: nested repository calls share the current transaction.

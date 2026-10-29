@@ -10,6 +10,7 @@ export interface TransactionQuery {
   category?: string;
   channel?: string;
   direction?: 'DEBIT' | 'CREDIT';
+  currency?: string;
   limit?: number;
 }
 
@@ -32,6 +33,7 @@ export function listTransactions(query: TransactionQuery): Promise<Transaction[]
   if (query.category !== undefined) where.category = query.category;
   if (query.channel !== undefined) where.channel = query.channel;
   if (query.direction !== undefined) where.direction = query.direction;
+  if (query.currency !== undefined) where.currency = query.currency;
 
   return dbClient().transaction.findMany({
     where,

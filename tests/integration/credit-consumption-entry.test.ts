@@ -14,7 +14,7 @@ useFreshDatabase();
 
 it('does not offer a credit card spend entry and explains the limitation', async () => {
   const card = (await banking.card.getCards(DEMO_USER_ID)).find(c => c.id === 'card_credit')!;
-  const html = renderToStaticMarkup(createElement(CardManager, { initialCards: [card] }));
+  const html = renderToStaticMarkup(createElement(CardManager, { initialCards: [card], initialAccounts: await banking.account.getAccounts(DEMO_USER_ID) }));
   expect(html).not.toContain('data-card-consume="');
   expect(html).toContain('信用卡暂不支持模拟消费');
 });

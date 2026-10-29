@@ -8,6 +8,8 @@ import { DeveloperModeProvider } from '@/lib/developer-mode/DeveloperModeProvide
 import { cookies } from 'next/headers';
 import { ThemeProvider } from '@/lib/theme/ThemeProvider';
 import { resolveTheme, THEME_COOKIE } from '@/lib/theme/shared';
+import { users } from '@/lib/db/repositories';
+import { getConfig } from '@/lib/config';
 
 export async function generateMetadata(): Promise<Metadata> {
   const { t } = await getServerI18n();
@@ -28,12 +30,13 @@ export default async function RootLayout({
   const { locale } = await getServerI18n();
   const developerMode = await getServerDeveloperMode();
   const theme = resolveTheme((await cookies()).get(THEME_COOKIE)?.value);
+  const user = await users.getUser(getConfig().demoUserId);
   // Browser integrations may attach root attributes before hydration. Only tolerate
   // this document-level difference; descendant hydration diagnostics stay enabled.
   return (
     <html lang={locale} data-theme={theme} suppressHydrationWarning>
       <body>
-        <ThemeProvider initialTheme={theme}><LocaleProvider initialLocale={locale}><DeveloperModeProvider initialEnabled={developerMode}><AppShell>{children}</AppShell></DeveloperModeProvider></LocaleProvider></ThemeProvider>
+        <ThemeProvider initialTheme={theme}><LocaleProvider initialLocale={locale}><DeveloperModeProvider initialEnabled={developerMode}><AppShell userName={user?.name}>{children}</AppShell></DeveloperModeProvider></LocaleProvider></ThemeProvider>
       </body>
     </html>
   );

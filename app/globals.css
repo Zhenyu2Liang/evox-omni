@@ -3,6 +3,12 @@
 @source "./";
 @source "../components";
 
+/* SVG markup is shared with offline exports outside Tailwind's source scan. */
+@theme static {
+  --color-banking-flow-in: light-dark(#6385cc, #93b3ef);
+  --color-banking-flow-out: light-dark(#a28bc6, #c1abe4);
+}
+
 @theme {
   --color-banking-deep: light-dark(#3e3430, #f1e8e2);
   --color-banking-navy: light-dark(#786b63, #bdb0a7);

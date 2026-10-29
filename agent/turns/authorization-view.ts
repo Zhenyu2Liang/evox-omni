@@ -12,6 +12,7 @@ import { confirmationCard, mfaCard } from '../card-emitter';
 import type { TurnBuffer, PlanRelay } from './contracts';
 import { activePlanMessage, emitCard, publishToolMessage } from './buffer';
 import { safeToString } from './message-utils';
+import { projectScheduledSummary } from '@/security/scheduled-summary';
 
 export const MFA_HINT = 'Enter the six-digit SMS verification code.';
 
@@ -48,7 +49,7 @@ function summaryOf(row: PendingActionWithMfa, toolName: string): PendingActionSu
 export async function loadParkedDecision(actionId: string, toolName: string): Promise<ParkedDecision | null> {
   const row = await getPendingAction(actionId);
   if (!row) return null;
-  return { status: row.status as PendingActionStatus, summary: summaryOf(row, toolName), mfaLocked: row.mfa?.status === 'locked' };
+  return { status: row.status as PendingActionStatus, summary: await projectScheduledSummary(row.userId, summaryOf(row, toolName)), mfaLocked: row.mfa?.status === 'locked' };
 }
 
 /**

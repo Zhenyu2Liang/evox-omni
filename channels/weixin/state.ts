@@ -9,12 +9,15 @@ const authSchema = z.object({ botId: z.string().min(1), token: z.string().min(1)
 const stateSchema = z.object({
   version: z.literal(1), auth: authSchema.optional(), cursor: z.string(),
   deliveries: z.record(z.string(), z.object({ replies: z.array(z.string()), sent: z.number().int().nonnegative() })),
-  offered: z.record(z.string(), z.object({ confirmed: z.boolean() })),
+  offered: z.record(z.string(), z.object({ confirmed: z.boolean(), shortId: z.number().int().positive().safe().optional() })),
+  nextActionNumber: z.number().int().positive().safe().default(1),
+  confirmationQueue: z.array(z.string()).default([]),
+  activeActionId: z.string().optional(),
   plans: z.record(z.string(), z.literal(true)).default({}),
 });
 export type WeixinState = z.infer<typeof stateSchema>;
 export type WeixinAuth = z.infer<typeof authSchema>;
-export const emptyState = (): WeixinState => ({ version: 1, cursor: '', deliveries: {}, offered: {}, plans: {} });
+export const emptyState = (nextActionNumber = 1): WeixinState => ({ version: 1, cursor: '', deliveries: {}, offered: {}, plans: {}, nextActionNumber, confirmationQueue: [] });
 
 export class WeixinStore {
   constructor(readonly directory: string) {}

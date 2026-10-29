@@ -8,6 +8,9 @@
 
 `page.tsx` 按请求读取演示用户的卡片，交给 `CardManager` 组合界面。
 `CardManager.tsx` 承载卡片列表、手动申请恢复、刷新、消费入口与消费弹窗。
+页面与刷新接口通过 `getCardPage` 同时读取银行卡与存款账户。
+`AccountBalances` 与资产页共用账户明细，按真实关联显示银行卡尾号。
+储蓄账户存在但没有发卡时，必须显示“未关联银行卡”，不得推造银行卡记录。
 `CardChangeDialog.tsx` 展示新增、删除、验证与取消。
 `CardConsumeDialog.tsx` 展示单卡消费表单与该卡消费记录。
 消费预览、验证与重放共用 `lib/contracts/card-consumption.ts` 的响应类型。

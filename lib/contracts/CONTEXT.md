@@ -2,6 +2,9 @@
 
 ## 意图
 
+`ConversationIntent.requiredInput` 的 `scheduled_time` 值只由服务端设置。
+该值表示当前定时任务缺少明确时刻，持久化后仍必须阻止写操作并追问。
+
 `ChatMessage.financialSummary` 是可选的服务端展示摘要。
 消息 `content` 保存校验后的公开正文，不等于未经检查的模型候选。
 运行日志分别保存原始供应商候选与公开事件。

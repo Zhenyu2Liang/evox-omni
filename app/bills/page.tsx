@@ -12,6 +12,7 @@
  * `ui/EmptyState`. Money is rendered by `ui/Money`; props stay JSON-serializable (epoch ms).
  */
 import { getConfig } from '@/lib/config';
+import Link from 'next/link';
 import { formatDateTime, monthRange } from '@/lib/date';
 import { banking } from '@/banking-sdk';
 import type { AnomalyItem, SpendingAnalysis, TransactionView } from '@/banking-sdk';
@@ -20,6 +21,7 @@ import type { TableColumn } from '@/components';
 import { compareDecimal } from '@/lib/decimal';
 import { formatCNY } from '@/lib/money';
 import { getServerI18n } from '@/lib/i18n/server';
+import { TransactionRemark } from '@/components/banking/TransactionRemark';
 
 /** Only a `YYYY-MM` month (01–12) is honoured; anything else falls back to the demo month. */
 const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -56,6 +58,7 @@ export default async function BillsPage({ searchParams }: BillsPageProps) {
     { key: 'category', header: t('pages.bills.column.category') },
     { key: 'amount', header: t('pages.bills.column.amount'), align: 'right', render: (row) => <Money amount={row.amount} signed /> },
     { key: 'status', header: t('pages.bills.column.status'), align: 'center', render: (row) => t(row.isAnomaly ? 'pages.bills.status.anomaly' : row.direction === 'DEBIT' ? 'pages.bills.status.expense' : 'pages.bills.status.income') },
+    { key: 'remark', header: t('business.transactions.remark'), className: 'w-24', render: row => <TransactionRemark remark={row.remark} /> },
   ];
 
   return (
@@ -63,6 +66,7 @@ export default async function BillsPage({ searchParams }: BillsPageProps) {
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="bank-page-heading text-2xl font-semibold tracking-tight text-banking-deep">{t('pages.bills.title')}</h1>
+          <Link href={`/bills/reports?period=month&month=${analysis.month}`} className="mt-2 inline-flex min-h-11 items-center text-sm font-medium text-banking-interactive underline-offset-4 hover:underline">{t('pages.reports.open')} →</Link>
           <p className="mt-1 text-sm text-banking-navy">
             {t('pages.bills.summary', { month: analysis.month, transactions: transactions.length, anomalies: anomalies.length, total: formatCNY(analysis.total) })}
           </p>
@@ -110,12 +114,13 @@ export default async function BillsPage({ searchParams }: BillsPageProps) {
 
       <section>
         <h2 className="mb-3 text-lg font-medium text-banking-deep">{t('pages.bills.transactionDetails')}</h2>
-        <Table
+        <div className="overflow-x-auto"><Table
+          className="min-w-[720px]"
           columns={columns}
           rows={transactions}
           rowKey={(row) => row.id}
           empty={<EmptyState title={t('pages.bills.emptyTitle')} description={t('pages.bills.emptyDescription')} />}
-        />
+        /></div>
       </section>
     </main>
   );

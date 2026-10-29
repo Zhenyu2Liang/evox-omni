@@ -10,10 +10,12 @@ import { emitCard, emitToolCards, groundMessage, newAssistantMessage, upsertTool
 import { findRunFailure, isAssistantMessage, isRecord, safeToString, textOfContent, textOfResult, toExecutionResult } from './message-utils';
 import { publishPendingDecision } from './authorization-view';
 import { sanitizeToolArguments } from '@/lib/tool-diagnostics';
-import { projectToolRejection } from '@/lib/tool-feedback';
+import { PARAMETER_PREFLIGHT_PREFIX, projectToolRejection } from '@/lib/tool-feedback';
 import { inspectReplyFormat } from '../reply-format';
 import { assistantPresentationId, providerPresentationKey } from '../tool-presentation-identity';
-import { parseModelToolError } from '../tools/result';
+import { modelToolError, parseModelToolError } from '../tools/result';
+import { validateBankingParameters } from '../tools/plan-parameters';
+import { AppError } from '@/lib/errors';
 
 /** The TYPED facts a refusal carries, projected into the catalog placeholders that render them. */
 function errorParamsFrom(failure: SecurityFailure | undefined): { errorParams?: Record<string, string | number> } {
@@ -97,6 +99,9 @@ async function handleToolEnd(buffer: TurnBuffer, event: Extract<AgentEvent, { ty
 /** Map normal and recovered Pi events through the same grounded presentation adapter. */
 export function createEventHandler(buffer: TurnBuffer, now: () => number, rejected: ReadonlyMap<string, string> = new Map(),
   modelRequestIdentity?: () => string | undefined): (event: AgentEvent) => Promise<void> {
+  // Pi validates its JSON schema before the gateway hook. Classify those original-argument
+  // rejections for presentation too; this map never controls execution or replaces a success.
+  const parameterRejections = new Map<string, string>();
   return async event => {
     try {
       switch (event.type) {
@@ -150,6 +155,12 @@ export function createEventHandler(buffer: TurnBuffer, now: () => number, reject
         }
         case 'tool_execution_start': {
           if (event.toolName === 'describe_turn') return;
+          if (event.toolName !== 'submit_plan') {
+            try { validateBankingParameters(event.toolName, event.args as Record<string, unknown>, event.toolCallId); }
+            catch (error) {
+              if (error instanceof AppError && error.code === 'VALIDATION') parameterRejections.set(event.toolCallId, PARAMETER_PREFLIGHT_PREFIX + modelToolError(error));
+            }
+          }
           if (isRecord(event.args) && typeof event.args.sourceAccountId === 'string') buffer.sourceAccounts.set(event.toolCallId, event.args.sourceAccountId);
           const view: ToolEventView = { toolCallId: event.toolCallId, toolName: event.toolName, status: 'started',
             debugArguments: sanitizeToolArguments(event.args) };
@@ -169,7 +180,7 @@ export function createEventHandler(buffer: TurnBuffer, now: () => number, reject
         }
         case 'tool_execution_end': {
           if (event.toolName === 'describe_turn') return;
-          try { await handleToolEnd(buffer, event, rejected, now()); }
+          try { await handleToolEnd(buffer, event, !rejected.has(event.toolCallId) && event.isError ? parameterRejections : rejected, now()); }
           catch (error) {
             const message = buffer.toolMessages.get(event.toolCallId);
             const previous = message?.toolEvents?.[0];

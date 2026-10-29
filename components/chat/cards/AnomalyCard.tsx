@@ -40,7 +40,9 @@ export function AnomalyCard({ data, onAcknowledge, onViewDetail, onFreeze, class
   async function acknowledge(anomaly: AnomalyItem) {
     setBusy(true); setError('');
     try {
-      const response = await fetch(`/api/transactions/${encodeURIComponent(anomaly.transaction.id)}/acknowledge`, { method: 'POST' });
+      const response = await fetch(`/api/transactions/${encodeURIComponent(anomaly.transaction.id)}/acknowledge`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+      });
       const result = await response.json();
       if (!response.ok || !result.ok) throw new Error(result.error?.message ?? t('cards.anomaly.acknowledgeFailed'));
       setAcknowledged(ids => [...ids, anomaly.transaction.id]);

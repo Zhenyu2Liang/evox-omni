@@ -1,9 +1,12 @@
 # 卡片 HTTP 边界
 
+`GET /api/cards` 返回 `{ cards, accounts }`，两者来自 `banking.card.getCardPage` 的同一事务快照。
+`accounts` 只包含本人存款账户的脱敏投影；刷新后账户余额和关联卡余额必须一致。
+
 ## 职责
 
 `app/api/cards` 是卡片相关的 HTTP 边缘：卡片读取、虚拟卡消费与消费流水、手动演示卡片的增删提案及
-MFA 验证/取消。每个路由只做「校验入参 → 解析服务端身份 → 委派领域模块 → 序列化冻结信封」。
+MFA 验证/取消。每个路由只做“校验入参 → 解析服务端身份 → 委派领域模块 → 序列化冻结信封”。
 
 资金计算、月限额判定、卡片与账户所有权、MFA 挑战、审计一律留在所属模块：
 
@@ -19,7 +22,7 @@ MFA 验证/取消。每个路由只做「校验入参 → 解析服务端身份 
 
 | 路由 | 文件 | 契约 |
 | --- | --- | --- |
-| `GET /api/cards` | `route.ts` | 无查询参数；返回 `{ ok: true, data: { cards: CardView[] } }`（SDK 读模型）。 |
+| `GET /api/cards` | `route.ts` | 无查询参数；返回 `{ ok: true, data: { cards: CardView[]; accounts: AccountView[] } }`（SDK 读模型）。 |
 | `POST /api/cards` | `route.ts` | 手动新增演示卡片提案（`addDemoCardSchema`，`.strict()`）；返回 `CardChangeResponse`，需后续 MFA 验证才落库。 |
 | `DELETE /api/cards/[id]` | `[id]/route.ts` | 手动删除演示卡片提案（`deleteDemoCardSchema`，`.strict()`）；路径 `id` 由服务端拼入，不接受请求体中的卡片标识。 |
 | `POST /api/cards/[id]/consume` | `[id]/consume/route.ts` | 首次提交消费参数创建 RED 提案，不扣款。再次携带原参数、`actionId`、`confirmed:true` 与 `code` 才验证执行。返回 `CardConsumptionResponse`，成功后 `result` 为 `ConsumeCardResult`。 |
@@ -43,7 +46,7 @@ HTTP 200 且 `CardChangeResponse.ok === false`。
 `POST /api/cards/[id]/consume` 的请求体**只要出现** `occurredAt` 键（过去、未来、字符串、数字、
 `null` 或格式错误的值一律相同）就以 `AppError('VALIDATION')`（HTTP 400）拒绝，检测发生在路由私有的
 `parseConsumeBody`（先由共享 `readJsonBody` 检查请求边界，再在对象上检查键并校验结构）。拒绝在委派 SDK 之前
-发生，因此不会产生任何持久化副作用（无资金变动、无流水行、无 `CardConsumption` 行）。只有「键不存在」
+发生，因此不会产生任何持久化副作用（无资金变动、无流水行、无 `CardConsumption` 行）。只有“键不存在”
 才被接受。
 
 ## CardView 整对象透传
@@ -57,9 +60,9 @@ HTTP 200 且 `CardChangeResponse.ok === false`。
 
 `linkedAccountStatus` 为 `MISSING`／`UNTRUSTED`／`NOT_APPLICABLE` 时，`linkedAccountNumber`、
 `linkedAccountName`、`accountAvailableBalance`、`payableAmount` 本就不存在（`undefined` 在 JSON 序列化
-时被丢弃，「没有这个键」就是契约），不是 `0`。路由不得把这些余额补成 `0`、不得回填默认账户、不得用
+时被丢弃，“没有这个键”就是契约），不是 `0`。路由不得把这些余额补成 `0`、不得回填默认账户、不得用
 `linkedAccountId` 反推账号或余额；`status` 与 `usable` 同样由 SDK 决定，路由只负责搬运。需要收窄或改名
-这些字段时，先改 `banking-sdk/types.ts#CardView` 的 DTO 合同，不要在路由里裁剪。
+这些字段时，先改 `banking-sdk/types.ts#CardView` 的 DTO 合同，不得在路由里裁剪。
 
 ## 客户端读取路径与种子形状
 
@@ -74,7 +77,7 @@ HTTP 200 且 `CardChangeResponse.ok === false`。
 
 - 服务端拥有时间：路由不得从请求体、查询参数或请求头读取记账/生效/限额归属时间，也不得添加任何
   时间参数；客户端送来这类键时必须显式拒绝，不能静默剥离。
-- 卡片 `CardView` 原样透传：路由不写字段投影、不补零、不补默认账户（见上节「CardView 整对象透传」）。
+- 卡片 `CardView` 原样透传：路由不写字段投影、不补零、不补默认账户（见上节“CardView 整对象透传”）。
 - 身份来自 `_lib/session`，所有权由 SDK（或 `security/manual-card-management`）在事务内校验；
   路由内不重复实现授权或资金逻辑。
 - 请求体 schema 保持模块私有：路由模块只导出 HTTP 处理函数、路由配置和 TypeScript 类型。
@@ -86,19 +89,19 @@ HTTP 200 且 `CardChangeResponse.ok === false`。
 
 - 新增卡片写端点时复用 `_lib/http` 的解析与信封函数；需要拒绝某个服务端拥有字段时，在路由私有的
   解析函数里先读原始请求体判断键是否存在（参考 `[id]/consume/route.ts` 的 `parseConsumeBody`），
-  不要把该逻辑降级成「解析后删除该键」——静默剥离会接受请求并隐藏伪造意图。若第二个端点需要同一
+  不得把该逻辑降级成“解析后删除该键”——静默剥离会接受请求并隐藏伪造意图。若第二个端点需要同一
   保证，再把这段读取原始请求体的逻辑上提到 `_lib/http`（例如 `parseBodyRejectingKeys`）。
 - `occurredAt` 的拒绝消息是契约的一部分：`Consumption time is server-owned: 'occurredAt' must not be sent`。
   文案会随 400 响应返回给客户端。
 - 手动卡片三个 schema（新增、删除、验证码）均为 `.strict()`，因此多余键（含任何时间字段）本身就会
-  `VALIDATION` 失败——这是卡片变更端点不存在同类时间伪造口的原因，不要放宽为 `.passthrough()`。
+  `VALIDATION` 失败——这是卡片变更端点不存在同类时间伪造口的原因，不得放宽为 `.passthrough()`。
 - 路由传给 `banking.card.consumeCard` 的入参只有 `userId`、`cardId`、`amount`、`category`、`merchant`
   与 `executionKey`：路由与 SDK 之间不传递任何时间字段，其他入口也不得提供记账时间。
 
 ## 测试策略
 
 - `tests/app/card-consume-http.test.ts`：真实路由处理器进程内驱动 `POST /api/cards/[id]/consume`
-  与 `GET /api/cards/[id]/consumptions`（SQLite + SDK 全链路），覆盖扣款落库、`executionKey` 重放、
+  与 `GET /api/cards/[id]/consumptions`（SQLite + SDK 完整流程），覆盖扣款落库、`executionKey` 重放、
   身份提示无效、各种领域拒绝以及 `occurredAt` 拒绝契约。
 - `tests/app/card-freeze-audit-http.test.ts`：卡片状态变更的授权与审计覆盖（经 `/api/actions/*`），
   用于确认卡片端点不绕过确认、MFA 与审计。

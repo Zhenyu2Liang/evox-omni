@@ -151,6 +151,9 @@ importers:
       pi-weixinbot:
         specifier: 1.0.5
         version: 1.0.5(patch_hash=0425a0b277c56d9dab4e6ba994f1c1e2c6ab6d1331bd0c3e1538dbef169526dd)
+      playwright-core:
+        specifier: 1.64.0
+        version: 1.64.0
       qrcode:
         specifier: 1.5.4
         version: 1.5.4
@@ -200,9 +203,6 @@ importers:
       globals:
         specifier: 17.13.0
         version: 17.13.0
-      playwright-core:
-        specifier: 1.64.0
-        version: 1.64.0
       postcss:
         specifier: 8.5.30
         version: 8.5.30

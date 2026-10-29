@@ -1,5 +1,10 @@
 # 数据仓储
 
+`transaction.ts#listTransactions` 可按 `currency` 精确筛选。
+账单报告使用人民币筛选，避免跨币种金额相加。
+`bill-report-analysis.ts` 通过所属用户与尝试标识校验分析缓存的读取、预算保存和完成提交。
+过期尝试不得覆盖后续尝试，已完成结果不得被并发生成重写。
+
 ## 职责与入口
 
 仓储负责查询、持久化和条件更新。
@@ -41,17 +46,17 @@
 
 ## 串行连接、事务与等待成本
 
-整个 `lib/db/` 只有一条原生 SQLite 连接，`lib/db/serialized-connection.ts` 的 `ConnectionMutex` 是一条 FIFO promise 链：`acquire()` 里 `await previous` **没有任何超时**，`startTransaction` 在拿到锁之前一直挂着。因此本目录的等待上限由「锁何时释放」决定；`maxWait`/`timeout` 是否会打断互斥锁的排队**未经验证，不要假设它们能**。适配器与 Prisma 选项写死在 `lib/db/database.ts`：`new BankingSqliteAdapter({ url, timeout: 10000 })`（better-sqlite3 busy timeout）与 `transactionOptions: { maxWait: 10000, timeout: 10000 }`。
+整个 `lib/db/` 只有一条原生 SQLite 连接，`lib/db/serialized-connection.ts` 的 `ConnectionMutex` 是一条 FIFO promise 链：`acquire()` 里 `await previous` **没有任何超时**，`startTransaction` 在拿到锁之前一直挂着。因此本目录的等待上限由“锁何时释放”决定；`maxWait`/`timeout` 是否会打断互斥锁的排队**未经验证，不得假设可以**。适配器与 Prisma 选项写死在 `lib/db/database.ts`：`new BankingSqliteAdapter({ url, timeout: 10000 })`（better-sqlite3 busy timeout）与 `transactionOptions: { maxWait: 10000, timeout: 10000 }`。
 本目录**没有任何** `$transaction` 传 `maxWait`/`timeout`/`isolationLevel`：全部只传回调，全部走默认 10 s / 10 s。
-数据库「周期入口」不统一：`account.ts`/`transaction.ts`/`card.ts`/`budget.ts`/`subscription.ts`/`investment.ts`/`scheduledTask.ts`/`contact.ts` 与 `executionReceipt.ts` 的默认参数走 `dbClient()`（即 `lib/db/unit-of-work.ts` 的 `currentTransaction()`，能加入当前事务），而 `agentRun.ts`/`task.ts`/`session.ts`/`workflowInvocation.ts`/`workflowRun.ts`/`auditLog.ts`/`securityEvent.ts`/`user.ts` 直连全局 `prisma`，`pendingAction.ts` 与 `circuitBreaker.ts` 的默认参数是 `prisma` 而非 `dbClient()`：在 `withinTransaction` 作用域内不显式传 client 就不会加入该事务，会去排队等同一把互斥锁。
-`executionReceipt.ts:8-10` 的文档注释说默认参数是 `prisma`，实际是 `dbClient()`（`:32`/`:44`）：以代码为准，不要信那段注释。
+数据库“周期入口”不统一：`account.ts`/`transaction.ts`/`card.ts`/`budget.ts`/`subscription.ts`/`investment.ts`/`scheduledTask.ts`/`contact.ts` 与 `executionReceipt.ts` 的默认参数走 `dbClient()`（即 `lib/db/unit-of-work.ts` 的 `currentTransaction()`，能加入当前事务），而 `agentRun.ts`/`task.ts`/`session.ts`/`workflowInvocation.ts`/`workflowRun.ts`/`auditLog.ts`/`securityEvent.ts`/`user.ts` 直连全局 `prisma`，`pendingAction.ts` 与 `circuitBreaker.ts` 的默认参数是 `prisma` 而非 `dbClient()`：在 `withinTransaction` 作用域内不显式传 client 就不会加入该事务，会去排队等同一把互斥锁。
+`executionReceipt.ts:8-10` 的文档注释说默认参数是 `prisma`，实际是 `dbClient()`（`:32`/`:44`）：必须以代码为准，不得采用该注释。
 
 `$transaction` 分布（全部无选项）：`agentRun.ts` 19 处 —— `:39` `beginAgentRun`、`:93` `renewAgentRunLease`、`:118` `appendRuntimeEvent`、`:140` `startInvocationWithEvent`、`:162` `finishInvocationWithEvent`、`:181` `updateInvocationAuthorization`、`:191` `finishAgentRun`、`:251` `synchronizeRunActionInvocations`、`:260` `finalizeReceiptedAgentRun`、`:313` `saveRunCheckpoint`、`:322` `startModelRequest`、`:341` `completeModelRequest`、`:355` `commitRunSession`、`:381` `settlePlanInvocation`、`:392` `scheduleRunRecovery`、`:407` `stopObsoleteRun`、`:429` `restoreInvocationFromReceipt`（仅 `if (!client)`）、`:445` `claimInvocationRetry`、`:456` `settleRecoveredInvocation`；`workflowInvocation.ts` 3 处 —— `:34`/`:93`/`:109`；`circuitBreaker.ts` 2 处 —— `:92` `return client ? apply(client) : prisma.$transaction(apply)`、`:162` `return opts?.client ? run(opts.client) : prisma.$transaction(run)`；`task.ts` 2 处 —— `:226` `releaseTaskExecution` 用全局 `prisma.$transaction`，`:90` `createTaskGraph` 是 `return '$transaction' in client ? client.$transaction(persist) : persist(client)`；`session.ts` `:78`；`pendingAction.ts` `:260`；`workflowRun.ts` `:43` 同为 `'$transaction' in client ? client.$transaction(synchronize) : synchronize(client)`。
 `'$transaction' in client` 是鸭子类型判别：全局 `PrismaClient` 命中 → 新开交互事务（排队等互斥锁），`Prisma.TransactionClient` 句柄（Prisma 从 `TransactionClient` 上去掉了 `$transaction`）→ 内联沿用调用方事务；因此同一个函数有两条代价不同的路径。
 
 单函数内多次串行 await（不在事务中时每次都要排一次互斥锁）：`agentRun.ts:295 listRecoverableAgentRuns` 2 次（`agentTask.findMany` → `agentRun.findMany`，非原子）；`agentRun.ts:285 listPresentationEvents` 2 次；`agentRun.ts:82 assertAgentRunLease` 2 次读取，且被每个写事务各调用一次；`agentRun.ts:240 settleRunActionInvocations` 2 次 + 每个已结算动作 5 次（`settleInvocationFromAction` 的 2 读 + 1 写 + 事件 update+create）；`agentRun.ts:259 finalizeReceiptedAgentRun` 约 5 + 5N；`agentRun.ts:36 beginAgentRun` 8–11 条同事务语句；`workflowInvocation.ts:33 beginWorkflowInvocation` 10–14 条同事务语句（另加 `runtimeFence` 自身）；`task.ts:192 claimTaskExecutionWithGeneration` 2 次（`updateMany` → `findUnique`，非原子）；`task.ts:321 updateTaskNode`（带 `fenceToken`）2 次非原子；`session.ts:45 updateSessionState` 2 次非原子（CAS 后 `findUniqueOrThrow`）；`account.ts:52 incrementBalance` 2 次非原子（靠 `where: { id, balanceMinor: row.balanceMinor }` 做值栅栏）；`pendingAction.ts:276 assertActionMayStart` 3 条；`circuitBreaker.ts:68`/`:140` 各 2 条（`findUnique` + `upsert`，未传 client 时自己包一个事务）。
 
-显式「空写抢锁」语句（只为取得 SQLite 写者，不做业务变更，锁持有到事务结束）：`pendingAction.ts:277 await client.pendingAction.updateMany({ where: { id: actionId }, data: { id: actionId } });`、`contact.ts:28 const locked = await dbClient().user.updateMany({ where: { id: userId }, data: { id: userId } });`（`lockContactOwner`）、`workflowInvocation.ts:37 await tx.agentTask.updateMany({ where: { id: input.taskId }, data: { generation: { increment: 0 } } });`。
+显式“空写抢锁”语句（只为取得 SQLite 写者，不做业务变更，锁持有到事务结束）：`pendingAction.ts:277 await client.pendingAction.updateMany({ where: { id: actionId }, data: { id: actionId } });`、`contact.ts:28 const locked = await dbClient().user.updateMany({ where: { id: userId }, data: { id: userId } });`（`lockContactOwner`）、`workflowInvocation.ts:37 await tx.agentTask.updateMany({ where: { id: input.taskId }, data: { generation: { increment: 0 } } });`。
 
 ## 计划节点的读取与写入原语
 
@@ -71,7 +76,7 @@
 `PendingAction.taskId/nodeId` 在创建时保存计划关联。
 `revokePendingActionsByTask` 撤销指定状态的关联操作。
 待处理操作的批量读取只有两条路径，且默认都不按状态过滤：`listPendingActions`（`pendingAction.ts:121-137`，可选 `sessionId`、`status`（单值等值，不是 `in` 列表）、`limit`，缺省 `DEFAULT_LIMIT = 100`（`:85`），`orderBy: { createdAt: 'desc' }`）与 `listPendingActionsByTask`（`:145-157`，按 `taskId`，可选 `statuses` 用 `in`，`createdAt: 'asc'`，无 `take`）。
-因此 `listPendingActions({ sessionId })` 会把 `locked`/`executed` 等终态行一并返回：把 `locked` 排除出「待决策」列表是调用方的责任（`app/api/actions/route.ts#attentionFor` 让 `locked` 走兜底 `return undefined`），不要把它下沉成仓储默认行为。
+因此 `listPendingActions({ sessionId })` 会把 `locked`/`executed` 等终态行一并返回：把 `locked` 排除出“待决策”列表是调用方的责任（`app/api/actions/route.ts#attentionFor` 让 `locked` 走兜底 `return undefined`），不得将该过滤改为仓储默认行为。
 关联不依赖节点输出中的临时字段。
 `claimPendingAction`（`pendingAction.ts:255-273`）是唯一的待处理操作状态 CAS：单条 `updateMany`，`where` 为 `id` + `status IN input.from`，可选 `userId`/`sessionId`，`data: { status: input.to }`；**返回 `boolean`（`result.count === 1`），返回行数而非行**。
 `to === 'confirmed'` 时先经过 `assertActionMayStart`（人工接管栅栏，`manualReview status='open'` 抛 `CONFLICT`），且此时若 `client === prisma` 会自行 `prisma.$transaction(tx => claimPendingAction(input, tx))` 重入；其它 `to` 值（含 `'locked'`）不走该分支。
@@ -103,7 +108,7 @@ chat 同步路径上的运行仓储往返次数（`appendInTransaction`（`agent
 `startInvocationWithEvent`（`:139`）5 条、`finishInvocationWithEvent`（`:161`）5–6 条、`updateInvocationAuthorization`（`:180`）3 条、`finishAgentRun`（`:190`）7–10 条，各自再 +2 次 BEGIN/COMMIT。
 `settleRunActionInvocations`（`:240`）是唯一的按行循环：`for (const action of actions) await settleInvocationFromAction(action.id, client)`（`:246`），每轮 2–3 条语句且全部在调用方同一事务内，因此 k 个已结算关联动作 = 2 + 3k 条往返，并让该事务与互斥锁持有时间随 k 线性增长。
 本目录没有任何等待型租约：租约与 CAS 冲突一律 fail-fast（`beginAgentRun:66-70` 的 `claimed.count !== 1` 抛 `CONFLICT`、`claimPendingAction:263-272` 返回 `false`），没有 `while` / `for(;;)` / 重试计数 / 轮询 `leaseExpiresAt` 的循环；`scheduleRunRecovery:397` 的 `new Date(Date.now() + 1000 * 2 ** run.recoveryAttempts)` 与 `finishAgentRun:200` 的 `Date.now() + 2000` 只是写入 `nextRecoveryAt` 供 `listRecoverableAgentRuns:304` 比较，从不 `sleep`。
-`claimPendingAction`（`pendingAction.ts:255`）在 `to === 'confirmed'` 且 `client === prisma` 时自开 `prisma.$transaction`（`:260`）：它既不读 `unit-of-work.ts#currentTransaction()`，默认参数也是单例，因此在已有 ALS 事务内部不传 `client` 调用它会试图在单连接上再开一个事务（第二个 `startTransaction` 排在互斥锁队尾），这是调用方必须避免的组合。
+`claimPendingAction`（`pendingAction.ts:255`）在 `to === 'confirmed'` 且 `client === prisma` 时自开 `prisma.$transaction`（`:260`）：它既不读 `unit-of-work.ts#currentTransaction()`，默认参数也是单例，因此在已有 ALS 事务内部不传 `client` 调用它会试图在单连接上再开一个事务（第二个 `startTransaction` 排在互斥锁队尾），这是调用方不得使用的组合。
 `session.ts` 无 `loadSession`：读取入口是 `getSession`（`:26`，1 条 `findUnique`）；`ensureDemoSession`（`:30`）是 `update: {}` 的单条 upsert；`updateSessionState`（`:45`）先一条带可选 `revision` 条件的 `updateMany`，`count !== 1` 立即抛 `CONFLICT`（`:54`），随后用另一次不在同一事务里的 `findUniqueOrThrow`（`:55`）回读——回读可能已看到更高 revision，且两语句之间不持事务。
 
 ## MFA challenge 仓储原语（`pendingAction.ts`）
@@ -129,7 +134,7 @@ chat 同步路径上的运行仓储往返次数（`appendInTransaction`（`agent
 `pendingAction.ts:206 claimPendingActionLease` 自身不含 TTL：`expiresAt` 与 `now` 都由调用方传入，过期条件是 `executionLeaseExpiresAt: { lte: lease.now }`（注释指向 agent 层的 `EXECUTION_LEASE_TTL_MS`）；`clearPendingActionLease`（`:231`）无条件清空两列。`task.ts:179 claimTaskExecution` 与 `:353 claimNodeExecution` 的 `opts.staleBefore` 同样由调用方给定，本目录无默认陈旧窗口。
 `circuitBreaker.ts` 只持久化 `lockedAt`，不含冷却时长（`RESET_COOLDOWN_MS` 在 `lib/constants.ts`，由 `security/circuit-breaker.ts` 施加）。
 分页/扫描上限常量：`pendingAction.ts:85`、`auditLog.ts:53`、`securityEvent.ts:33` 的 `DEFAULT_LIMIT = 100`；`agentRun.ts:287 take: Math.min(Math.max(limit, 1), 501)`；`agentRun.ts:295 listRecoverableAgentRuns(now = new Date(), limit = 100)`。
-错误码嗅探只有一处：`task.ts:314 error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025'` → `NOT_FOUND`。本目录**没有**任何 `SQLITE_BUSY` / `database is locked` / `P2034` / `Transaction already closed` 的字符串匹配或 catch-重试；`executionReceipt.ts:38` 的注释说明 `P2002` 故意不在此处捕获（由调用方识别为「已commit 的同 key 胜者」并重放）。
+错误码嗅探只有一处：`task.ts:314 error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025'` → `NOT_FOUND`。本目录**没有**任何 `SQLITE_BUSY` / `database is locked` / `P2034` / `Transaction already closed` 的字符串匹配或 catch-重试；`executionReceipt.ts:38` 的注释说明 `P2002` 故意不在此处捕获（由调用方识别为“已commit 的同 key 胜者”并重放）。
 
 ## Agent 运行租约与恢复（`agentRun.ts`）
 
@@ -146,7 +151,7 @@ chat 同步路径上的运行仓储往返次数（`appendInTransaction`（`agent
 `settleInvocationFromAction(actionId, client)`（`agentRun.ts:466`）的映射：`executed`（且 `catalogEntry(toolName).effect === 'read'`，结果必须 `{ok:true}`）→ `completed`；`cancelled` → `cancelled`；`failed` → `failed` + `TOOL_FAILED`；`locked` → `failed` + `MFA_LOCKED`（明确的拒绝，不是"结果未知"，因此绝不用 `needs_reconciliation`）；`needs_reconciliation` → `needs_reconciliation` + `COMMIT_STATE_UNKNOWN`。
 它先校验身份（`invocation.run.sessionId/userId` 与 `action.sessionId/userId` 一致、`toolName` 一致，否则 `CONFLICT`），`invocation.status === 'completed'` 时早退，写入用 `status: { not: 'completed' }` 的 CAS，只有 `count === 1` 才追加 `invocation_settled_from_action` 事件。
 私有 helper `settleRunActionInvocations(runId, sessionId, userId, client)`（`:240`）按 run 取 invocation，再取 `sessionId + userId + invocationId ∈ … + status ∈ SETTLED_PENDING_ACTION_STATUSES`（含 `locked`）的 action，逐个调用 `settleInvocationFromAction`；`synchronizeRunActionInvocations`（`:250`）与 `finalizeReceiptedAgentRun`（`:259`）共用它。
-`finalizeReceiptedAgentRun` 在「所有 invocation 已终态」这条守卫**之前**先结算 linked 终态 action（含 `locked`），因此「唯一未决动作被锁定」的 run 能收尾为 `failed` / `errorCode = MFA_LOCKED`，而不会永久挂住。
+`finalizeReceiptedAgentRun` 在“所有 invocation 已终态”这条守卫**之前**先结算 linked 终态 action（含 `locked`），因此“唯一未决动作被锁定”的 run 能收尾为 `failed` / `errorCode = MFA_LOCKED`，而不会永久挂住。
 它的 `outstanding` 统计用 `RUN_BLOCKING_PENDING_ACTION_STATUSES`（`locked` 按构造不阻塞）；其余守卫未放宽：跳过 `running`/`completed`/`checkpointStage === 'workflow_only'`，`checkpointJson` 存在且 `checkpointStage !== 'session_committed'` 时返回，`invocations.length === 0` 或仍有非终态 invocation 时返回，`completed` 但 `resultJson === null` 时返回。
 
 锁定的结算路径由 `tests/unit/lib/agentRun.locked-settlement.test.ts` 覆盖（`locked` → invocation `failed` + `MFA_LOCKED`，run 收尾 `failed`）。

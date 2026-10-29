@@ -24,6 +24,7 @@
 | 模块职责与执行顺序 | [architecture.md](architecture.md) |
 | 事件、检查点、重试与恢复 | [agent-durability.md](agent-durability.md) |
 | 金融单位与结算 | [financial-values.md](financial-values.md) |
+| 月度与年度账单报告、统计口径、导出与专项测试 | [bill-reports.md](bill-reports.md) |
 | 理财净值、份额与收益口径 | [investments.md](investments.md) |
 | 卡片增删、结算账户绑定与余额展示 | [card-management.md](card-management.md) |
 | 号码与卡片的身份判定、候选筛选、完整号码边界与补全 | [identity-resolution.md](identity-resolution.md) |
@@ -68,7 +69,7 @@
 本规则必须按 `for-instruction-writing` 检查。
 机器检查报告的错误必须修复。
 Anti-Echo 疑点必须删除或记录具体保留理由。
-机器检查的 G4「动作藏在套话里」与 G5「事实或数量不清楚」常被本仓库术语命中（「已实现收益」「已实现功能说明」「部分赎回」「实现见」），属误报，记录理由后保留。
+机器检查的 G4“动作藏在套话里”与 G5“事实或数量不清楚”常被本仓库术语命中（“已实现收益”“已实现功能说明”“部分赎回”“实现见”），属误报，记录理由后保留。
 文档变化后，必须重新核验疑点。
 复核记录可保存到工作区的 `.pnpm-store/`。
 

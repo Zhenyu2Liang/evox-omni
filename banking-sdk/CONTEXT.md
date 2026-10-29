@@ -1,5 +1,20 @@
 # 银行 SDK
+
+`dashboard.getOverview` 与 `card.getCardPage` 各在一个事务快照内组合页面数据。
+账户明细复用 `account.getAccounts` 的脱敏投影，账户存在不代表已发行银行卡。
+
 SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行写入。权限层级、人工确认、MFA 与熔断决策属于安全层。SDK 从不执行模型生成的代码、SQL 或 shell 命令。
+
+## 账单报告
+
+`index.ts` 的 `banking.report` 导出 `bill-report.ts`。
+`getBillReport(userId, query)` 提供月度与年度人民币账单。
+参数检查由 `resolveBillReportQuery` 统一负责。
+一次带所属用户、币种和时间范围的查询读取本期与上期。
+报告不使用交互列表的条数上限，不修改余额或异常标记。
+所有金额以整数分求和，并返回小数字符串。
+完整口径与接口见 [bill-reports.md](../docs/cn/bill-reports.md)。
+
 ## 公开契约
 能力从 `banking-sdk/index.ts` 导入；DTO 位于 `types.ts`。金额输入与输出都是十进制字符串。仓储持久化使用 bigint 人民币分保存已记账金额，使用规范十进制 TEXT 保存收益率与估值。`MoneyInput` 只接受字符串。`normalizeMoney` 校验已记账精度；缺省值不等于零。
 产品年化收益率是 `annualYieldRate`，为无量纲比例，且恒不为负：创建时 `lib/db/repositories/investment.ts#createProduct` 与投影时 `investment.ts#toProductView` 都经 `nonNegativeDecimal` 上闸，负数会抛 `VALIDATION` 而不是被渲染。因此展示层的 `lib/decimal.ts#rateRatioToPercent`（自带非负门）只适用于产品年化，绝不适用于持仓收益率。投资持仓按净值与份额核算：`latestNetValuePerUnit` 是规范十进制净值，`shares` 是持有份额，`principalAmountMinor` 是剩余成本基数。公开持仓的 `amount` 是剩余持仓成本，`marketValue` 是未取整估值，`profit` 是未实现收益，`realizedProfit` 是已实现收益，`cumulativeProfit` 是累计收益。百分比只在展示层转换。

@@ -8,7 +8,7 @@ import SidebarNavigation, { Brand } from './SidebarNavigation';
 import { getNavigationTitle } from './navigation';
 import { AssistantHelpButton, AssistantHelpProvider } from '@/components/help/AssistantHelp';
 
-export default function AppShell({ children }: { children: React.ReactNode }) {
+export default function AppShell({ children, userName }: { children: React.ReactNode; userName?: string }) {
   const pathname = usePathname();
   const isChatWorkspace = pathname === '/agent';
   const { t } = useI18n();
@@ -61,7 +61,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       <a href="#workspace" className="sr-only z-50 rounded-xl bg-banking-surface px-4 py-3 text-banking-deep shadow-lg focus:not-sr-only focus:fixed focus:left-4 focus:top-4">{t('app.skipContent')}</a>
       <aside aria-label={t('app.sidebar')} className="sticky top-0 hidden h-dvh w-64 shrink-0 flex-col border-r border-banking-border/80 bg-banking-surface lg:flex">
         <div className="px-7 pb-4 pt-7"><Brand /></div>
-        <SidebarNavigation pathname={pathname} />
+        <SidebarNavigation pathname={pathname} userName={userName} />
       </aside>
 
       <header className="sticky top-0 z-20 flex h-16 items-center justify-between gap-3 border-b border-banking-border bg-banking-surface/95 px-4 backdrop-blur-sm lg:hidden">
@@ -88,7 +88,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
             </button>
           </div>
-          <SidebarNavigation pathname={pathname} onNavigate={closeMenu} />
+          <SidebarNavigation pathname={pathname} onNavigate={closeMenu} userName={userName} />
         </div>
       </dialog>
 

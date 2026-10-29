@@ -9,6 +9,8 @@ route handlers. Shared transport support lives in the private `_lib` folder.
 
 ## Routing Table
 
+- `./bills/reports/` -> monthly/annual JSON/CSV/HTML/PDF reports and explicit bounded model analysis; GET only reuses matching cached analysis (see `bills/reports/CONTEXT.md`).
+
 - `./cards/` -> virtual-card HTTP surface: consume, consumptions, card list/add/delete and manual card changes (see `cards/CONTEXT.md`).
 - `./cards/[id]/` -> per-card routes `consume` and `consumptions` (see `cards/[id]/CONTEXT.md`).
 - `./dashboard/` -> `GET /api/dashboard` read model: envelope, the serialized `DashboardSummary` field list and the asset/credit summing rules (see `dashboard/CONTEXT.md`).

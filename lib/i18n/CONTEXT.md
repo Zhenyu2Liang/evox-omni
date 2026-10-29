@@ -138,7 +138,9 @@
 该主金额文字存在不等于重新使用旧详情键，验收同时核对金额。
 浏览器验收断言的卡片标签来自 `tests/e2e/card-labels.e2e-helper.ts` 的 `CARD_LABEL`，它用 `createTranslator('zh-CN')` 读目录而不是复制字符串。
 
-本目录没有“卡号”“账号”“尾号”“结算账户”这类键：脱敏卡号是 `CardView.numberMasked`（`****6688`，4 个 `*` + 4 位数字）原样渲染，关联账号是 `CardView.linkedAccountNumber`，都不经目录；“结算账户”只出现在 `chat.policy.consume_virtual_card` 的策略描述里。
+`cards.balance.accountNumber` 显示“账户尾号 {number}”，供余额卡片与两页账户明细共用。
+`pages.overview.linkedCards` 与 `pages.overview.noLinkedCard` 说明真实银行卡关联。
+账户编号与银行卡号必须区分；脱敏编号保留原始数字，不作翻译。
 `/cards` 页自身的键集中在 `pages.cards.*`（`messages/pages.zh-CN.json:30-74` 与 `pages.en.json:30-74` 行号一致）；其中 `pages.cards.summary`（`{count}`）与 `pages.cards.verificationFailed`（`{attempts}`）含占位符，断言前必须先补值，其余卡片页键是纯字面量。
 `tests/e2e/card-labels.e2e-helper.ts` 尚未收录类型键、状态键与三条不可用提示键（`cardUnavailable`/`cardFrozenNotice`/`cardLostNotice`）。
 `pages.cards.consume*` 提供卡片消费界面（模拟消费表单、消费结果提示与消费记录）的中英文标签。
@@ -232,6 +234,12 @@
 - 偏好 cookie 不是身份 cookie，不授予任何权限。
 - 服务端数据访问保留在服务端模块；本地化不构成客户端数据库导入的理由。
 - 中英文目录必须同时登记相同键与相同占位符，单元测试校验键与占位符一致性。
+
+## 账单报告
+
+`pages.reports.*` 同时用于报告页面、筛选表单与导出文件。
+中文和英文目录必须保持键与插值一致。
+导出语言由页面链接的 `locale` 指定，不改写商户或备注事实。
 
 ## 验证
 

@@ -1,5 +1,9 @@
 # 测试约定
 
+账单报告由 SDK、HTTP 与独立浏览器入口共同覆盖。
+分段汇总、SVG 转义、模型缓存与预算测试分别位于 `unit/bill-report-presentation.test.ts` 和 `integration/bill-report-analysis.test.ts`。
+专项命令和数据库范围见 [bill-reports.md](../docs/cn/bill-reports.md#回归测试)。
+
 ## 目录与范围
 
 | 目录 | 范围 |

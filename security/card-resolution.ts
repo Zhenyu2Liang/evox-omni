@@ -34,6 +34,11 @@ import type { CardType } from '@/banking-sdk';
 import { listCards } from '../lib/db/repositories/card';
 import { maskCardNumber } from '../lib/mask';
 
+/** Card mutations resolve selectors before exact-ID validation in both direct calls and workflows. */
+export const CARD_TARGET_TOOLS: readonly string[] = [
+  'set_card_limit', 'freeze_card', 'unfreeze_card', 'consume_virtual_card', 'report_lost_card', 'replace_card',
+];
+
 /** The card selector slots a card call may carry. */
 type SelectorKind = 'cardId' | 'cardType' | 'cardTail' | 'cardNumber';
 

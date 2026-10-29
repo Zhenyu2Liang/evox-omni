@@ -4,9 +4,10 @@ import { bankingBaseUrl } from './config';
 import type { TaskPlan } from '../../lib/contracts/task';
 import type { ScheduleInbox, ScheduleTickResult } from '../../lib/contracts/schedule';
 import { renderBusinessCard, channelText, renderPlan, type SurfacedAction } from './presentation';
-import { publicToolSummary } from '../../lib/tool-feedback';
+import { publicToolError, publicToolSummary } from '../../lib/tool-feedback';
 import { securityNotice } from '../../lib/public-text';
 import { createTranslator } from '../../lib/i18n/shared';
+import { localizeActionTitle, localizeActionFieldLabel, localizeActionFieldValue } from '../../lib/i18n/display';
 
 export interface ActionResult {
   actionId: string; ok: boolean; status: string; message?: string; requiresMfa?: boolean;
@@ -42,7 +43,7 @@ export class BankingHttpClient implements BankingChannel {
     const result = await response.json() as { ok: boolean; data: T; error?: { code: string; message: string } };
     if (!response.ok || !result.ok) {
       if (response.status < 500 && typeof result.error?.message === 'string' && /^[A-Z_]+$/.test(result.error.code)) {
-        throw new BankingApiError(`服务端提示（${result.error.code}）：${result.error.message.slice(0, 400)}\n请核对操作记录后处理。`);
+        throw new BankingApiError(publicToolError(result.error.message, createTranslator('zh-CN'), 'chat.error.toolFailed', result.error.code));
       }
       // 不回显请求、HTTP 原文或验证码；业务不明时不推断“资金未变”。
       throw new Error('银行服务暂未完成请求，请在网页核对操作记录后再处理。');
@@ -66,14 +67,25 @@ export class BankingHttpClient implements BankingChannel {
   tickSchedules(): Promise<ScheduleTickResult> { return this.request('/api/schedules/tick', {}); }
 }
 
-export function renderAction(id: string, summary: PendingActionSummary): string {
-  return [summary.title, ...summary.fields.map(field => `${field.label}：${field.value}`),
-    `风险等级：${summary.tier}`, `操作编号：${id}`, '尚未执行。',
-    `确认：/确认 ${id}`, ...(summary.requiresMfa ? [`确认后验证：/验证 ${id} 六位验证码`] : []),
-    `取消：/取消 ${id}`].join('\n');
+export function renderAction(id: string, summary: PendingActionSummary, reference = id, sequential = false): string {
+  const t = createTranslator('zh-CN');
+  const title = localizeActionTitle(summary.title, t);
+  const fields = summary.fields.flatMap(field => {
+    const label = localizeActionFieldLabel(field.label, t);
+    const value = localizeActionFieldValue(field, t);
+    if (label === t('chat.field.risk') || label === t('chat.field.operation') && value === title) return [];
+    return [`${label}：${value}`];
+  });
+  return [[title, ...fields,
+    `${t('chat.field.risk')}：${t(`chat.risk.${summary.tier}`)}`, ...(sequential ? [] : [`操作编号：${reference}`]), '尚未执行。',
+  ].join('\n'), [
+    `确认：/确认${sequential ? '' : ` ${reference}`}`, ...(summary.requiresMfa ? [`确认后验证：/验证${sequential ? '' : ` ${reference}`} 六位验证码`] : []),
+    `取消：/取消${sequential ? '' : ` ${reference}`}`].join('\n')].join('\n\n');
 }
 
 export interface RenderEventOptions {
+  actionReference?: (id: string) => string;
+  renderAction?: (id: string, action: PendingActionSummary) => string;
   /**
    * Append the "本次请求已处理…" sentence when no event produced any text. A chat turn always says
    * something; a settle reply already carries its own authoritative status block.
@@ -84,7 +96,7 @@ export interface RenderEventOptions {
 /** 只发送服务端已完成核验的 message_end，绝不转发原始流或工具参数。 */
 export function renderEvents(events: readonly AgentStreamEvent[], options: RenderEventOptions = {}): { text: string; actionIds: string[]; planIds: string[] } {
   const messages = new Map<string, string>();
-  const gates = new Map<string, string>();
+  const gates = new Map<string, PendingActionSummary>();
   const notices: string[] = [];
   const cards = new Map<string, string>();
   const plans = new Map<string, TaskPlan>();
@@ -101,10 +113,10 @@ export function renderEvents(events: readonly AgentStreamEvent[], options: Rende
   };
   const addCard = (card: import('../../lib/contracts/agent').ChatCard) => {
     if (card.type === 'confirmation' && card.action.actionId) {
-      gates.set(card.action.actionId, renderAction(card.action.actionId, card.action)); return;
+      gates.set(card.action.actionId, card.action); return;
     }
     if (card.type === 'mfa') {
-      if (card.action) gates.set(card.actionId, renderAction(card.actionId, card.action)); return;
+      if (card.action) gates.set(card.actionId, card.action); return;
     }
     if (card.type === 'plan') { addPlan(card.plan); return; }
     // 查询类保留最新投影；回执按公开内容去重，避免 card + message_end 双发。
@@ -122,8 +134,8 @@ export function renderEvents(events: readonly AgentStreamEvent[], options: Rende
     if (event.type === 'message_end') for (const card of event.message.cards || []) addCard(card);
     if (event.type === 'message_end') for (const tool of event.message.toolEvents || []) addFeedback(tool);
     if (event.type === 'tool_end') addFeedback(event.toolEvent);
-    if (event.type === 'confirmation_required') gates.set(event.actionId, renderAction(event.actionId, event.action));
-    if (event.type === 'mfa_required' && event.action) gates.set(event.actionId, renderAction(event.actionId, event.action));
+    if (event.type === 'confirmation_required') gates.set(event.actionId, event.action);
+    if (event.type === 'mfa_required' && event.action) gates.set(event.actionId, event.action);
     if (event.type === 'card') addCard(event.card);
     if (event.type === 'plan_update') addPlan(event.plan);
     if (event.type === 'tool_end' && event.toolEvent.status === 'success' &&
@@ -144,7 +156,8 @@ export function renderEvents(events: readonly AgentStreamEvent[], options: Rende
   }
   for (const id of settled) gates.delete(id);
   for (const id of locked) gates.delete(id);
-  const body = [...messages.values(), ...cards.values(), ...[...plans.values()].map(renderPlan), ...gates.values(),
+  const body = [...messages.values(), ...cards.values(), ...[...plans.values()].map(renderPlan),
+    ...[...gates].map(([id, action]) => options.renderAction ? options.renderAction(id, action) : renderAction(id, action, options.actionReference?.(id))),
     ...new Set([...feedback.values(), ...notices])].filter(Boolean).join('\n\n');
   const text = body || (options.emptyNotice === false ? '' : '本次请求已处理，请在网页查看业务详情；没有确认或验证的业务不会执行。');
   return { text, actionIds: [...gates.keys()], planIds: [...plans.keys()] };

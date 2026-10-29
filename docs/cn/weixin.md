@@ -38,13 +38,16 @@ pnpm weixin:start
 ## 确认与验证
 
 可直接用自然语言查询或提出业务请求。
-待确认业务回复包含服务端操作编号和操作详情。
+待确认业务逐笔显示操作详情。
 核对金额、收款人和风险等级后，使用显式命令：
 
 | 命令 | 作用 |
 | --- | --- |
 | `/帮助`、`/help` | 查看通道命令 |
 | `/待办` | 展示当前演示账户的待处理操作及真实状态 |
+| `/确认` | 确认当前显示的这一笔操作 |
+| `/验证 六位验证码` | 为当前已确认的操作提交验证码 |
+| `/取消` | 取消当前显示的这一笔操作 |
 | `/确认 操作编号` | 确认指定操作；红色操作继续等待验证码 |
 | `/验证 操作编号 六位验证码` | 为已确认的红色操作提交验证码 |
 | `/取消 操作编号` | 取消指定待处理操作 |
@@ -55,16 +58,30 @@ pnpm weixin:start
 | `/回退记录 任务编号` | 撤回可撤销的预算、定时记录；不撤销已入账交易 |
 | `/定时任务`、`/检查到期` | 查看计划与通知，或执行一次真实时间的到期检查 |
 
+核对当前操作后，直接发送 `/确认`。
+需要验证码时，再发送 `/验证 123456`。
+其中 `123456` 仅为命令示例，实际验证码以验证流程为准。
+多笔操作按队列顺序逐笔显示，每笔分别确认。
+当前操作完成或取消后，显示下一笔详情，等待再次确认。
+需要验证码的操作会停在当前步骤，验证通过后才继续。
+重启后保留当前操作和队列顺序。
+如果当前操作已在网页结束，会先展示下一笔，不会直接确认下一笔。
+发送 `/待办` 可重新查看当前操作和剩余数量。
+
+仍支持带短编号或完整编号的兼容命令，例如 `/确认 1`。
+每个短编号固定指向原操作，重启后保持不变。
+
 普通聊天中的“确认”不构成执行授权。
 验证码命令不会转发给模型，也不保存消息正文。
-通道只接受已向绑定用户展示过的操作编号。
+通道只允许确认已向绑定用户展示过详情的操作。
 错误验证码、累计风险升级和熔断仍由银行服务处理。
 模拟验证码和银行功能边界见[项目 README](../../README.md)。
 
 ### 验证失败与锁定回复
 
 回复只由服务端的权威字段生成：`status`、`code` 和 `failure`。
-第一段恒为状态块，写明操作编号和状态。
+第一段恒为状态块，写明操作状态。
+下方示例采用带编号的兼容格式，当前队列操作仅显示状态。
 
 第 1、2 次验证码错误时，操作仍为 `awaiting_mfa`。
 此时回复保留验证入口，并给出剩余次数：
@@ -247,7 +264,7 @@ pnpm weixin:logout
 ## 测试
 
 ```sh
-pnpm exec vitest run tests/unit/weixin-channel.test.ts tests/unit/weixin-presentation.test.ts tests/unit/weixin-lock-presentation.test.ts tests/integration/weixin-protocol.test.ts
+pnpm exec vitest run tests/unit/weixin-action-references.test.ts tests/unit/weixin-channel.test.ts tests/unit/weixin-presentation.test.ts tests/unit/weixin-lock-presentation.test.ts tests/integration/weixin-protocol.test.ts
 pnpm exec tsx tests/e2e/weixin-live.e2e.ts
 ```
 

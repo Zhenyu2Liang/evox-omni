@@ -28,7 +28,7 @@ export async function runWeixinCommand(args = process.argv.slice(2)): Promise<vo
   try {
     if (command === 'login') await loginWeixin(store, flags.includes('--force'), shutdown.signal, report);
     if (command === 'start') await runWeixinWorker(store, new BankingHttpClient(config.bankingUrl), shutdown.signal, report);
-    if (command === 'logout') { await store.save(emptyState()); report('本地微信登录与绑定已清除。'); }
+    if (command === 'logout') { await store.save(emptyState((await store.load()).nextActionNumber)); report('本地微信登录与绑定已清除。'); }
   } finally {
     process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop);
     await release();

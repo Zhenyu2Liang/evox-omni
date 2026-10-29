@@ -80,6 +80,7 @@
     "执行时间（北京时间）": "chat.field.executionTime",
     "任务类型": "chat.field.taskType",
     "任务内容": "chat.field.taskContent",
+    "备注": "business.transactions.remark",
     "赎回份额": "chat.field.redemptionShares",
     "成交净值": "chat.field.netValue",
     "净值日期": "chat.field.netValueDate",

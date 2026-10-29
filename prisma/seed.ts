@@ -454,6 +454,7 @@ async function resetSeededTables(): Promise<void> {
   // stable product ids we own), so no other user's rows or unrelated tables are touched.
   await prisma.cardLimit.deleteMany({ where: { cardId: { in: cardIds } } });
   await prisma.transaction.deleteMany({ where: { userId: USER_ID } });
+  await prisma.billReportAnalysis.deleteMany({ where: { userId: USER_ID } });
   await prisma.investmentHolding.deleteMany({ where: { userId: USER_ID } });
   await prisma.subscription.deleteMany({ where: { userId: USER_ID } });
   await prisma.budget.deleteMany({ where: { userId: USER_ID } });

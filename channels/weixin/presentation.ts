@@ -9,6 +9,7 @@ import { formatDecimalCNY, multiplyDecimal, rateRatioToPercent } from '../../lib
 import { businessCalendarParts, formatDateTime } from '../../lib/date';
 import { isInternalDiagnostic, safePublicText } from '../../lib/public-text';
 import { createTranslator, type MessageKey, type Translator } from '../../lib/i18n/shared';
+import { localizeActionTitle } from '../../lib/i18n/display';
 
 const LABELS: Record<string, string> = {
   pending: '等待确认', awaiting_mfa: '等待验证码', confirmed: '已确认，正在处理', executed: '已执行', failed: '失败',
@@ -16,7 +17,7 @@ const LABELS: Record<string, string> = {
   recoverable: '可恢复原操作', reconciliation: '结果待人工核对', running: '执行中', paused: '已暂停',
   waiting_confirmation: '等待操作确认', waiting_verification: '等待验证码', success: '已完成', skipped: '已跳过',
   ACTIVE: '正常', FROZEN: '已冻结', LOST: '已挂失', PENDING: '待开通', HOLDING: '持有中', REDEEMED: '已赎回',
-  CANCELLED: '已取消', SCHEDULED: '尚未到期分发', DISPATCHING: '正在分发', AWAITING_CONFIRMATION: '等待确认或验证',
+  CANCELLED: '已取消', SCHEDULED: '待执行', DISPATCHING: '正在分发', AWAITING_CONFIRMATION: '等待确认或验证',
   DONE: '已完成', FAILED: '失败', CHECKING: '活期账户', SAVINGS: '储蓄账户', CREDIT: '信用卡', DEBIT: '借记卡', VIRTUAL: '虚拟卡',
   MONTHLY: '月', QUARTERLY: '季度', YEARLY: '年', REMINDER: '提醒', PAYMENT: '付款', TRANSFER: '转账',
   RESERVED: '已登记', USED: '已使用', RELEASED: '已释放',
@@ -37,8 +38,8 @@ export function channelText(message: string | undefined, t: Translator, fallback
 const LIMIT = 20;
 function rows<T>(items: T[], render: (item: T) => string): string {
   if (!Array.isArray(items)) throw new Error('Invalid public list');
-  return items.slice(0, LIMIT).map(render).join('\n') +
-    (items.length > LIMIT ? `\n仅展示前 ${LIMIT} 条，共 ${items.length} 条；可缩小查询范围。` : '');
+  return items.slice(0, LIMIT).map((item, index) => `${index + 1}. ${render(item)}`).join('\n\n') +
+    (items.length > LIMIT ? `\n\n仅展示前 ${LIMIT} 条，共 ${items.length} 条；可缩小查询范围。` : '');
 }
 const phone = (value: string) => /^\d{11}$/.test(value) ? `${value.slice(0, 3)}****${value.slice(-4)}` : value;
 
@@ -101,7 +102,7 @@ export function renderPlan(plan: TaskPlan): string {
     available.push(`/回退记录 ${plan.id}`, '回退仅撤回可撤销记录，不撤销已入账交易。');
   }
   return [`任务：${plan.goal}`, `任务编号：${plan.id}`, `状态：${label(plan.status)}`,
-    ...plan.nodes.map(node => `${node.name}：${label(plan.results.find(result => result.id === node.id)?.status || 'pending')}`),
+    ...plan.nodes.map((node, index) => `${index + 1}. ${node.name}：${label(plan.results.find(result => result.id === node.id)?.status || 'pending')}`),
     ...plan.results.filter(result => result.compensation).map(result => `${result.name}：${result.compensation!.message}`),
     ...available].join('\n');
 }
@@ -125,7 +126,11 @@ function renderCard(card: ChatCard): string {
     }
     case 'transactions': {
       const data = card.data as TransactionView[];
-      return `交易记录（${data.length} 条）\n${rows(data, row => `${formatDateTime(row.occurredAt)} ${row.merchant} ${formatCNY(row.amount)}（${row.category}${row.isAnomaly ? '，可疑交易' : ''}）`) || '没有匹配的交易。'}`;
+      return `交易记录（${data.length} 条）\n${rows(data, row => [
+        `${formatDateTime(row.occurredAt)} ${row.merchant}`,
+        `金额：${formatCNY(row.amount)}；分类：${row.category}${row.isAnomaly ? '；可疑交易' : ''}`,
+        row.remark?.trim() ? `备注：${row.remark}` : '',
+      ].filter(Boolean).join('\n')) || '没有匹配的交易。'}`;
     }
     case 'spending': {
       const data = card.data as SpendingAnalysis;
@@ -157,11 +162,11 @@ function renderCard(card: ChatCard): string {
       return parts.join('\n\n') || '没有可展示的理财结果。';
     }
     case 'subscriptions': return `订阅与代扣\n${rows(card.data as SubscriptionView[], row =>
-      `${row.name}：${label(row.status)}，${formatCNY(row.amount)}/${label(row.cycle)}\n${row.status === 'ACTIVE' ? `下次扣费：${formatDateTime(row.nextChargeAt)}；` : '已取消续费；'}续费提醒：${row.remind ? '已开启' : '未开启'}`) || '没有订阅。'}`;
+      `${row.name}：${label(row.status)}\n费用：${formatCNY(row.amount)}/${label(row.cycle)}\n${row.status === 'ACTIVE' ? `下次扣费：${formatDateTime(row.nextChargeAt)}\n` : '已取消续费\n'}续费提醒：${row.remind ? '已开启' : '未开启'}`) || '没有订阅。'}`;
     case 'contacts': return `联系人\n${rows(card.data, row => `${row.name}（${phone(row.phone)}${row.bank ? `，${row.bank}` : ''}）${row.remark ? `：${row.remark}` : ''}`) || '没有匹配的联系人。'}`;
     case 'dashboard': return [`资产总览`, `总资产：${formatCNY(card.data.totalAssets)}`, `活期余额：${formatCNY(card.data.checkingBalance)}`,
       `可用授信：${formatCNY(card.data.creditAvailable)}`, `${card.data.month} 已入账消费：${formatCNY(card.data.monthSpend)}`].join('\n');
-    case 'scheduled': return `${card.created ? '已创建定时任务' : '定时任务'}\n${rows(card.data, row => `${row.name}：${label(row.kind)}，${formatDateTime(row.runAt)}，${label(row.status)}${row.requiresConfirmation ? '；到期仍需确认或验证' : ''}`) || '没有定时任务。'}\n到期后可发送 /检查到期，后台不会代替用户确认付款。`;
+    case 'scheduled': return `${card.created ? '已创建定时任务' : '定时任务'}\n${rows(card.data, row => `${row.name}\n类型：${label(row.kind)}\n计划时间：${formatDateTime(row.runAt)}\n状态：${label(row.status)}${row.requiresConfirmation ? '\n付款仍需确认或验证' : ''}`) || '没有定时任务。'}\n\n发送 /检查到期 可检查到期任务；付款仍需确认或验证。`;
     case 'receipt': {
       const data = card.data;
       if (data.kind === 'budget') return `预算记录：${data.name}\n金额：${formatCNY(data.amount)}\n状态：${label(data.status)}\n仅保存预算记录，不冻结或转移账户资金。`;
@@ -176,15 +181,15 @@ function renderCard(card: ChatCard): string {
 }
 
 export type SurfacedAction = PendingAction & { attention?: 'decision' | 'processing' | 'recoverable' | 'reconciliation' };
-export function renderAttention(action: SurfacedAction): string | undefined {
+export function renderAttention(action: SurfacedAction, reference = action.id): string | undefined {
   if (['pending', 'awaiting_mfa'].includes(action.status) && (!action.attention || action.attention === 'decision')) return undefined;
-  return [`操作：${action.summary.title}`, `操作编号：${action.id}`, `状态：${label(action.attention || action.status)}`,
-    action.attention === 'recoverable' ? `恢复原操作：/恢复操作 ${action.id}` : '',
+  return [`操作：${localizeActionTitle(action.summary.title, createTranslator('zh-CN'))}`, `操作编号：${reference}`, `状态：${label(action.attention || action.status)}`,
+    action.attention === 'recoverable' ? `恢复原操作：/恢复操作 ${reference}` : '',
     '该记录不能重新确认；结果不明时请核对操作记录，不要重复办理。'].filter(Boolean).join('\n');
 }
 
 export function renderScheduleInbox(inbox: ScheduleInbox): string {
-  return [`定时任务`, rows(inbox.tasks, row => `${row.name}（${row.id}）\n${formatDateTime(row.runAt)}：${label(row.status)}`) || '没有任务。',
-    '提醒通知', rows(inbox.notifications, row => `${formatDateTime(row.createdAt)}：${row.message}`) || '没有通知。',
-    '发送 /检查到期 可执行一次服务器到期检查；付款仍需确认或验证。'].join('\n');
+  return [['定时任务', rows(inbox.tasks, row => `${row.name}\n任务编号：${row.id}\n计划时间：${formatDateTime(row.runAt)}\n状态：${label(row.status)}`) || '没有任务。'].join('\n'),
+    ['提醒通知', rows(inbox.notifications, row => `${formatDateTime(row.createdAt)}\n${row.message}`) || '没有通知。'].join('\n'),
+    '发送 /检查到期 可检查到期任务；付款仍需确认或验证。'].join('\n\n');
 }
