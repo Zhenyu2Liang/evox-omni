@@ -1,108 +1,76 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1390" viewBox="0 0 1440 1390" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1490" viewBox="0 0 1920 1490" role="img" aria-labelledby="title desc">
 <title id="title">转账请求执行时序</title>
-<desc id="desc">转账依次经过对象解析、原操作持久化、用户确认或验证、执行前风险复核及事务提交；风险升级时停留待验证，不发起扣款。</desc>
-<defs>
-<style>text{font-family:"Microsoft YaHei","PingFang SC","Noto Sans CJK SC",Arial,sans-serif} .wire{fill:none;stroke-linecap:round;stroke-linejoin:round}</style>
-<marker id="a-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="#25343A" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></marker>
-<marker id="a-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="#65737A" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></marker>
-<marker id="a-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="#BB563F" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></marker>
-<marker id="a-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="#32786E" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></marker>
-<marker id="a-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="#547A96" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></marker>
-<marker id="a-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="#996D2C" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></marker>
-<marker id="a-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="#77858C" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></marker>
-</defs>
-<rect x="0" y="0" width="1440" height="1390" rx="0" fill="#FBFAF7"/>
-<rect x="48" y="39" width="47" height="47" rx="13" fill="#BB563F"/>
-<text x="71.5" y="70" font-size="20" font-weight="700" fill="#FFFFFF" text-anchor="middle">02</text>
-<text x="112" y="75" font-size="34" font-weight="700" fill="#25343A" text-anchor="start">转账请求执行时序</text>
-<text x="1368" y="62" font-size="21" font-weight="700" fill="#25343A" text-anchor="end">万象柜坊</text>
-<text x="1368" y="87" font-size="15" font-weight="600" fill="#65737A" text-anchor="end">EvoX Omni</text>
-<text x="112" y="109" font-size="18" font-weight="400" fill="#65737A" text-anchor="start">提出操作、确认复核、事务提交：每个阶段都有服务端检查</text>
-<path class="wire" d="M48 135 L1392 135" stroke="#D9DEDC" stroke-width="1"/>
-<path class="wire" d="M48 135 L140 135" stroke="#BB563F" stroke-width="3"/>
-<rect x="25" y="168" width="190" height="80" rx="12" fill="#FFFFFF" stroke="#D9DEDC" stroke-width="1"/>
-<text x="120" y="201" font-size="21" font-weight="600" fill="#25343A" text-anchor="middle">用户</text>
-<text x="120" y="228" font-size="16" font-weight="400" fill="#65737A" text-anchor="middle">发起与授权</text>
-<path class="wire" d="M120 250 L120 1287" stroke="#D9DEDC" stroke-width="1.4" stroke-dasharray="5 7"/>
-<rect x="260" y="168" width="190" height="80" rx="12" fill="#FFFFFF" stroke="#D9DEDC" stroke-width="1"/>
-<text x="355" y="201" font-size="21" font-weight="600" fill="#25343A" text-anchor="middle">Web / 微信</text>
-<text x="355" y="228" font-size="16" font-weight="400" fill="#65737A" text-anchor="middle">交互渠道</text>
-<path class="wire" d="M355 250 L355 1287" stroke="#D9DEDC" stroke-width="1.4" stroke-dasharray="5 7"/>
-<rect x="495" y="168" width="190" height="80" rx="12" fill="#FFFFFF" stroke="#D9DEDC" stroke-width="1"/>
-<text x="590" y="201" font-size="21" font-weight="600" fill="#25343A" text-anchor="middle">智能体运行时</text>
-<text x="590" y="228" font-size="16" font-weight="400" fill="#65737A" text-anchor="middle">解释与调度</text>
-<path class="wire" d="M590 250 L590 1287" stroke="#D9DEDC" stroke-width="1.4" stroke-dasharray="5 7"/>
-<rect x="730" y="168" width="190" height="80" rx="12" fill="#FFFFFF" stroke="#D9DEDC" stroke-width="1"/>
-<text x="825" y="201" font-size="21" font-weight="600" fill="#25343A" text-anchor="middle">安全网关</text>
-<text x="825" y="228" font-size="16" font-weight="400" fill="#65737A" text-anchor="middle">策略与执行资格</text>
-<path class="wire" d="M825 250 L825 1287" stroke="#D9DEDC" stroke-width="1.4" stroke-dasharray="5 7"/>
-<rect x="965" y="168" width="190" height="80" rx="12" fill="#FFFFFF" stroke="#D9DEDC" stroke-width="1"/>
-<text x="1060" y="201" font-size="21" font-weight="600" fill="#25343A" text-anchor="middle">银行业务服务</text>
-<text x="1060" y="228" font-size="16" font-weight="400" fill="#65737A" text-anchor="middle">原命令执行</text>
-<path class="wire" d="M1060 250 L1060 1287" stroke="#D9DEDC" stroke-width="1.4" stroke-dasharray="5 7"/>
-<rect x="1200" y="168" width="190" height="80" rx="12" fill="#FFFFFF" stroke="#D9DEDC" stroke-width="1"/>
-<text x="1295" y="201" font-size="21" font-weight="600" fill="#25343A" text-anchor="middle">数据库</text>
-<text x="1295" y="228" font-size="16" font-weight="400" fill="#65737A" text-anchor="middle">持久化事实</text>
-<path class="wire" d="M1295 250 L1295 1287" stroke="#D9DEDC" stroke-width="1.4" stroke-dasharray="5 7"/>
-<path class="wire" d="M120 300 L355 300" stroke="#547A96" stroke-width="2" marker-end="url(#a-blue)"/>
-<rect x="171.5" y="266" width="132" height="27" rx="5" fill="#FBFAF7"/>
-<text x="237.5" y="286" font-size="18" font-weight="500" fill="#547A96" text-anchor="middle">提出转账需求</text>
-<path class="wire" d="M355 365 L590 365" stroke="#547A96" stroke-width="2" marker-end="url(#a-blue)"/>
-<rect x="397.5" y="331" width="150" height="27" rx="5" fill="#FBFAF7"/>
-<text x="472.5" y="351" font-size="18" font-weight="500" fill="#547A96" text-anchor="middle">消息与请求标识</text>
-<rect x="496" y="391" width="188" height="54" rx="9" fill="#EDF3F7"/>
-<text x="590" y="414" font-size="17" font-weight="600" fill="#547A96" text-anchor="middle">解析意图</text>
-<text x="590" y="437" font-size="16" font-weight="400" fill="#547A96" text-anchor="middle">定位唯一业务对象</text>
-<path class="wire" d="M590 485 L825 485" stroke="#547A96" stroke-width="2" marker-end="url(#a-blue)"/>
-<rect x="632.5" y="451" width="150" height="27" rx="5" fill="#FBFAF7"/>
-<text x="707.5" y="471" font-size="18" font-weight="500" fill="#547A96" text-anchor="middle">结构化转账请求</text>
-<path class="wire" d="M825 548 L1295 548" stroke="#BB563F" stroke-width="2" marker-end="url(#a-red)"/>
-<rect x="931.0" y="514" width="258" height="27" rx="5" fill="#FBFAF7"/>
-<text x="1060.0" y="534" font-size="18" font-weight="500" fill="#BB563F" text-anchor="middle">保存原操作、参数摘要与风险</text>
-<path class="wire" d="M825 615 L355 615" stroke="#BB563F" stroke-width="2" marker-end="url(#a-red)" stroke-dasharray="5 5"/>
-<rect x="479.0" y="581" width="222" height="27" rx="5" fill="#FBFAF7"/>
-<text x="590.0" y="601" font-size="18" font-weight="500" fill="#BB563F" text-anchor="middle">返回真实确认或验证入口</text>
-<path class="wire" d="M120 680 L355 680" stroke="#BB563F" stroke-width="2" marker-end="url(#a-red)"/>
-<rect x="147.65" y="646" width="179.7" height="27" rx="5" fill="#FBFAF7"/>
-<text x="237.5" y="666" font-size="18" font-weight="500" fill="#BB563F" text-anchor="middle">核对并确认 / 验证</text>
-<path class="wire" d="M355 745 L825 745" stroke="#BB563F" stroke-width="2" marker-end="url(#a-red)"/>
-<rect x="515.0" y="711" width="150" height="27" rx="5" fill="#FBFAF7"/>
-<text x="590.0" y="731" font-size="18" font-weight="500" fill="#BB563F" text-anchor="middle">提交原操作决定</text>
-<path class="wire" d="M825 807 L1295 807" stroke="#BB563F" stroke-width="2" marker-end="url(#a-red)"/>
-<rect x="949.0" y="773" width="222" height="27" rx="5" fill="#FBFAF7"/>
-<text x="1060.0" y="793" font-size="18" font-weight="500" fill="#BB563F" text-anchor="middle">认领执行，重新计算风险</text>
-<rect x="48" y="847" width="1344" height="424" rx="16" fill="#FFFFFF" stroke="#D9DEDC" stroke-width="1"/>
-<path class="wire" d="M120 848 L120 1270" stroke="#D9DEDC" stroke-width="1.4" stroke-dasharray="5 7"/>
-<path class="wire" d="M355 848 L355 1270" stroke="#D9DEDC" stroke-width="1.4" stroke-dasharray="5 7"/>
-<path class="wire" d="M590 848 L590 1270" stroke="#D9DEDC" stroke-width="1.4" stroke-dasharray="5 7"/>
-<path class="wire" d="M825 848 L825 1270" stroke="#D9DEDC" stroke-width="1.4" stroke-dasharray="5 7"/>
-<path class="wire" d="M1060 848 L1060 1270" stroke="#D9DEDC" stroke-width="1.4" stroke-dasharray="5 7"/>
-<path class="wire" d="M1295 848 L1295 1270" stroke="#D9DEDC" stroke-width="1.4" stroke-dasharray="5 7"/>
-<rect x="68" y="862" width="198.0" height="30" rx="8" fill="#FBF3E3"/>
-<text x="167.0" y="883" font-size="16" font-weight="600" fill="#996D2C" text-anchor="middle">分支 A · 需要追加验证</text>
-<rect x="68" y="902" width="1304" height="61" rx="10" fill="#FBF3E3"/>
-<path class="wire" d="M825 945 L355 945" stroke="#996D2C" stroke-width="2" marker-end="url(#a-amber)" stroke-dasharray="5 5"/>
-<rect x="479.0" y="911" width="222" height="27" rx="5" fill="#FFFFFF"/>
-<text x="590.0" y="931" font-size="18" font-weight="500" fill="#996D2C" text-anchor="middle">保持待验证，不发起扣款</text>
-<path class="wire" d="M68 985 L1372 985" stroke="#D9DEDC" stroke-width="1" stroke-dasharray="4 5"/>
-<rect x="68" y="999" width="198.0" height="30" rx="8" fill="#EAF4F0"/>
-<text x="167.0" y="1020" font-size="16" font-weight="600" fill="#32786E" text-anchor="middle">分支 B · 授权条件满足</text>
-<path class="wire" d="M825 1055 L1060 1055" stroke="#32786E" stroke-width="2" marker-end="url(#a-teal)"/>
-<rect x="858.5" y="1021" width="168" height="27" rx="5" fill="#FFFFFF"/>
-<text x="942.5" y="1041" font-size="18" font-weight="500" fill="#32786E" text-anchor="middle">提交受授权原命令</text>
-<path class="wire" d="M1060 1110 L1295 1110" stroke="#32786E" stroke-width="2" marker-end="url(#a-teal)"/>
-<rect x="1102.5" y="1076" width="150" height="27" rx="5" fill="#FFFFFF"/>
-<text x="1177.5" y="1096" font-size="18" font-weight="500" fill="#32786E" text-anchor="middle">复核并事务提交</text>
-<path class="wire" d="M1295 1165 L1060 1165" stroke="#32786E" stroke-width="2" marker-end="url(#a-teal)" stroke-dasharray="5 5"/>
-<rect x="1111.5" y="1131" width="132" height="27" rx="5" fill="#FFFFFF"/>
-<text x="1177.5" y="1151" font-size="18" font-weight="500" fill="#32786E" text-anchor="middle">返回提交结果</text>
-<path class="wire" d="M1060 1210 L825 1210" stroke="#32786E" stroke-width="2" marker-end="url(#a-teal)" stroke-dasharray="5 5"/>
-<rect x="867.5" y="1176" width="150" height="27" rx="5" fill="#FFFFFF"/>
-<text x="942.5" y="1196" font-size="18" font-weight="500" fill="#32786E" text-anchor="middle">返回原执行结果</text>
-<path class="wire" d="M825 1255 L355 1255" stroke="#32786E" stroke-width="2" marker-end="url(#a-teal)" stroke-dasharray="5 5"/>
-<rect x="488.0" y="1221" width="204" height="27" rx="5" fill="#FFFFFF"/>
-<text x="590.0" y="1241" font-size="18" font-weight="500" fill="#32786E" text-anchor="middle">发布结果卡与权威状态</text>
-<path class="wire" d="M48 1316 L1392 1316" stroke="#D9DEDC" stroke-width="1"/>
-<text x="48" y="1344" font-size="16" font-weight="400" fill="#65737A" text-anchor="start">事务提交内容：业务变更 · 流水 · 执行回执 · 必需审计    实线：请求    虚线：返回</text>
-<text x="1392" y="1344" font-size="15" font-weight="400" fill="#65737A" text-anchor="end">EvoX Omni  /  技术与安全</text>
+<desc id="desc">用户通过Web或微信提出转账，并通过同一渠道核对原操作、确认或验证。银行智能体提出操作，安全网关保存原操作、认领执行权并复核风险。需要追加验证与满足授权条件为互斥分支。业务结果经渠道展示给用户。实线为请求，蓝色虚线为返回。</desc>
+<defs><style>text{font-family:"Noto Sans SC","Microsoft YaHei",sans-serif;fill:#000000}.wire{fill:none;stroke:#64748B;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.node{fill:none;stroke:#64748B;stroke-width:2}</style>
+<marker id="arrow" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="12" markerHeight="12" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M1 1 L11 6 L1 11 L4 6 Z" fill="#64748B"/></marker></defs>
+<defs><marker id="response-arrow" viewBox="0 0 24 24" refX="23" refY="12" markerWidth="24" markerHeight="24" orient="auto" markerUnits="userSpaceOnUse"><path d="M1 1 L23 12 L1 23 L6 12 Z" fill="#4D8CA9"/></marker><linearGradient id="browser-surface" x2="0" y2="1"><stop stop-color="#FFFFFF"/><stop offset="1" stop-color="#E7F1F7"/></linearGradient><linearGradient id="robot-surface" x2="0" y2="1"><stop stop-color="#FFFFFF"/><stop offset="1" stop-color="#DDD9EF"/></linearGradient><linearGradient id="bank-surface" x2="0" y2="1"><stop stop-color="#E3F3EB"/><stop offset="1" stop-color="#A9CFC0"/></linearGradient></defs>
+<defs><marker id="sequence-request" viewBox="0 0 16 16" refX="15" refY="8" markerWidth="16" markerHeight="16" orient="auto" markerUnits="userSpaceOnUse"><path d="M1 1 L15 8 L1 15 L4 8Z" fill="#64748B"/></marker><marker id="sequence-return" viewBox="0 0 16 16" refX="15" refY="8" markerWidth="16" markerHeight="16" orient="auto" markerUnits="userSpaceOnUse"><path d="M1 1 L15 8 L1 15 L4 8Z" fill="#4D8CA9"/></marker></defs>
+<rect x="30" y="20" width="260" height="140" rx="14" fill="#ECF4F8" stroke="#487B9A" stroke-width="2.4"/>
+<g transform="translate(124 28) scale(0.72)"><ellipse cx="50" cy="96" rx="36" ry="4" fill="#18394B" opacity=".09"/><path d="M43 49 H57 V68 H43Z" fill="#E9C3A8"/><ellipse cx="50" cy="31" rx="19" ry="23" fill="#F2D3BC"/><path d="M30 28 Q27 7 47 5 Q68 4 71 23 L66 34 L62 22 Q43 27 35 18 L34 33Z" fill="#40576C"/><path d="M15 94 V82 Q15 65 38 60 L50 69 L62 60 Q85 65 85 82 V94Z" fill="#83ABC1"/><path d="M38 60 L50 69 L45 78 L32 65 M62 60 L50 69 L55 78 L68 65" fill="#FFFFFF"/><path d="M22 80 V94 M78 80 V94" stroke="#487B9A" stroke-width="2"/><circle cx="43" cy="33" r="1.7" fill="#40576C"/><circle cx="57" cy="33" r="1.7" fill="#40576C"/><path d="M44 43 Q50 47 56 43" fill="none" stroke="#C38E73" stroke-width="2" stroke-linecap="round"/></g>
+<text x="160" y="141" font-size="32" font-weight="600" text-anchor="middle" style="fill:#000000">用户</text>
+<path class="wire" d="M160 160 V1460" stroke-dasharray="8 8" opacity="0.32" mask="url(#text-space)"/>
+<rect x="350" y="20" width="260" height="140" rx="14" fill="#ECF4F8" stroke="#487B9A" stroke-width="2.4"/>
+<g transform="translate(418 34) scale(0.54)"><ellipse cx="50" cy="91" rx="43" ry="5" fill="#18394B" opacity=".09"/><rect x="16" y="15" width="78" height="61" rx="7" fill="#BDD6E4"/><path d="M40 67 V82 H27 V87 H72 V82 H60 V67" fill="#D5E5ED" stroke="#487B9A" stroke-width="2"/><rect x="5" y="5" width="82" height="64" rx="7" fill="url(#browser-surface)" stroke="#487B9A" stroke-width="2"/><path d="M5 12 Q5 5 12 5 H80 Q87 5 87 12 V22 H5 Z" fill="#487B9A"/><g fill="#FFFFFF" opacity=".85"><circle cx="14" cy="14" r="2"/><circle cx="22" cy="14" r="2"/><circle cx="30" cy="14" r="2"/></g><rect x="15" y="31" width="29" height="27" rx="4" fill="#D4E7F1"/><path d="M20 51 L27 43 L33 47 L39 37 M53 34 H76 M53 44 H72 M53 54 H66" fill="none" stroke="#487B9A" stroke-width="2.5" stroke-linecap="round"/></g>
+<g transform="translate(490 34) scale(0.54)"><ellipse cx="49" cy="91" rx="43" ry="5" fill="#173B28" opacity=".09"/><rect x="68" y="14" width="27" height="63" rx="6" fill="#FFFFFF" stroke="#2C8A58" stroke-width="2"/><path d="M75 21 H88 M78 69 H85" stroke="#77AD8E" stroke-width="2" stroke-linecap="round"/><rect x="2" y="3" width="76" height="76" rx="19" fill="#07C160"/><g transform="translate(12 13) scale(2.333333)"><path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 0 0 .167-.054l1.903-1.114a.864.864 0 0 1 .717-.098 10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348zM5.785 5.991c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178A1.17 1.17 0 0 1 4.623 7.17c0-.651.52-1.18 1.162-1.18zm5.813 0c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178 1.17 1.17 0 0 1-1.162-1.178c0-.651.52-1.18 1.162-1.18zm5.34 2.867c-1.797-.052-3.746.512-5.28 1.786-1.72 1.428-2.687 3.72-1.78 6.22.942 2.453 3.666 4.229 6.884 4.229.826 0 1.622-.12 2.361-.336a.722.722 0 0 1 .598.082l1.584.926a.272.272 0 0 0 .14.047c.134 0 .24-.111.24-.247 0-.06-.023-.12-.038-.177l-.327-1.233a.582.582 0 0 1-.023-.156.49.49 0 0 1 .201-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-6.656-6.088V8.89c-.135-.01-.27-.027-.407-.03zm-2.53 3.274c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.97-.982zm4.844 0c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982z" fill="#FFFFFF"/></g></g>
+<text x="480" y="141" font-size="32" font-weight="600" text-anchor="middle" style="fill:#000000">Web / 微信</text>
+<path class="wire" d="M480 160 V1460" stroke-dasharray="8 8" opacity="0.32" mask="url(#text-space)"/>
+<rect x="670" y="20" width="260" height="140" rx="14" fill="#F0EFF7" stroke="#787499" stroke-width="2.4"/>
+<g transform="translate(764 28) scale(0.72)"><ellipse cx="50" cy="94" rx="39" ry="4" fill="#342B54" opacity=".10"/><path d="M50 9 V21" stroke="#787499" stroke-width="3"/><circle cx="50" cy="7" r="5" fill="#B3A9D8"/><rect x="4" y="37" width="13" height="23" rx="5" fill="#A69AC9"/><rect x="83" y="37" width="13" height="23" rx="5" fill="#A69AC9"/><rect x="13" y="20" width="74" height="57" rx="17" fill="url(#robot-surface)" stroke="#787499" stroke-width="2"/><path d="M28 86 Q28 72 40 72 H60 Q72 72 72 86 Z" fill="#C5BCDF" stroke="#787499" stroke-width="2"/><rect x="23" y="33" width="54" height="30" rx="11" fill="#F8F7FC"/><circle cx="36" cy="46" r="5" fill="#787499"/><circle cx="64" cy="46" r="5" fill="#787499"/><circle cx="37" cy="44" r="1.5" fill="#FFFFFF"/><circle cx="65" cy="44" r="1.5" fill="#FFFFFF"/><path d="M42 59 Q50 64 58 59" fill="none" stroke="#787499" stroke-width="2.5" stroke-linecap="round"/></g>
+<text x="800" y="141" font-size="32" font-weight="600" text-anchor="middle" style="fill:#000000">银行智能体</text>
+<path class="wire" d="M800 160 V1460" stroke-dasharray="8 8" opacity="0.32" mask="url(#text-space)"/>
+<rect x="990" y="20" width="260" height="140" rx="14" fill="#FBF4E7" stroke="#B28A4E" stroke-width="2.4"/>
+<g transform="translate(1084 28) scale(0.72)"><ellipse cx="50" cy="94" rx="35" ry="4" fill="#59401D" opacity=".09"/><path d="M53 8 L91 22 V48 Q91 73 53 94 Q15 73 15 48 V22 Z" fill="#DCC69D"/><path d="M47 3 L84 17 V44 Q84 69 47 89 Q10 69 10 44 V17 Z" fill="#F4E4C3" stroke="#B28A4E" stroke-width="2"/><path d="M47 14 L74 24 V44 Q74 62 47 78 Q20 62 20 44 V24 Z" fill="#FFFFFF" opacity=".84"/><path d="M31 43 L43 55 L65 32" fill="none" stroke="#B28A4E" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/></g>
+<text x="1120" y="141" font-size="32" font-weight="600" text-anchor="middle" style="fill:#000000">安全网关</text>
+<path class="wire" d="M1120 160 V1460" stroke-dasharray="8 8" opacity="0.32" mask="url(#text-space)"/>
+<rect x="1310" y="20" width="260" height="140" rx="14" fill="#EDF6F1" stroke="#3D8277" stroke-width="2.4"/>
+<g transform="translate(1404 28) scale(0.72)"><ellipse cx="50" cy="94" rx="47" ry="4" fill="#1C4437" opacity=".10"/><path d="M7 35 L50 9 L93 35 Z" fill="#3D8277"/><path d="M15 38 H85 V79 H15 Z" fill="url(#bank-surface)"/><path d="M20 41 H30 V79 H20 Z M45 41 H55 V79 H45 Z M70 41 H80 V79 H70 Z" fill="#FFFFFF"/><path d="M7 80 H93 V86 H7 Z M2 87 H98 V93 H2 Z" fill="#3D8277"/><path d="M7 35 H93" stroke="#2C655C" stroke-width="3"/><circle cx="50" cy="26" r="7" fill="#D8E9DA"/></g>
+<text x="1440" y="141" font-size="32" font-weight="600" text-anchor="middle" style="fill:#000000">银行业务工具库</text>
+<path class="wire" d="M1440 160 V1460" stroke-dasharray="8 8" opacity="0.32" mask="url(#text-space)"/>
+<rect x="1630" y="20" width="260" height="140" rx="14" fill="#EDF6F1" stroke="#3D8277" stroke-width="2.4"/>
+<g transform="translate(1724 28) scale(0.72)"><ellipse cx="50" cy="94" rx="39" ry="4" fill="#1C4437" opacity=".10"/><path d="M12 20 V76 C12 96 88 96 88 76 V20" fill="url(#bank-surface)" stroke="#3D8277" stroke-width="2"/><ellipse cx="50" cy="20" rx="38" ry="14" fill="#E5F4EB" stroke="#3D8277" stroke-width="2"/><path d="M12 46 C12 65 88 65 88 46 M12 68 C12 87 88 87 88 68" fill="none" stroke="#3D8277" stroke-width="2"/><path d="M24 34 V78" stroke="#FFFFFF" stroke-width="4" opacity=".6" stroke-linecap="round"/></g>
+<text x="1760" y="141" font-size="32" font-weight="600" text-anchor="middle" style="fill:#000000">数据库</text>
+<path class="wire" d="M1760 160 V1460" stroke-dasharray="8 8" opacity="0.32" mask="url(#text-space)"/>
+<path class="wire" d="M160 220 H480" style="stroke:#64748B;stroke-width:3" marker-end="url(#sequence-request)"/>
+<text x="320" y="204" font-size="32" font-weight="400" text-anchor="middle" style="fill:#000000">提出转账需求</text>
+<path class="wire" d="M480 284 H800" style="stroke:#64748B;stroke-width:3" marker-end="url(#sequence-request)"/>
+<text x="640" y="268" font-size="32" font-weight="400" text-anchor="middle" style="fill:#000000">提交消息与请求标识</text>
+<path class="wire" d="M800 348 H1120" style="stroke:#64748B;stroke-width:3" marker-end="url(#sequence-request)"/>
+<text x="960" y="332" font-size="32" font-weight="400" text-anchor="middle" style="fill:#000000">解析对象并提出操作</text>
+<path class="wire" d="M1120 412 H1760" style="stroke:#64748B;stroke-width:3" marker-end="url(#sequence-request)"/>
+<text x="1440" y="396" font-size="32" font-weight="400" text-anchor="middle" style="fill:#000000">保存原操作与风险</text>
+<path class="wire" d="M1120 476 H480" style="stroke:#4D8CA9;stroke-width:3" stroke-dasharray="8 7" marker-end="url(#sequence-return)"/>
+<text x="800" y="460" font-size="32" font-weight="400" text-anchor="middle" style="fill:#000000">返回确认 / 验证入口</text>
+<path class="wire" d="M480 540 H160" style="stroke:#4D8CA9;stroke-width:3" stroke-dasharray="8 7" marker-end="url(#sequence-return)"/>
+<text x="320" y="524" font-size="32" font-weight="400" text-anchor="middle" style="fill:#000000">展示操作详情</text>
+<path class="wire" d="M160 604 H480" style="stroke:#64748B;stroke-width:3" marker-end="url(#sequence-request)"/>
+<text x="320" y="588" font-size="32" font-weight="400" text-anchor="middle" style="fill:#000000">核对并确认 / 验证</text>
+<path class="wire" d="M480 668 H1120" style="stroke:#64748B;stroke-width:3" marker-end="url(#sequence-request)"/>
+<text x="800" y="652" font-size="32" font-weight="400" text-anchor="middle" style="fill:#000000">提交原操作决定</text>
+<path class="wire" d="M1120 732 H1760" style="stroke:#64748B;stroke-width:3" marker-end="url(#sequence-request)"/>
+<text x="1440" y="716" font-size="32" font-weight="400" text-anchor="middle" style="fill:#000000">认领执行权</text>
+<path class="wire" d="M1120 766 H1190 V812 H1120" style="stroke:#64748B;stroke-width:3" marker-end="url(#sequence-request)"/>
+<text x="1220" y="798" font-size="32" font-weight="400" text-anchor="start" style="fill:#000000">复核风险</text>
+<rect x="30" y="850" width="1860" height="610" rx="14" fill="none" stroke="#87939B" stroke-width="2.4"/>
+<rect x="50" y="862" width="300" height="56" rx="10" fill="#FBF4E7" stroke="#B28A4E" stroke-width="2.4"/>
+<text x="200" y="902" font-size="32" font-weight="600" text-anchor="middle" style="fill:#000000">需要追加验证</text>
+<path class="wire" d="M1120 938 H480" style="stroke:#4D8CA9;stroke-width:3" stroke-dasharray="8 7" marker-end="url(#sequence-return)"/>
+<text x="800" y="922" font-size="32" font-weight="400" text-anchor="middle" style="fill:#000000">等待验证，不扣款</text>
+<path class="wire" d="M480 994 H160" style="stroke:#4D8CA9;stroke-width:3" stroke-dasharray="8 7" marker-end="url(#sequence-return)"/>
+<text x="320" y="978" font-size="32" font-weight="400" text-anchor="middle" style="fill:#000000">提示继续验证</text>
+<path class="wire" d="M30 1034 H1890" stroke-dasharray="8 8"/>
+<rect x="50" y="1050" width="300" height="56" rx="10" fill="#EDF6F1" stroke="#3D8277" stroke-width="2.4"/>
+<text x="200" y="1090" font-size="32" font-weight="600" text-anchor="middle" style="fill:#000000">授权条件满足</text>
+<path class="wire" d="M1120 1122 H1440" style="stroke:#64748B;stroke-width:3" marker-end="url(#sequence-request)"/>
+<text x="1280" y="1106" font-size="32" font-weight="400" text-anchor="middle" style="fill:#000000">提交原命令</text>
+<path class="wire" d="M1440 1182 H1760" style="stroke:#64748B;stroke-width:3" marker-end="url(#sequence-request)"/>
+<text x="1600" y="1166" font-size="32" font-weight="400" text-anchor="middle" style="fill:#000000">复核并事务提交</text>
+<path class="wire" d="M1760 1242 H1440" style="stroke:#4D8CA9;stroke-width:3" stroke-dasharray="8 7" marker-end="url(#sequence-return)"/>
+<text x="1600" y="1226" font-size="32" font-weight="400" text-anchor="middle" style="fill:#000000">返回提交结果</text>
+<path class="wire" d="M1440 1302 H1120" style="stroke:#4D8CA9;stroke-width:3" stroke-dasharray="8 7" marker-end="url(#sequence-return)"/>
+<text x="1280" y="1286" font-size="32" font-weight="400" text-anchor="middle" style="fill:#000000">返回执行回执</text>
+<path class="wire" d="M1120 1362 H480" style="stroke:#4D8CA9;stroke-width:3" stroke-dasharray="8 7" marker-end="url(#sequence-return)"/>
+<text x="800" y="1346" font-size="32" font-weight="400" text-anchor="middle" style="fill:#000000">返回业务结果与状态</text>
+<path class="wire" d="M480 1422 H160" style="stroke:#4D8CA9;stroke-width:3" stroke-dasharray="8 7" marker-end="url(#sequence-return)"/>
+<text x="320" y="1406" font-size="32" font-weight="400" text-anchor="middle" style="fill:#000000">展示结果与状态</text>
+<defs><mask id="text-space" maskUnits="userSpaceOnUse" x="0" y="0" width="1920" height="1490"><rect width="1920" height="1490" fill="white"/><rect x="122" y="106" width="76" height="44" fill="black"/><rect x="384.4" y="106" width="191.2" height="44" fill="black"/><rect x="714" y="106" width="172" height="44" fill="black"/><rect x="1050" y="106" width="140" height="44" fill="black"/><rect x="1322" y="106" width="236" height="44" fill="black"/><rect x="1706" y="106" width="108" height="44" fill="black"/><rect x="218" y="169" width="204" height="44" fill="black"/><rect x="490" y="233" width="300" height="44" fill="black"/><rect x="810" y="297" width="300" height="44" fill="black"/><rect x="1306" y="361" width="268" height="44" fill="black"/><rect x="637.2" y="425" width="325.59999999999997" height="44" fill="black"/><rect x="218" y="489" width="204" height="44" fill="black"/><rect x="173.20000000000002" y="553" width="293.59999999999997" height="44" fill="black"/><rect x="682" y="617" width="236" height="44" fill="black"/><rect x="1354" y="681" width="172" height="44" fill="black"/><rect x="1214" y="763" width="140" height="44" fill="black"/><rect x="98" y="867" width="204" height="44" fill="black"/><rect x="666" y="887" width="268" height="44" fill="black"/><rect x="218" y="943" width="204" height="44" fill="black"/><rect x="98" y="1055" width="204" height="44" fill="black"/><rect x="1194" y="1071" width="172" height="44" fill="black"/><rect x="1482" y="1131" width="236" height="44" fill="black"/><rect x="1498" y="1191" width="204" height="44" fill="black"/><rect x="1178" y="1251" width="204" height="44" fill="black"/><rect x="650" y="1311" width="300" height="44" fill="black"/><rect x="202" y="1371" width="236" height="44" fill="black"/></mask></defs>
 </svg>

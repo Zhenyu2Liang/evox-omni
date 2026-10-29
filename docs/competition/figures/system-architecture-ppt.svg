@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="960" viewBox="0 0 1920 960" role="img" aria-labelledby="title desc">
+<title id="title">系统总体架构（PPT 版）</title>
+<desc id="desc">透明画布上的插画分组架构。文字统一字号和黑色，模块标题加粗，说明与连接标注采用常规字重。模块颜色区分职责，粗灰箭头表示请求与执行，蓝色虚线表示结果与状态经服务接口返回Web或微信。页面办理独立校验，智能体经过安全网关，两者共用银行业务工具库。</desc>
+<defs><style>text{font-family:"Noto Sans SC","Microsoft YaHei",sans-serif;fill:#000000}.wire{fill:none;stroke:#64748B;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.node{fill:none;stroke:#64748B;stroke-width:2}</style>
+<marker id="arrow" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="12" markerHeight="12" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M1 1 L11 6 L1 11 L4 6 Z" fill="#64748B"/></marker></defs>
+<defs><marker id="response-arrow" viewBox="0 0 24 24" refX="23" refY="12" markerWidth="24" markerHeight="24" orient="auto" markerUnits="userSpaceOnUse"><path d="M1 1 L23 12 L1 23 L6 12 Z" fill="#4D8CA9"/></marker><linearGradient id="browser-surface" x2="0" y2="1"><stop stop-color="#FFFFFF"/><stop offset="1" stop-color="#E7F1F7"/></linearGradient><linearGradient id="robot-surface" x2="0" y2="1"><stop stop-color="#FFFFFF"/><stop offset="1" stop-color="#DDD9EF"/></linearGradient><linearGradient id="bank-surface" x2="0" y2="1"><stop stop-color="#E3F3EB"/><stop offset="1" stop-color="#A9CFC0"/></linearGradient></defs>
+<text x="30" y="106" font-size="32" font-weight="600" text-anchor="start" style="fill:#000000">渠道接入</text>
+<text x="30" y="252" font-size="32" font-weight="600" text-anchor="start" style="fill:#000000">服务入口</text>
+<text x="30" y="475" font-size="32" font-weight="600" text-anchor="start" style="fill:#000000">编排与授权</text>
+<text x="30" y="731" font-size="32" font-weight="600" text-anchor="start" style="fill:#000000">银行业务</text>
+<text x="30" y="900" font-size="32" font-weight="600" text-anchor="start" style="fill:#000000">持久化</text>
+<rect x="250" y="20" width="1410" height="140" rx="14" fill="#ECF4F8" stroke="#487B9A" stroke-width="2.4"/>
+<rect x="280" y="40" width="600" height="100" rx="12" fill="#FFFFFF" stroke="#487B9A" stroke-width="2.4"/>
+<g transform="translate(320 50) scale(0.88)"><ellipse cx="50" cy="91" rx="43" ry="5" fill="#18394B" opacity=".09"/><rect x="16" y="15" width="78" height="61" rx="7" fill="#BDD6E4"/><path d="M40 67 V82 H27 V87 H72 V82 H60 V67" fill="#D5E5ED" stroke="#487B9A" stroke-width="2"/><rect x="5" y="5" width="82" height="64" rx="7" fill="url(#browser-surface)" stroke="#487B9A" stroke-width="2"/><path d="M5 12 Q5 5 12 5 H80 Q87 5 87 12 V22 H5 Z" fill="#487B9A"/><g fill="#FFFFFF" opacity=".85"><circle cx="14" cy="14" r="2"/><circle cx="22" cy="14" r="2"/><circle cx="30" cy="14" r="2"/></g><rect x="15" y="31" width="29" height="27" rx="4" fill="#D4E7F1"/><path d="M20 51 L27 43 L33 47 L39 37 M53 34 H76 M53 44 H72 M53 54 H66" fill="none" stroke="#487B9A" stroke-width="2.5" stroke-linecap="round"/></g>
+<text x="618" y="100" font-size="32" font-weight="600" text-anchor="middle" style="fill:#000000">Web 页面</text>
+<rect x="1010" y="40" width="620" height="100" rx="12" fill="#FFFFFF" stroke="#487B9A" stroke-width="2.4"/>
+<g transform="translate(1050 50) scale(0.88)"><ellipse cx="49" cy="91" rx="43" ry="5" fill="#173B28" opacity=".09"/><rect x="68" y="14" width="27" height="63" rx="6" fill="#FFFFFF" stroke="#2C8A58" stroke-width="2"/><path d="M75 21 H88 M78 69 H85" stroke="#77AD8E" stroke-width="2" stroke-linecap="round"/><rect x="2" y="3" width="76" height="76" rx="19" fill="#07C160"/><g transform="translate(12 13) scale(2.333333)"><path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 0 0 .167-.054l1.903-1.114a.864.864 0 0 1 .717-.098 10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348zM5.785 5.991c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178A1.17 1.17 0 0 1 4.623 7.17c0-.651.52-1.18 1.162-1.18zm5.813 0c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178 1.17 1.17 0 0 1-1.162-1.178c0-.651.52-1.18 1.162-1.18zm5.34 2.867c-1.797-.052-3.746.512-5.28 1.786-1.72 1.428-2.687 3.72-1.78 6.22.942 2.453 3.666 4.229 6.884 4.229.826 0 1.622-.12 2.361-.336a.722.722 0 0 1 .598.082l1.584.926a.272.272 0 0 0 .14.047c.134 0 .24-.111.24-.247 0-.06-.023-.12-.038-.177l-.327-1.233a.582.582 0 0 1-.023-.156.49.49 0 0 1 .201-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-6.656-6.088V8.89c-.135-.01-.27-.027-.407-.03zm-2.53 3.274c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.97-.982zm4.844 0c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982z" fill="#FFFFFF"/></g></g>
+<text x="1370" y="100" font-size="32" font-weight="600" text-anchor="middle" style="fill:#000000">微信接入</text>
+<rect x="250" y="188" width="1410" height="100" rx="14" fill="#ECF4F8" stroke="#487B9A" stroke-width="2.4"/>
+<g transform="translate(470 197) scale(0.8)"><ellipse cx="50" cy="92" rx="42" ry="4" fill="#18394B" opacity=".08"/><path d="M50 25 V75 M22 50 H78" stroke="#7DA5BA" stroke-width="4"/><rect x="25" y="9" width="50" height="29" rx="7" fill="#487B9A"/><rect x="5" y="57" width="37" height="28" rx="6" fill="#E0EDF4" stroke="#487B9A" stroke-width="2"/><rect x="58" y="57" width="37" height="28" rx="6" fill="#E0EDF4" stroke="#487B9A" stroke-width="2"/><path d="M37 23 H63 M14 70 H33 M67 70 H86" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round"/></g>
+<text x="795" y="251" font-size="32" font-weight="600" text-anchor="middle" style="fill:#000000">银行服务接口</text>
+<text x="1290" y="250" font-size="32" font-weight="400" text-anchor="middle" style="fill:#000000">接收请求 · 返回结果</text>
+<rect x="250" y="316" width="920" height="288" rx="14" fill="#F0EFF7" stroke="#787499" stroke-width="2.4"/>
+<text x="710" y="359" font-size="32" font-weight="600" text-anchor="middle" style="fill:#000000">智能体办理</text>
+<rect x="280" y="380" width="520" height="204" rx="12" fill="#FFFFFF" stroke="#787499" stroke-width="2.4"/>
+<g transform="translate(320 396) scale(0.92)"><ellipse cx="50" cy="94" rx="39" ry="4" fill="#342B54" opacity=".10"/><path d="M50 9 V21" stroke="#787499" stroke-width="3"/><circle cx="50" cy="7" r="5" fill="#B3A9D8"/><rect x="4" y="37" width="13" height="23" rx="5" fill="#A69AC9"/><rect x="83" y="37" width="13" height="23" rx="5" fill="#A69AC9"/><rect x="13" y="20" width="74" height="57" rx="17" fill="url(#robot-surface)" stroke="#787499" stroke-width="2"/><path d="M28 86 Q28 72 40 72 H60 Q72 72 72 86 Z" fill="#C5BCDF" stroke="#787499" stroke-width="2"/><rect x="23" y="33" width="54" height="30" rx="11" fill="#F8F7FC"/><circle cx="36" cy="46" r="5" fill="#787499"/><circle cx="64" cy="46" r="5" fill="#787499"/><circle cx="37" cy="44" r="1.5" fill="#FFFFFF"/><circle cx="65" cy="44" r="1.5" fill="#FFFFFF"/><path d="M42 59 Q50 64 58 59" fill="none" stroke="#787499" stroke-width="2.5" stroke-linecap="round"/></g>
+<text x="620" y="453" font-size="32" font-weight="600" text-anchor="middle" style="fill:#000000">银行智能体</text>
+<rect x="306" y="502" width="210" height="56" rx="14" fill="#F0EFF7" stroke="#787499" stroke-width="2.4"/>
+<text x="411" y="539" font-size="32" font-weight="400" text-anchor="middle" style="fill:#000000">模型调用</text>
+<rect x="540" y="502" width="230" height="56" rx="14" fill="#F0EFF7" stroke="#787499" stroke-width="2.4"/>
+<text x="655" y="539" font-size="32" font-weight="400" text-anchor="middle" style="fill:#000000">多步任务编排</text>
+<rect x="890" y="380" width="250" height="204" rx="14" fill="#FBF4E7" stroke="#B28A4E" stroke-width="2.4"/>
+<g transform="translate(967 388) scale(0.96)"><ellipse cx="50" cy="94" rx="35" ry="4" fill="#59401D" opacity=".09"/><path d="M53 8 L91 22 V48 Q91 73 53 94 Q15 73 15 48 V22 Z" fill="#DCC69D"/><path d="M47 3 L84 17 V44 Q84 69 47 89 Q10 69 10 44 V17 Z" fill="#F4E4C3" stroke="#B28A4E" stroke-width="2"/><path d="M47 14 L74 24 V44 Q74 62 47 78 Q20 62 20 44 V24 Z" fill="#FFFFFF" opacity=".84"/><path d="M31 43 L43 55 L65 32" fill="none" stroke="#B28A4E" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/></g>
+<text x="1015" y="512" font-size="32" font-weight="600" text-anchor="middle" style="fill:#000000">安全网关</text>
+<text x="1015" y="564" font-size="32" font-weight="400" text-anchor="middle" style="fill:#000000">确认 / 验证</text>
+<rect x="1230" y="316" width="430" height="288" rx="14" fill="#ECF4F8" stroke="#487B9A" stroke-width="2.4"/>
+<text x="1445" y="359" font-size="32" font-weight="600" text-anchor="middle" style="fill:#000000">页面办理</text>
+<rect x="1260" y="380" width="370" height="204" rx="12" fill="#FFFFFF" stroke="#487B9A" stroke-width="2.4"/>
+<g transform="translate(1284 415) scale(0.86)"><ellipse cx="50" cy="94" rx="37" ry="4" fill="#18394B" opacity=".08"/><rect x="18" y="9" width="71" height="79" rx="8" fill="#BDD6E4"/><rect x="9" y="3" width="71" height="79" rx="8" fill="url(#browser-surface)" stroke="#487B9A" stroke-width="2"/><path d="M9 11 Q9 3 17 3 H72 Q80 3 80 11 V22 H9 Z" fill="#487B9A"/><circle cx="19" cy="13" r="2" fill="#FFFFFF"/><path d="M21 35 H66 M21 47 H59" stroke="#ACC9D9" stroke-width="5" stroke-linecap="round"/><rect x="21" y="59" width="34" height="12" rx="4" fill="#D8E9F2"/><circle cx="74" cy="73" r="18" fill="#3D8277"/><path d="M65 73 L71 79 L83 66" fill="none" stroke="#FFFFFF" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></g>
+<text x="1490" y="463" font-size="32" font-weight="600" text-anchor="middle" style="fill:#000000">页面业务服务</text>
+<text x="1490" y="514" font-size="32" font-weight="400" text-anchor="middle" style="fill:#000000">独立授权校验</text>
+<rect x="250" y="632" width="1410" height="178" rx="14" fill="#EDF6F1" stroke="#3D8277" stroke-width="2.4"/>
+<g transform="translate(281 673) scale(1.15)"><ellipse cx="50" cy="94" rx="47" ry="4" fill="#1C4437" opacity=".10"/><path d="M7 35 L50 9 L93 35 Z" fill="#3D8277"/><path d="M15 38 H85 V79 H15 Z" fill="url(#bank-surface)"/><path d="M20 41 H30 V79 H20 Z M45 41 H55 V79 H45 Z M70 41 H80 V79 H70 Z" fill="#FFFFFF"/><path d="M7 80 H93 V86 H7 Z M2 87 H98 V93 H2 Z" fill="#3D8277"/><path d="M7 35 H93" stroke="#2C655C" stroke-width="3"/><circle cx="50" cy="26" r="7" fill="#D8E9DA"/></g>
+<text x="1030" y="672" font-size="32" font-weight="600" text-anchor="middle" style="fill:#000000">银行业务工具库</text>
+<rect x="430" y="696" width="270" height="96" rx="10" fill="#DCEEE8" stroke="#3D8277" stroke-width="2.4"/>
+<g transform="translate(450 719) scale(0.48)"><path d="M12 30 H79 L65 16 M79 30 L65 44 M88 70 H21 L35 56 M21 70 L35 84" fill="none" stroke="#3D8277" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></g>
+<text x="600" y="754" font-size="32" font-weight="500" text-anchor="middle" style="fill:#000000">转账汇款</text>
+<rect x="730" y="696" width="270" height="96" rx="10" fill="#DCEEE8" stroke="#3D8277" stroke-width="2.4"/>
+<g transform="translate(750 719) scale(0.48)"><path d="M13 15 V86 H90 M25 66 L45 47 L61 55 L87 21 M70 21 H87 V38" fill="none" stroke="#3D8277" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></g>
+<text x="900" y="754" font-size="32" font-weight="500" text-anchor="middle" style="fill:#000000">理财管理</text>
+<rect x="1030" y="696" width="270" height="96" rx="10" fill="#DCEEE8" stroke="#3D8277" stroke-width="2.4"/>
+<g transform="translate(1050 719) scale(0.48)"><rect x="5" y="19" width="90" height="64" rx="10" fill="#C0E0D5"/><path d="M5 38 H95" stroke="#3D8277" stroke-width="10"/><rect x="17" y="58" width="19" height="13" rx="3" fill="#3D8277"/><path d="M65 67 H81" stroke="#3D8277" stroke-width="4" stroke-linecap="round"/></g>
+<text x="1200" y="754" font-size="32" font-weight="500" text-anchor="middle" style="fill:#000000">银行卡管理</text>
+<rect x="1330" y="696" width="270" height="96" rx="10" fill="#DCEEE8" stroke="#3D8277" stroke-width="2.4"/>
+<g transform="translate(1350 719) scale(0.48)"><path d="M14 23 L77 12 V32 H14 Z" fill="#C0E0D5"/><rect x="8" y="29" width="84" height="59" rx="10" fill="none" stroke="#3D8277" stroke-width="4"/><path d="M66 46 H93 V72 H66 Q58 72 58 64 V54 Q58 46 66 46Z" fill="#C0E0D5"/><circle cx="72" cy="59" r="4" fill="#3D8277"/></g>
+<text x="1500" y="754" font-size="32" font-weight="500" text-anchor="middle" style="fill:#000000">记账预算</text>
+<rect x="250" y="838" width="1410" height="100" rx="14" fill="#EDF6F1" stroke="#3D8277" stroke-width="2.4"/>
+<g transform="translate(278 857) scale(0.62)"><ellipse cx="50" cy="94" rx="39" ry="4" fill="#1C4437" opacity=".10"/><path d="M12 20 V76 C12 96 88 96 88 76 V20" fill="url(#bank-surface)" stroke="#3D8277" stroke-width="2"/><ellipse cx="50" cy="20" rx="38" ry="14" fill="#E5F4EB" stroke="#3D8277" stroke-width="2"/><path d="M12 46 C12 65 88 65 88 46 M12 68 C12 87 88 87 88 68" fill="none" stroke="#3D8277" stroke-width="2"/><path d="M24 34 V78" stroke="#FFFFFF" stroke-width="4" opacity=".6" stroke-linecap="round"/></g>
+<text x="510" y="900" font-size="32" font-weight="600" text-anchor="middle" style="fill:#000000">业务数据存储</text>
+<rect x="720" y="856" width="280" height="64" rx="7" fill="#FFFFFF" stroke="#3D8277" stroke-width="2.4"/>
+<text x="860" y="900" font-size="32" font-weight="400" text-anchor="middle" style="fill:#000000">业务与流水</text>
+<rect x="1020" y="856" width="280" height="64" rx="7" fill="#FFFFFF" stroke="#3D8277" stroke-width="2.4"/>
+<text x="1160" y="900" font-size="32" font-weight="400" text-anchor="middle" style="fill:#000000">授权与审计</text>
+<rect x="1320" y="856" width="280" height="64" rx="7" fill="#FFFFFF" stroke="#3D8277" stroke-width="2.4"/>
+<text x="1460" y="900" font-size="32" font-weight="400" text-anchor="middle" style="fill:#000000">运行与任务</text>
+<path d="M572 160 H588 V172 H602 L580 188 L558 172 H572 Z" fill="#9CAFB9"/>
+<path d="M1252 160 H1268 V172 H1282 L1260 188 L1238 172 H1252 Z" fill="#9CAFB9"/>
+<path d="M702 288 H718 V300 H732 L710 316 L688 300 H702 Z" fill="#9CAFB9"/>
+<path d="M1437 288 H1453 V300 H1467 L1445 316 L1423 300 H1437 Z" fill="#9CAFB9"/>
+<path d="M800 473 H868 V456 L890 482 L868 508 V491 H800 Z" fill="#9CAFB9"/>
+<path d="M1007 604 H1023 V616 H1037 L1015 632 L993 616 H1007 Z" fill="#9CAFB9"/>
+<path d="M1437 604 H1453 V616 H1467 L1445 632 L1423 616 H1437 Z" fill="#9CAFB9"/>
+<path d="M947 810 H963 V822 H977 L955 838 L933 822 H947 Z" fill="#9CAFB9"/>
+<path class="wire" d="M1660 714 H1720 Q1740 714 1740 694 V258 Q1740 238 1720 238 H1660" style="stroke:#4D8CA9;stroke-width:4" stroke-dasharray="10 9" marker-end="url(#response-arrow)"/>
+<path class="wire" d="M780 188 V140" style="stroke:#4D8CA9;stroke-width:4" stroke-dasharray="10 9" marker-end="url(#response-arrow)"/>
+<path class="wire" d="M1510 188 V140" style="stroke:#4D8CA9;stroke-width:4" stroke-dasharray="10 9" marker-end="url(#response-arrow)"/>
+<text x="1760" y="452" font-size="32" font-weight="400" text-anchor="start" style="fill:#000000">结果回传</text>
+</svg>
