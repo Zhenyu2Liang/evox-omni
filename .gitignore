@@ -41,7 +41,7 @@ prisma/*.db-shm
 
 # Testing
 /coverage
-/output/playwright/
+/output/
 .vitest/
 test-results/
 
