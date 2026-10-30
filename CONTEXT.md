@@ -32,13 +32,14 @@ A competition simulator for natural-language banking with server-controlled perm
 
 ## Routing Table
 
-- `README.md`: public project overview, first-run setup, contribution workflow and license scope. `LICENSE` is the official Apache-2.0 text; `NOTICE` preserves project and third-party attribution. Files with separate license notices retain their own terms.
+- `README.md`: default English project overview, first-run setup, contribution workflow and license scope. `README.zh-CN.md` is the full Simplified Chinese counterpart. Keep both versions in sync and include reciprocal language links in their headers. `LICENSE` is the official Apache-2.0 text; `NOTICE` preserves project and third-party attribution. Files with separate license notices retain their own terms.
 
 Generated screenshots, run logs and local exports belong in ignored `output/` or `logs/`; do not force-add them to Git. Historical acceptance artifacts remain available in Git history. Shared library and test helper modules use direct imports rather than unused root barrel files.
 
 - `tests/e2e/`: real-browser acceptance — `acceptance.e2e.ts` (mock model) and `live-acceptance.e2e.ts` (live model), plus `*.e2e-helper.ts` scenario modules.
 - `tests/unit/`, `tests/scenarios/`, `tests/integration/`, `tests/app/`: pure, scenario, SQLite-backed and HTTP coverage.
 - `tests/helpers/`, `tests/fixtures/`: shared scenario harness and seeded-fixture ids.
+- `docs/en/` and `docs/cn/`: matching complete English and Simplified Chinese topic guides, with reciprocal language links and language-specific section anchors. `docs/README.md` is the documentation landing page.
 
 - `banking-sdk/`: exact domain arithmetic & mutations — `card.ts`, `account.ts`, `transaction.ts`, `transfer.ts`, `investment.ts`, `types.ts`, `index.ts`.
 - `agent/`: Pi runtime & banking tools — `tools/` (registry + family modules), `confirmation/`, `durable/`, `turns/`, `providers/`, `workflows/`.
@@ -46,7 +47,7 @@ Generated screenshots, run logs and local exports belong in ignored `output/` or
 - `app/`: Next.js pages (`cards/`, `overview/`, ...) & HTTP edge (`api/` routes).
 - `components/`: display components — `components/banking/` (`CardTile` etc.), `components/chat/cards/` (chat result cards).
 - `security/`: permissions, gateway, manual card management, verification, locks. `planner/`: DAG transitions & workflow ownership.
-- `prisma/`: schema & demo seed. `scripts/`: CLI command entry points. `docs/cn/`: developer documentation.
+- `prisma/`: schema & demo seed. `scripts/`: CLI command entry points. `docs/en/` and `docs/cn/`: developer documentation.
 
 ## Invariants
 
@@ -84,4 +85,4 @@ File logs must be stored under `logs/`. Command output retained for reviews, tes
 
 The root `.gitattributes` forces LF checkout for `*.patch` because pnpm patches must apply byte-exactly; a CRLF checkout (the Windows `core.autocrlf=true` default) makes `pnpm install` fail with `ERR_PNPM_INVALID_PATCH`. Chat-driven integration specs declare an explicit per-test budget from `tests/helpers/timeouts.ts` instead of a bare literal. These budgets cover the whole test; the agent model budget separately bounds provider requests and does not replace database/setup/tool-execution timeouts. See `tests/CONTEXT.md`.
 
-Documentation entry point: `docs/cn/README.md`. Development procedures live in `docs/cn/development.md`; current design lives in `docs/cn/architecture.md` and its linked topic guides. Write developer documentation in Chinese using the STC rules in `docs/cn/CONTEXT.md` and terms in `docs/cn/terms.md`. Keep the root README focused on the project overview, quick start, common commands and documentation links. Historical results remain in Git history and do not define current contracts.
+Documentation entry points: `docs/en/README.md` (default English) and `docs/cn/README.md` (Simplified Chinese). Both trees contain the same complete topics and filenames. Synchronize facts, permission boundaries, numeric values and executable examples whenever a topic changes; keep code blocks exact and regenerate translated section links as headings change. Chinese writing follows the STC rules in `docs/cn/CONTEXT.md`; terminology is maintained in the matching `terms.md` files. Root `README.md` links to English guides, while `README.zh-CN.md` links to Chinese guides. Both READMEs remain focused on overview, quick start, commands and documentation links. Historical results remain in Git history and do not define current contracts.

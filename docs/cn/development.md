@@ -1,5 +1,7 @@
 # 开发指南
 
+[English](../en/development.md) | **简体中文**
+
 项目使用 pnpm 管理依赖，使用 SQLite 保存模拟数据。
 开发、测试和构建均从仓库根目录执行。
 架构职责见[架构设计](architecture.md)。

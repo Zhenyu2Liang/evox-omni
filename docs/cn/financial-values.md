@@ -1,5 +1,7 @@
 # 金融数值与结算
 
+[English](../en/financial-values.md) | **简体中文**
+
 入账金额使用整数分。净值、份额和未舍入市值使用 Decimal。
 两类数值按单位区分，不能统一改为 BigInt。
 

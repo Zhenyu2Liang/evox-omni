@@ -1,5 +1,7 @@
 # 开发文档
 
+[English](../en/README.md) | **简体中文**
+
 首次运行项目，先读[开发指南](development.md)。
 修改业务前，读[架构设计](architecture.md)。
 文档中的名称按[术语表](terms.md)使用。
@@ -35,7 +37,7 @@
 
 ## 代码与需求入口
 
-- [项目 README](../../README.md)提供简介和启动命令。
+- 项目 README 的[中文版](../../README.zh-CN.md)和[英文版](../../README.md)提供简介和启动命令。
 - [赛题要求](../../req.md)提供比赛评估背景。
 - [接口契约](../../lib/contracts)定义字段和工具规则。
 - [数据库 schema](../../prisma/schema.prisma)定义持久化记录。

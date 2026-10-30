@@ -1,5 +1,7 @@
 # 对话归档与上下文压缩
 
+[English](../en/context-compaction.md) | **简体中文**
+
 完整对话保存在数据库中，不按消息数量裁剪。
 压缩直接调用 Pi Coding Agent 的官方 `compact()`。
 模型请求超过压缩阈值时，适配层准备归档范围并生成摘要。

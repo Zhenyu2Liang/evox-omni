@@ -1,5 +1,7 @@
 # Pi 接口与版本适配
 
+[English](../en/pi-integration.md) | **简体中文**
+
 项目直接依赖 3 个 Pi 包，版本固定为 `1.2.0`。
 依赖写在 [package.json](../../package.json)。
 [`pnpm-workspace.yaml`](../../pnpm-workspace.yaml) 的 `overrides` 另固定 `pi-agent-core`、`pi-ai`、`pi-codemode`、`pi-mcp` 和 `pi-tui`。

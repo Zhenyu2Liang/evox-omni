@@ -8,66 +8,69 @@
   </a>
 </h1>
 
-<h2 align="center">万象柜坊 · EvoX Omni</h2>
+<h2 align="center">EvoX Omni · 万象柜坊</h2>
 
-<p align="center">通过自然语言办理模拟银行业务的 AI 智能体，支持 Web 和微信文字对话。</p>
+<p align="center"><strong>English</strong> | <a href="README.zh-CN.md">简体中文</a></p>
+
+<p align="center">A natural-language AI agent for simulated banking, available on the web and through WeChat.</p>
 
 <div align="center">
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/License-Apache--2.0-blue?style=for-the-badge" alt="Apache-2.0 License">
   </a>
-  <a href="docs/cn/README.md">
-    <img src="https://img.shields.io/badge/docs-Documentation-2E8B57?style=for-the-badge&amp;logo=readthedocs" alt="开发文档">
+  <a href="docs/en/README.md">
+    <img src="https://img.shields.io/badge/docs-Documentation-2E8B57?style=for-the-badge&amp;logo=readthedocs" alt="Developer documentation">
   </a>
   <a href="https://github.com/Zhenyu2Liang/banking-agent/issues">
-    <img src="https://img.shields.io/badge/GitHub-Issues-5865F2?style=for-the-badge&amp;logo=github" alt="问题反馈">
+    <img src="https://img.shields.io/badge/GitHub-Issues-5865F2?style=for-the-badge&amp;logo=github" alt="Issues">
   </a>
 </div>
 
 <p align="center">
-  <a href="#快速开始">快速开始</a> ·
-  <a href="#功能">功能</a> ·
-  <a href="#模型配置">模型配置</a> ·
-  <a href="#微信接入">微信接入</a> ·
-  <a href="docs/cn/README.md">开发文档</a>
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#model-configuration">Model Configuration</a> ·
+  <a href="#wechat-integration">WeChat</a> ·
+  <a href="docs/en/README.md">Documentation</a>
 </p>
 
-从余额查询、账单分析到转账和卡片控制，操作经过服务端授权，并保存执行回执。
+Query balances, analyze spending, initiate transfers, and manage cards through natural-language requests.
+Operations are authorized by server-side code and recorded with execution receipts.
 
-项目用于学习、研究和业务流程演示，未接入真实银行或支付服务。
-账户、交易和验证码均为模拟服务。
-当前使用免登录的固定演示用户，不同浏览器共享同一账户及对话记录。
-生产部署所需的用户登录、角色分权和真实身份认证尚未提供。
+This project is intended for learning, research, and workflow demonstrations. It is not connected to real banking or payment services.
+Accounts, transactions, and verification are simulated.
+The application uses a fixed demo user without login; browsers share the same account and saved conversation.
+Production user authentication, role-based access control, and real identity verification are not provided.
 
-## 功能
+## Features
 
-| 能力 | 支持内容 |
+| Area | Capabilities |
 | --- | --- |
-| 自然语言交互 | Web 流式对话、微信文字私聊、业务卡片与操作确认 |
-| 账户与转账 | 账户余额、交易流水、联系人查询与按姓名或手机号转账 |
-| 账单分析 | 消费分类、趋势、可疑交易识别及规则说明 |
-| 月度与年度报告 | 页面查看、按需生成模型分析，导出 PDF、HTML 和 CSV |
-| 卡片与订阅 | 卡片状态、消费限额、冻结与挂失、虚拟卡及订阅代扣管理 |
-| 理财 | 产品比较、持仓与净值展示、申购、按份额或金额赎回 |
-| 多步与定时任务 | 顺序和条件执行、暂停与恢复、定时提醒和到期付款确认 |
-| 执行与恢复 | 操作审计、幂等执行回执、事件持久化与中断恢复 |
+| Natural-language interaction | Streaming web chat, WeChat text conversations, business cards, and explicit confirmations |
+| Accounts and transfers | Balances, transaction history, contacts, and transfers by contact name or phone number |
+| Spending analysis | Categories, trends, suspicious transactions, and explanations of triggered rules |
+| Monthly and annual reports | Report pages, on-demand model analysis, and PDF, HTML, and CSV exports |
+| Cards and subscriptions | Card status, spending limits, freezing and loss reporting, virtual cards, and subscription management |
+| Investments | Product comparisons, holdings and net asset values, purchases, and redemptions by shares or amount |
+| Multistep and scheduled tasks | Sequential and conditional execution, pause and resume, reminders, and confirmation of due payments |
+| Execution and recovery | Audit records, idempotent execution receipts, persisted events, and recovery after interruptions |
 
-界面支持中文、英文，以及浅色、深色和跟随系统的外观设置。
-对话持续保存，历史记录可分页查看；模型上下文压缩后仍保留完整归档。
-功能入口和模拟边界见[已实现功能说明](docs/cn/implemented-features.md)。
+The interface supports Chinese and English, with light, dark, and system appearance settings.
+Conversations are saved with paginated history. Full archives remain available after model context compaction.
+See the [implemented features guide](docs/en/implemented-features.md) for entry points and simulation boundaries.
 
-## 快速开始
+## Quick Start
 
-### 1. 准备环境
+### 1. Prerequisites
 
-| 工具 | 版本要求 |
+| Tool | Requirement |
 | --- | --- |
 | Node.js | `>=22.19.0` |
 | pnpm | `12.3.4` |
-| Git | 用于克隆仓库 |
+| Git | Required to clone the repository |
 
-版本声明以 [package.json](package.json) 为准。
-尚未安装指定 pnpm 版本时，可执行 `npm install --global pnpm@12.3.4`。
+Version requirements are declared in [package.json](package.json).
+To install the specified pnpm version, run `npm install --global pnpm@12.3.4`.
 
 ```sh
 git clone https://github.com/Zhenyu2Liang/banking-agent.git
@@ -75,23 +78,23 @@ cd banking-agent
 pnpm install --frozen-lockfile
 ```
 
-### 2. 配置本地演示
+### 2. Configure the local demo
 
-在仓库根目录新建 `.env.local`，填入：
+Create `.env.local` in the repository root:
 
 ```dotenv
 DATABASE_URL=file:./dev.db
 LLM_MODE=mock
 ```
 
-此配置使用 `prisma/dev.db` 保存数据。
-`mock` 模式使用脚本模型，运行时不调用外部模型服务，也不需要模型密钥。
-自然语言解析范围由脚本模型决定；自由多轮对话可切换到 `live` 模式。
-完整变量模板见 [.env.example](.env.example)。
+This configuration stores data in `prisma/dev.db`.
+The `mock` mode uses a scripted model: it makes no external model requests and requires no model API key at runtime.
+Its natural-language coverage is limited by the script. Use `live` mode for open-ended conversations.
+See [.env.example](.env.example) for the full configuration template.
 
-### 3. 初始化并启动
+### 3. Initialize and start
 
-以下初始化命令用于首次建立演示数据库：
+Run the following commands to create the demo database for the first time:
 
 ```sh
 pnpm db:generate
@@ -100,33 +103,33 @@ pnpm db:seed
 pnpm dev
 ```
 
-打开 [http://localhost:3000](http://localhost:3000)，首页进入智能助手。
-首次打开会显示使用引导，也可通过页面上的“使用帮助”再次查看。
+Open [http://localhost:3000](http://localhost:3000) to access the assistant.
+An introductory guide appears on the first visit and can be reopened from the page's help control.
 
-**数据重置提示：**再次执行 `pnpm db:seed` 会重建演示用户的数据。
-`pnpm db:reset` 会删除所选数据库并重新初始化；需保留数据时，先停止服务并[备份数据库](docs/cn/development.md#备份默认数据库)。
+**Data reset:** Running `pnpm db:seed` again rebuilds the demo user's data.
+`pnpm db:reset` deletes the selected database and initializes it again. Stop the application and [back up the database](docs/en/development.md#backing-up-the-default-database) first if its data must be retained.
 
-### 4. 体验业务
+### 4. Try the demo
 
-可在助手中尝试以下请求：
+The seeded contacts and the following sample prompts use Chinese:
 
-```text
-查询我的账户余额。
-分析 2026 年 9 月的消费。
-检查可疑交易，并说明触发规则的原因。
-给妈妈转账 300 元，备注“打车”。
-明天下午 3 点给妈妈转账 300 元。
-```
+| Intent | Sample prompt |
+| --- | --- |
+| Query account balances | 查询我的账户余额。 |
+| Analyze September 2026 spending | 分析 2026 年 9 月的消费。 |
+| Explain suspicious transactions | 检查可疑交易，并说明触发规则的原因。 |
+| Transfer CNY 300 to Mom with a taxi remark | 给妈妈转账 300 元，备注“打车”。 |
+| Schedule a CNY 300 transfer to Mom for 3 PM tomorrow | 明天下午 3 点给妈妈转账 300 元。 |
 
-涉及确认或验证时，先核对收款人、金额、卡片和执行时间，再按页面提示继续。
-演示验证码为 `123456`，不会发送真实短信。
-月报和年报通过[账单报告页](http://localhost:3000/bills/reports)查看与导出。
-报告模型分析需要主动点击生成；`live` 模式下会调用所配置的模型服务。
+When confirmation or verification is required, review the recipient, amount, card, and execution time before continuing.
+The demo verification code is `123456`; no real SMS is sent.
+View and export monthly or annual reports from the [bill reports page](http://localhost:3000/bills/reports).
+Report analysis is generated only when requested. In `live` mode, it calls the configured model service.
 
-## 模型配置
+## Model Configuration
 
-在 `.env.local` 中配置服务商、精确模型标识和密钥，再重启银行服务。
-以项目已适配的 DeepSeek 配置为例：
+Set the provider, exact model identifier, and API key in `.env.local`, then restart the banking service.
+Example configuration for the supported DeepSeek integration:
 
 ```dotenv
 DATABASE_URL=file:./dev.db
@@ -136,119 +139,121 @@ LLM_MODEL=deepseek-flash
 DEEPSEEK_API_KEY=<your-api-key>
 ```
 
-将 `<your-api-key>` 替换为实际密钥。
-`live` 模式需要网络连接，并可能产生模型服务费用。
-其他服务商、兼容接口地址及调用预算见[模型与环境配置](docs/cn/development.md#模型与环境配置)。
-密钥仅保存在本地配置中，不提交到 Git，也不写入问题描述或运行日志。
+Replace `<your-api-key>` with your actual key.
+`live` mode requires network access and may incur model service charges.
+See [model and environment configuration](docs/en/development.md#model-and-environment-configuration) for other providers, compatible endpoints, and request budgets.
+Keep keys in local configuration; never commit them or include them in issues or runtime logs.
 
-## 微信接入
+## WeChat Integration
 
-先启动银行 Web 服务，再在另一个终端执行：
+Start the banking web service first, then run these commands in another terminal:
 
 ```sh
 pnpm weixin:login
 pnpm weixin:start
 ```
 
-使用微信扫码并完成绑定后，可通过文字私聊查询或提出业务请求。
-微信与 Web 共用银行服务及演示数据。
+Scan the QR code in WeChat and complete account binding to send requests through a text conversation.
+WeChat and the web interface share the same banking service and demo data.
+Command keywords use Chinese, as shown below:
 
-| 命令 | 作用 |
+| Command | Purpose |
 | --- | --- |
-| `/帮助` | 查看支持的需求和命令 |
-| `/待办` | 查看当前操作及剩余待办数量 |
-| `/确认` | 确认当前显示的这一笔操作 |
-| `/验证 123456` | 为当前已确认的操作提交演示验证码 |
-| `/取消` | 取消当前显示的这一笔操作 |
+| `/帮助` | Show supported requests and commands |
+| `/待办` | Show the current operation and remaining queue length |
+| `/确认` | Confirm the currently displayed operation |
+| `/验证 123456` | Submit the demo verification code for the current confirmed operation |
+| `/取消` | Cancel the currently displayed operation |
 
-多笔操作逐笔展示，每笔分别确认；需要验证码时停留在当前步骤。
-通道只接收扫码绑定用户的文字私聊。
-登录缓存、连接配置、任务命令和恢复方式见[微信通道](docs/cn/weixin.md)。
+Queued operations are shown one at a time and confirmed separately. An operation requiring verification stays active until verification is completed.
+The channel accepts text messages only from the user bound during QR login.
+See the [WeChat guide](docs/en/weixin.md) for login state, connection settings, task commands, and recovery.
 
-## 架构与技术栈
+## Architecture and Stack
 
-技术栈为 Next.js、React、TypeScript、Pi Agent、Prisma 和 SQLite。
-依赖固定版本由 `pnpm-lock.yaml` 管理。
+Built with Next.js, React, TypeScript, Pi Agent, Prisma, and SQLite.
+Dependency versions are pinned in `pnpm-lock.yaml`.
 
-请求通过 Web 或微信进入银行 HTTP 接口。
-Pi 运行时组织工具调用和多步任务，安全网关检查身份、参数及权限。
-需要授权的操作等待用户确认或验证，再由银行 SDK 写入数据库。
-模型文字不能直接作为付款成功或身份验证通过的依据。
+Web and WeChat requests enter through the banking HTTP API.
+The Pi runtime organizes tool calls and multistep tasks; the security gateway checks identity, parameters, and permissions.
+Operations requiring authorization wait for user confirmation or verification before the banking SDK writes to the database.
+Model-generated text alone cannot prove that a payment succeeded or identity verification passed.
 
 ```text
-app/              Web 页面与 HTTP 接口
-components/       对话卡片、图表与业务界面
-channels/weixin/  微信收发、逐笔确认与验证
-agent/            Pi 运行时、银行工具与对话持久化
-planner/          多步任务编排
-security/         权限、验证、限额与安全网关
-banking-sdk/      模拟银行业务与精确金额运算
-lib/              共享契约、数据库访问与国际化
-prisma/           数据模型与演示种子
-tests/            单元、集成、场景与浏览器验收
-docs/cn/          开发与使用文档
+app/              Web pages and HTTP endpoints
+components/       Chat cards, charts, and business UI
+channels/weixin/  WeChat transport, sequential confirmation, and verification
+agent/            Pi runtime, banking tools, and persisted conversations
+planner/          Multistep workflow orchestration
+security/         Permissions, verification, limits, and security gateway
+banking-sdk/      Simulated banking operations and exact monetary arithmetic
+lib/              Shared contracts, database access, and localization
+prisma/           Data models and demo seed
+tests/            Unit, integration, scenario, and browser acceptance coverage
+docs/en/          Developer and user documentation in English
+docs/cn/          Developer and user documentation in Chinese
 ```
 
-已入账金额以整数分保存，估值与比率使用精确十进制运算。
-业务变更、审计和原执行回执在同一事务中提交。
-机制与边界见[架构设计](docs/cn/architecture.md)、[安全设计](docs/cn/security.md)和[金融数值与结算](docs/cn/financial-values.md)。
+Booked amounts are stored as integer minor units; valuations and ratios use exact decimal arithmetic.
+Business changes, audit records, and the original execution receipt are committed in one transaction.
+See [architecture](docs/en/architecture.md), [security](docs/en/security.md), and [financial values and settlement](docs/en/financial-values.md) for the design and its boundaries.
 
-## 开发与运行
+## Development and Operation
 
-| 命令 | 用途 |
+| Command | Purpose |
 | --- | --- |
-| `pnpm dev` | 启动开发服务 |
-| `pnpm typecheck` | 检查 TypeScript 类型 |
-| `pnpm lint` | 检查代码规范 |
-| `pnpm test` | 运行离线测试 |
-| `pnpm build` | 构建生产版本 |
-| `pnpm start` | 启动已构建的版本 |
-| `pnpm db:studio` | 查看本地数据库 |
-| `pnpm scheduler:tick` | 检查到期任务并生成提醒或待确认操作 |
-| `pnpm agent:recover` | 恢复一批中断运行 |
-| `pnpm agent:worker` | 启动常驻恢复服务 |
+| `pnpm dev` | Start the development server |
+| `pnpm typecheck` | Check TypeScript types |
+| `pnpm lint` | Run code linting |
+| `pnpm test` | Run offline tests |
+| `pnpm build` | Build the production application |
+| `pnpm start` | Start an existing production build |
+| `pnpm db:studio` | Inspect the local database |
+| `pnpm scheduler:tick` | Check due tasks and create reminders or pending operations |
+| `pnpm agent:recover` | Recover one batch of interrupted runs |
+| `pnpm agent:worker` | Start a persistent recovery worker |
 
-Web 服务不内置常驻定时调度；定时检查需要单独配置[调度入口](docs/cn/scheduled-tasks.md#部署入口)。
-到期付款仍需确认和验证。
+The web service does not include a persistent scheduling loop. Configure a separate [scheduler entry point](docs/en/scheduled-tasks.md#deployment-entry-point) for periodic checks.
+Due payments still require confirmation and verification.
 
-测试使用隔离数据库。
-数据库测试共享 `prisma/test.db`，同一仓库内不要同时启动多个数据库测试进程。
-浏览器验收还需要可用的 Chrome 或 Chromium，配置见[测试指南](docs/cn/test-cases.md)。
-从其他域名或反向代理访问时，需要配置[可信访问地址](docs/cn/development.md#可信访问地址)。
-当前默认身份和演示认证不适用于真实金融业务或面向公众的生产部署。
+Tests use isolated databases.
+Database tests share `prisma/test.db`; do not run multiple database test processes concurrently in the same checkout.
+Browser acceptance runs also need an available Chrome or Chromium installation. See the [testing guide](docs/en/test-cases.md).
+Access through another hostname or a reverse proxy requires [trusted origin configuration](docs/en/development.md#trusted-access-addresses).
+The default identity and demo verification are not suitable for real financial operations or public production deployment.
 
-## 文档导航
+## Documentation
 
-| 主题 | 文档 |
+| Topic | Guide |
 | --- | --- |
-| 安装、环境配置、数据库备份与故障排查 | [开发指南](docs/cn/development.md) |
-| 业务能力与使用入口 | [已实现功能](docs/cn/implemented-features.md) |
-| 月报、年报、导出与模型分析 | [账单报告](docs/cn/bill-reports.md) |
-| 微信登录、命令与权限 | [微信通道](docs/cn/weixin.md) |
-| 事件、重试与崩溃恢复 | [持久化与恢复](docs/cn/agent-durability.md) |
-| 对话归档与模型上下文压缩 | [上下文压缩](docs/cn/context-compaction.md) |
-| 权限与模拟边界 | [安全设计](docs/cn/security.md)、[当前限制](docs/cn/known-risks.md) |
-| 验证方法与证据范围 | [测试指南](docs/cn/test-cases.md) |
+| Installation, configuration, database backups, and troubleshooting | [Development guide](docs/en/development.md) |
+| Business capabilities and entry points | [Implemented features](docs/en/implemented-features.md) |
+| Monthly and annual reports, exports, and model analysis | [Bill reports](docs/en/bill-reports.md) |
+| WeChat login, commands, and permissions | [WeChat](docs/en/weixin.md) |
+| Events, retries, and recovery | [Durability and recovery](docs/en/agent-durability.md) |
+| Conversation archives and model context compaction | [Context compaction](docs/en/context-compaction.md) |
+| Permissions and simulation boundaries | [Security](docs/en/security.md), [known limitations](docs/en/known-risks.md) |
+| Verification methods and evidence scope | [Testing guide](docs/en/test-cases.md) |
 
-完整索引见[开发文档](docs/cn/README.md)，竞赛背景见[赛题要求](req.md)。
+Browse the [documentation index](docs/en/README.md) or the original [competition requirements](req.md).
 
-## 参与贡献
+## Contributing
 
-通过 [Issues](https://github.com/Zhenyu2Liang/banking-agent/issues) 反馈问题或讨论改动。
-问题报告需包含提交版本、`mock` 或 `live` 模式、复现步骤及脱敏后的错误信息。
-提交前移除 API 密钥、微信令牌和个人数据。
+Use [Issues](https://github.com/Zhenyu2Liang/banking-agent/issues) to report problems or discuss changes.
+Include the commit version, `mock` or `live` mode, reproduction steps, and sanitized error details.
+Remove API keys, WeChat tokens, and personal data before sharing.
 
-提交 Pull Request 时：
+When submitting a pull request:
 
-1. 说明解决的问题和行为变化。
-2. 为业务与权限变更补充回归测试，并更新对应文档。
-3. 依次完成 `pnpm typecheck`、`pnpm lint`、`pnpm test` 和 `pnpm build`。
-4. 保留锁文件，不提交数据库、`.env.local`、登录状态或生成的 `output/`、`logs/` 文件。
+1. Explain the problem and the resulting behavior change.
+2. Add regression coverage for business or authorization changes and update the corresponding documentation.
+3. Run `pnpm typecheck`, `pnpm lint`, `pnpm test`, and `pnpm build` sequentially.
+4. Keep the lockfile. Do not commit databases, `.env.local`, login state, or generated files under `output/` or `logs/`.
 
-## 许可证
+## License
 
-项目原创代码采用 [Apache License 2.0](LICENSE)，版权声明见 [NOTICE](NOTICE)。
-第三方依赖和仓库内已有独立许可的文件继续适用各自的许可证。
+Original project code is licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution.
+Third-party dependencies and files with separate license notices retain their own terms.
 
-- [STC 文字规则与词表](.agents/skills/stc/LICENSE)采用 CC BY 4.0，代码采用其 [MIT 许可证](.agents/skills/stc/LICENSE-CODE)。
-- 品牌标识来源见[品牌资源说明](public/brand/README.md)；项目许可证不授予第三方商标或品牌标识的使用权。
+- [STC writing rules and dictionaries](.agents/skills/stc/LICENSE) use CC BY 4.0; its code uses a separate [MIT license](.agents/skills/stc/LICENSE-CODE).
+- See [brand resources](public/brand/README.md) for artwork provenance. The project license grants no rights to third-party trademarks or brand artwork.
