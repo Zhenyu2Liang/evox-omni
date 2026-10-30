@@ -80,16 +80,19 @@ pnpm install --frozen-lockfile
 
 ### 2. Configure the local demo
 
-Create `.env.local` in the repository root:
+Create `.env.local` in the repository root. The quick start uses `live` mode with your own API key; this example uses DeepSeek:
 
 ```dotenv
 DATABASE_URL=file:./dev.db
-LLM_MODE=mock
+LLM_MODE=live
+LLM_PROVIDER=deepseek
+LLM_MODEL=deepseek-flash
+DEEPSEEK_API_KEY=<your-api-key>
 ```
 
 This configuration stores data in `prisma/dev.db`.
-The `mock` mode uses a scripted model: it makes no external model requests and requires no model API key at runtime.
-Its natural-language coverage is limited by the script. Use `live` mode for open-ended conversations.
+Replace `<your-api-key>` with your own DeepSeek API key before starting. `live` mode requires network access and may incur model service charges.
+For an offline demo, set `LLM_MODE=mock`. This uses a scripted model with limited natural-language coverage and requires no API key or external model requests.
 See [.env.example](.env.example) for the full configuration template.
 
 ### 3. Initialize and start

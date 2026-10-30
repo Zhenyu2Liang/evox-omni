@@ -79,16 +79,19 @@ pnpm install --frozen-lockfile
 
 ### 2. 配置本地演示
 
-在仓库根目录新建 `.env.local`，填入：
+在仓库根目录新建 `.env.local`。快速开始默认使用 `live` 模式，需要填写自己的 API Key。以下以 DeepSeek 为例：
 
 ```dotenv
 DATABASE_URL=file:./dev.db
-LLM_MODE=mock
+LLM_MODE=live
+LLM_PROVIDER=deepseek
+LLM_MODEL=deepseek-flash
+DEEPSEEK_API_KEY=<your-api-key>
 ```
 
 此配置使用 `prisma/dev.db` 保存数据。
-`mock` 模式使用脚本模型，运行时不调用外部模型服务，也不需要模型密钥。
-自然语言解析范围由脚本模型决定；自由多轮对话可切换到 `live` 模式。
+启动前，将 `<your-api-key>` 替换为自己的 DeepSeek API Key。`live` 模式需要网络连接，并可能产生模型服务费用。
+离线演示可设置 `LLM_MODE=mock`。此模式使用脚本模型，自然语言解析范围有限，不需要 API Key，也不调用外部模型服务。
 完整变量模板见 [.env.example](.env.example)。
 
 ### 3. 初始化并启动
