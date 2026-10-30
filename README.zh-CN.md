@@ -1,5 +1,5 @@
 <h1 align="center">
-  <a href="https://github.com/Zhenyu2Liang/banking-agent">
+  <a href="https://github.com/Zhenyu2Liang/evox-omni">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="docs/images/evox_brand_light.svg">
       <source media="(prefers-color-scheme: light)" srcset="docs/images/evox_brand_dark.svg">
@@ -21,7 +21,7 @@
   <a href="docs/cn/README.md">
     <img src="https://img.shields.io/badge/docs-Documentation-2E8B57?style=for-the-badge&amp;logo=readthedocs" alt="开发文档">
   </a>
-  <a href="https://github.com/Zhenyu2Liang/banking-agent/issues">
+  <a href="https://github.com/Zhenyu2Liang/evox-omni/issues">
     <img src="https://img.shields.io/badge/GitHub-Issues-5865F2?style=for-the-badge&amp;logo=github" alt="问题反馈">
   </a>
 </div>
@@ -72,8 +72,8 @@
 尚未安装指定 pnpm 版本时，可执行 `npm install --global pnpm@12.3.4`。
 
 ```sh
-git clone https://github.com/Zhenyu2Liang/banking-agent.git
-cd banking-agent
+git clone https://github.com/Zhenyu2Liang/evox-omni.git
+cd evox-omni
 pnpm install --frozen-lockfile
 ```
 
@@ -237,7 +237,7 @@ Web 服务不内置常驻定时调度；定时检查需要单独配置[调度入
 
 ## 参与贡献
 
-通过 [Issues](https://github.com/Zhenyu2Liang/banking-agent/issues) 反馈问题或讨论改动。
+通过 [Issues](https://github.com/Zhenyu2Liang/evox-omni/issues) 反馈问题或讨论改动。
 问题报告需包含提交版本、`mock` 或 `live` 模式、复现步骤及脱敏后的错误信息。
 提交前移除 API 密钥、微信令牌和个人数据。
 

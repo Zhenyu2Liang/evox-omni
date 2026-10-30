@@ -1,5 +1,5 @@
 <h1 align="center">
-  <a href="https://github.com/Zhenyu2Liang/banking-agent">
+  <a href="https://github.com/Zhenyu2Liang/evox-omni">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="docs/images/evox_brand_light.svg">
       <source media="(prefers-color-scheme: light)" srcset="docs/images/evox_brand_dark.svg">
@@ -21,7 +21,7 @@
   <a href="docs/en/README.md">
     <img src="https://img.shields.io/badge/docs-Documentation-2E8B57?style=for-the-badge&amp;logo=readthedocs" alt="Developer documentation">
   </a>
-  <a href="https://github.com/Zhenyu2Liang/banking-agent/issues">
+  <a href="https://github.com/Zhenyu2Liang/evox-omni/issues">
     <img src="https://img.shields.io/badge/GitHub-Issues-5865F2?style=for-the-badge&amp;logo=github" alt="Issues">
   </a>
 </div>
@@ -73,8 +73,8 @@ Version requirements are declared in [package.json](package.json).
 To install the specified pnpm version, run `npm install --global pnpm@12.3.4`.
 
 ```sh
-git clone https://github.com/Zhenyu2Liang/banking-agent.git
-cd banking-agent
+git clone https://github.com/Zhenyu2Liang/evox-omni.git
+cd evox-omni
 pnpm install --frozen-lockfile
 ```
 
@@ -239,7 +239,7 @@ Browse the [documentation index](docs/en/README.md) or the original [competition
 
 ## Contributing
 
-Use [Issues](https://github.com/Zhenyu2Liang/banking-agent/issues) to report problems or discuss changes.
+Use [Issues](https://github.com/Zhenyu2Liang/evox-omni/issues) to report problems or discuss changes.
 Include the commit version, `mock` or `live` mode, reproduction steps, and sanitized error details.
 Remove API keys, WeChat tokens, and personal data before sharing.
 

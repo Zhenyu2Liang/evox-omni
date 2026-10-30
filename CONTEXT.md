@@ -1,8 +1,10 @@
-# Banking Agent repository context
+# evox-omni repository context
 
 ## Purpose
 
 A competition simulator for natural-language banking with server-controlled permission, inspectable workflows, exact financial values and durable execution evidence. The model proposes work; code grants or rejects it. No real banking rail is connected.
+
+The repository and package name is `evox-omni`; the product display name is EvoX Omni (万象柜坊). Repository links use `Zhenyu2Liang/evox-omni`. Internal `banking-agent` module filenames and persisted browser preference keys are stable implementation identifiers, not repository names.
 
 ## Module boundaries
 
