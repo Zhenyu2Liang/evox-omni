@@ -111,15 +111,15 @@ An introductory guide appears on the first visit and can be reopened from the pa
 
 ### 4. Try the demo
 
-The seeded contacts and the following sample prompts use Chinese:
+Try these English prompts in `live` mode. The seeded contact `妈妈` means “Mom”.
 
 | Intent | Sample prompt |
 | --- | --- |
-| Query account balances | 查询我的账户余额。 |
-| Analyze September 2026 spending | 分析 2026 年 9 月的消费。 |
-| Explain suspicious transactions | 检查可疑交易，并说明触发规则的原因。 |
-| Transfer CNY 300 to Mom with a taxi remark | 给妈妈转账 300 元，备注“打车”。 |
-| Schedule a CNY 300 transfer to Mom for 3 PM tomorrow | 明天下午 3 点给妈妈转账 300 元。 |
+| Query account balances | Show my account balances. |
+| Analyze September 2026 spending | Analyze my spending for September 2026. |
+| Explain suspicious transactions | Check for suspicious transactions and explain which rules each one triggered. |
+| Transfer CNY 300 to Mom with a taxi remark | Transfer CNY 300 to the contact “妈妈” with the remark “Taxi”. |
+| Schedule a CNY 300 transfer to Mom for 3 PM tomorrow | Schedule a transfer of CNY 300 to the contact “妈妈” for tomorrow at 3 PM Beijing time. |
 
 When confirmation or verification is required, review the recipient, amount, card, and execution time before continuing.
 The demo verification code is `123456`; no real SMS is sent.
