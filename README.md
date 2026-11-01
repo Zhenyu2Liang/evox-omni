@@ -34,13 +34,10 @@
   <a href="docs/en/README.md">Documentation</a>
 </p>
 
-Query balances, analyze spending, initiate transfers, and manage cards through natural-language requests.
-Operations are authorized by server-side code and recorded with execution receipts.
-
-This project is intended for learning, research, and workflow demonstrations. It is not connected to real banking or payment services.
-Accounts, transactions, and verification are simulated.
-The application uses a fixed demo user without login; browsers share the same account and saved conversation.
+Accounts, transactions, and verification are simulated; no real banking or payment services are connected.
+The application uses a fixed demo user without login. Browsers and the bound WeChat user share the same account and conversation.
 Production user authentication, role-based access control, and real identity verification are not provided.
+The demo is not suitable for real financial operations or public production deployment.
 
 ## Features
 
@@ -57,7 +54,6 @@ Production user authentication, role-based access control, and real identity ver
 
 The interface supports Chinese and English, with light, dark, and system appearance settings.
 Conversations are saved with paginated history. Full archives remain available after model context compaction.
-See the [implemented features guide](docs/en/implemented-features.md) for entry points and simulation boundaries.
 
 ## Quick Start
 
@@ -69,7 +65,6 @@ See the [implemented features guide](docs/en/implemented-features.md) for entry 
 | pnpm | `12.3.4` |
 | Git | Required to clone the repository |
 
-Version requirements are declared in [package.json](package.json).
 To install the specified pnpm version, run `npm install --global pnpm@12.3.4`.
 
 ```sh
@@ -80,7 +75,7 @@ pnpm install --frozen-lockfile
 
 ### 2. Configure the local demo
 
-Create `.env.local` in the repository root. The quick start uses `live` mode with your own API key; this example uses DeepSeek:
+Create `.env.local` in the repository root:
 
 ```dotenv
 DATABASE_URL=file:./dev.db
@@ -92,7 +87,7 @@ DEEPSEEK_API_KEY=<your-api-key>
 
 This configuration stores data in `prisma/dev.db`.
 Replace `<your-api-key>` with your own DeepSeek API key before starting. `live` mode requires network access and may incur model service charges.
-For an offline demo, set `LLM_MODE=mock`. This uses a scripted model with limited natural-language coverage and requires no API key or external model requests.
+For an offline demo, set `LLM_MODE=mock`: scripted responses with limited natural-language coverage, without an API key or external model requests.
 See [.env.example](.env.example) for the full configuration template.
 
 ### 3. Initialize and start
@@ -107,7 +102,6 @@ pnpm dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) to access the assistant.
-An introductory guide appears on the first visit and can be reopened from the page's help control.
 
 **Data reset:** Running `pnpm db:seed` again rebuilds the demo user's data.
 `pnpm db:reset` deletes the selected database and initializes it again. Stop the application and [back up the database](docs/en/development.md#backing-up-the-default-database) first if its data must be retained.
@@ -116,24 +110,22 @@ An introductory guide appears on the first visit and can be reopened from the pa
 
 Try these English prompts in `live` mode. The seeded contact `妈妈` means “Mom”.
 
-| Intent | Sample prompt |
+| Task | Sample prompt |
 | --- | --- |
-| Query account balances | Show my account balances. |
-| Analyze September 2026 spending | Analyze my spending for September 2026. |
-| Explain suspicious transactions | Check for suspicious transactions and explain which rules each one triggered. |
-| Transfer CNY 300 to Mom with a taxi remark | Transfer CNY 300 to the contact “妈妈” with the remark “Taxi”. |
-| Schedule a CNY 300 transfer to Mom for 3 PM tomorrow | Schedule a transfer of CNY 300 to the contact “妈妈” for tomorrow at 3 PM Beijing time. |
+| Balances | Show my account balances. |
+| Spending | Analyze my spending for September 2026. |
+| Anomalies | Check for suspicious transactions and explain which rules each one triggered. |
+| Transfer | Transfer CNY 300 to the contact “妈妈” with the remark “Taxi”. |
+| Scheduled transfer | Schedule a transfer of CNY 300 to the contact “妈妈” for tomorrow at 3 PM Beijing time. |
 
 When confirmation or verification is required, review the recipient, amount, card, and execution time before continuing.
 The demo verification code is `123456`; no real SMS is sent.
 View and export monthly or annual reports from the [bill reports page](http://localhost:3000/bills/reports).
-Report analysis is generated only when requested. In `live` mode, it calls the configured model service.
 
 ## Model Configuration
 
-To switch providers, update the provider, exact model identifier, and API key in `.env.local`, then restart the banking service.
-See [model and environment configuration](docs/en/development.md#model-and-environment-configuration) for other providers, compatible endpoints, and request budgets.
-Keep keys in local configuration; never commit them or include them in issues or runtime logs.
+For other providers, compatible endpoints, and request budgets, see [model and environment configuration](docs/en/development.md#model-and-environment-configuration).
+After changing model settings in `.env.local`, restart the banking service.
 
 ## WeChat Integration
 
@@ -144,9 +136,7 @@ pnpm weixin:login
 pnpm weixin:start
 ```
 
-Scan the QR code in WeChat and complete account binding to send requests through a text conversation.
-WeChat and the web interface share the same banking service and demo data.
-Command keywords use Chinese, as shown below:
+Scan the QR code in WeChat and complete account binding. Command keywords use Chinese:
 
 | Command | Purpose |
 | --- | --- |
@@ -163,7 +153,6 @@ See the [WeChat guide](docs/en/weixin.md) for login state, connection settings, 
 ## Architecture and Stack
 
 Built with Next.js, React, TypeScript, Pi Agent, Prisma, and SQLite.
-Dependency versions are pinned in `pnpm-lock.yaml`.
 
 Web and WeChat requests enter through the banking HTTP API.
 The Pi runtime organizes tool calls and multistep tasks; the security gateway checks identity, parameters, and permissions.
@@ -181,8 +170,7 @@ banking-sdk/      Simulated banking operations and exact monetary arithmetic
 lib/              Shared contracts, database access, and localization
 prisma/           Data models and demo seed
 tests/            Unit, integration, scenario, and browser acceptance coverage
-docs/en/          Developer and user documentation in English
-docs/cn/          Developer and user documentation in Chinese
+docs/             English (en/) and Chinese (cn/) documentation
 ```
 
 Booked amounts are stored as integer minor units; valuations and ratios use exact decimal arithmetic.
@@ -207,11 +195,9 @@ See [architecture](docs/en/architecture.md), [security](docs/en/security.md), an
 The web service does not include a persistent scheduling loop. Configure a separate [scheduler entry point](docs/en/scheduled-tasks.md#deployment-entry-point) for periodic checks.
 Due payments still require confirmation and verification.
 
-Tests use isolated databases.
-Database tests share `prisma/test.db`; do not run multiple database test processes concurrently in the same checkout.
+Tests use isolated databases. Test processes sharing `prisma/test.db` must run sequentially in the same checkout.
 Browser acceptance runs also need an available Chrome or Chromium installation. See the [testing guide](docs/en/test-cases.md).
 Access through another hostname or a reverse proxy requires [trusted origin configuration](docs/en/development.md#trusted-access-addresses).
-The default identity and demo verification are not suitable for real financial operations or public production deployment.
 
 ## Documentation
 
@@ -231,8 +217,8 @@ Browse the [documentation index](docs/en/README.md) or the original [competition
 ## Contributing
 
 Use [Issues](https://github.com/Zhenyu2Liang/evox-omni/issues) to report problems or discuss changes.
-Include the commit version, `mock` or `live` mode, reproduction steps, and sanitized error details.
-Remove API keys, WeChat tokens, and personal data before sharing.
+Include the commit version, `mock` or `live` mode, reproduction steps, and error details.
+Remove API keys, WeChat tokens, and personal data from files and logs before committing or sharing them.
 
 When submitting a pull request:
 
