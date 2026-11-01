@@ -329,7 +329,6 @@ For example, to run only the offline regression for budget and declaration fixes
 pnpm exec vitest run agent/model-budget.test.ts agent/providers/required-declaration.test.ts tests/integration/financial-claim-and-clarification.test.ts
 ```
 
-For historical execution results, see [Security Fix Verification](../../tests/e2e/LIVE-ACCEPTANCE-REPORT.md#安全修复验证).
 The number of tests is subject to the output of the command for that run.
 
 ## Persistence and Process Recovery Regression
@@ -488,9 +487,7 @@ The acceptance record must contain at least the following information.
 7. Record the number of model requests, distinguishing replanning from continuation of the original operation.
 8. Record the isolated database path, configuration overrides, and fault injection method.
 
-For the scope of conclusions from historical real model acceptance, see [LIVE-ACCEPTANCE-REPORT.md](../../tests/e2e/LIVE-ACCEPTANCE-REPORT.md).
-That file preserves the historical scenarios, certified commit, judgments, and artifact recovery commands.
-New round-by-round records are written to an ignored directory and saved separately with this acceptance.
+Save acceptance records and screenshots locally in ignored directories.
 Ledger basis, total test counts, and build results are subject to re-execution.
 If the certified commit is inconsistent with the product tree at the current HEAD, that conclusion does not extend to the current version.
 

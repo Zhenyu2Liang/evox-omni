@@ -44,7 +44,7 @@
 `BANKING_ALLOWED_ORIGINS` 由 `request-origin.ts` 独立读取，不是模型服务地址配置。
 `config.ts` 不读取 `LLM_REQUEST_TIMEOUT_MS`，也不含 provider base URL 或 API key 字段（凭据由运行环境提供）。
 `GET /api/health` 的 `llmMode` 直接取自 `getConfig().llmMode`，永不写死。
-测试环境三处都强制 `LLM_MODE=mock`：`vitest.config.ts` 的 `test.env`、`agent/vitest.agent.config.ts` 的 `test.env`、`tests/setup.ts`；`tests/e2e/acceptance.e2e.ts` 在入口设 `mock`/`faux`，`tests/e2e/live-acceptance.e2e.ts` 设 `live` 与 `deepseek`。
+测试环境有 2 处强制 `LLM_MODE=mock`：`vitest.config.ts` 的 `test.env` 与 `tests/setup.ts`；`tests/e2e/acceptance.e2e.ts` 在入口设 `mock`/`faux`，`tests/e2e/live-acceptance.e2e.ts` 设 `live` 与 `deepseek`。
 `tests/unit` 下目前没有专门覆盖 `getConfig()` 的单元测试文件。
 
 ## 演示常量（`constants.ts`）

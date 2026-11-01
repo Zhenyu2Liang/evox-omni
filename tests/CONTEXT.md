@@ -393,7 +393,9 @@ i18n 不需要 Provider：`lib/i18n/LocaleProvider.tsx:15` 的默认上下文是
 批 A `pnpm exec vitest run tests/app tests/unit`；批 B `pnpm exec vitest run tests/integration tests/scenarios`。
 两批各自独占测试库，批间不重叠；`vitest` 的 `fileParallelism:false` 不足以免除“不并行起两个 vitest 进程”。
 节点本地三文件：`pnpm exec vitest run security/mfa-lock-reason-authority.test.ts planner/plan-failure-contract.test.ts planner/plan-drive-guard.test.ts`（根 `vitest.config.ts` 已收集 `security/**`、`planner/**`）。
-当前预期失败只有上文“已知缺口”一条：`app/actions-recovery-http.test.ts:301-302`，其余全绿。
+参数预检拒绝以 `tool_end` 的 `blocked` 状态和 `chat.error.parametersNotSubmitted` 摘要呈现；`direct-parameter-boundary.test.ts` 与 `money-budget.test.ts` 同时检查未创建授权、执行回执或资金变更。
+`app/card-links-http.test.ts` 区分卡片投影与页面的本人账户列表：不可信绑定不暴露账户资料，本人账户列表仍可正常返回，其他用户的账户不得出现。
+`app/actions-recovery-http.test.ts` 检查恢复后计划和节点进入 `success`，不再列为预期失败。当前通过与失败数量以实际命令输出为准。
 失败项归因写在“已知缺口”各条内；注入接缝与再驱动入口规则见上文 wedge 小节与 [integration/CONTEXT.md](integration/CONTEXT.md)。
 `pnpm exec tsx tests/e2e/acceptance.e2e.ts` 运行浏览器验收。
 

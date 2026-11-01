@@ -22,7 +22,7 @@
  *
  * Identity is resolved SERVER-SIDE from runtime config (`_lib/session#resolveUserId`), so the route
  * always reads the single demo workspace; the foreign-owner direction is therefore additionally
- * asserted through the SAME projection the route calls (`banking.card.getCards`), which is the only
+ * asserted through the SAME projection the route calls (`banking.card.getCardPage`), which is the only
  * way to read a foreign owner's list in this single-tenant simulator.
  *
  * Money is asserted as exact canonical CNY decimal strings — never floats.
@@ -63,13 +63,13 @@ beforeEach(resetDatabase);
 afterAll(disconnectTestPrisma);
 
 /** Read the PUBLIC card list, returning the parsed rows AND the raw wire text of the same envelope. */
-async function readCards(): Promise<{ cards: CardView[]; json: string }> {
+async function readCards(): Promise<{ cards: CardView[]; accounts: CardsData['accounts']; json: string }> {
   const res = await getJson<ApiSuccess<CardsData>>(cardsGet, '/api/cards');
   expect(res.status).toBe(200);
   expect(res.data?.ok).toBe(true);
   const cards = res.data!.data.cards;
   // The wire text of exactly what a browser would receive (undefined keys are already dropped).
-  return { cards, json: JSON.stringify(res.data) };
+  return { cards, accounts: res.data!.data.accounts, json: JSON.stringify(res.data) };
 }
 
 /** The one card row with `id` from a card list (an explicit throw keeps the failure diagnosable). */
@@ -174,7 +174,7 @@ describe('GET /api/cards — settlement account projection', () => {
       numberMasked: '****0002', status: 'ACTIVE', linkedAccountId: CHECKING,
     } });
 
-    const { cards, json } = await readCards();
+    const { cards, accounts, json } = await readCards();
     const debit = cardOf(cards, DEBIT);
     expect(debit).toMatchObject({ status: 'ACTIVE', usable: true, linkedAccountStatus: 'UNTRUSTED', linkedAccountId: FOREIGN_ACCOUNT });
     expectNoAccountData(debit);
@@ -183,8 +183,15 @@ describe('GET /api/cards — settlement account projection', () => {
     expect(json).not.toContain(FOREIGN_BALANCE);
     expect(json).not.toContain(FOREIGN_NAME);
     expect(json).not.toContain(FOREIGN_MASK);
-    // …nor about the demo owner's own account, which no card links anymore.
-    expect(json).not.toContain(CHECKING_NAME);
+    // The page also lists this owner's deposit accounts independently of card bindings.
+    expect(accounts).toContainEqual(expect.objectContaining({
+      id: CHECKING, name: CHECKING_NAME, numberMasked: CHECKING_MASK, balance: CHECKING_BALANCE,
+    }));
+    expect(accounts.map(account => account.id)).not.toContain(FOREIGN_ACCOUNT);
+    // The untrusted card itself must still carry no resolved account identity or cash.
+    const cardJson = JSON.stringify(cards);
+    expect(cardJson).not.toContain(CHECKING_NAME);
+    expect(cardJson).not.toContain(CHECKING_BALANCE);
     // A `"0.00"` here would be a fabricated balance: the field is absent entirely.
     expect(json).not.toContain('"accountAvailableBalance":"0.00"');
     expect(json).not.toContain('"accountAvailableBalance":null');
@@ -192,14 +199,17 @@ describe('GET /api/cards — settlement account projection', () => {
     // Inverse direction: B reading the SAME projection must not see A's account either. `GET /api/cards`
     // is bound to the single demo identity, so a foreign owner's list is read through the very
     // projection function the route calls.
-    const foreignCards = await banking.card.getCards(FOREIGN_USER);
+    const foreignPage = await banking.card.getCardPage(FOREIGN_USER);
+    const foreignCards = foreignPage.cards;
     const foreignCard = cardOf(foreignCards, FOREIGN_CARD);
     expect(foreignCard).toMatchObject({ linkedAccountStatus: 'UNTRUSTED', linkedAccountId: CHECKING });
     expectNoAccountData(foreignCard);
-    const foreignJson = JSON.stringify(foreignCards);
+    expect(foreignPage.accounts.map(account => account.id)).toEqual([FOREIGN_ACCOUNT]);
+    expect(foreignPage.accounts[0]).toMatchObject({ name: FOREIGN_NAME, numberMasked: FOREIGN_MASK, balance: FOREIGN_BALANCE });
+    const foreignJson = JSON.stringify(foreignPage);
     expect(foreignJson).not.toContain(CHECKING_BALANCE);
     expect(foreignJson).not.toContain(CHECKING_MASK);
-    expect(foreignJson).not.toContain(CHECKING_NAME);
+    expect(foreignJson).not.toContain(`"name":${JSON.stringify(CHECKING_NAME)}`);
   });
 
   it('keeps the REAL balance of a FROZEN card and only reports it as unusable', async () => {

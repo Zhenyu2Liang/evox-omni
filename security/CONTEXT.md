@@ -100,7 +100,7 @@ MFA 连续 `MFA_MAX_ATTEMPTS`（`lib/constants.ts` = 3）次错误产生三重�
 `expired`/`command_changed` 是唯一允许出现“继续验证”语义的情形（服务端确实签发了全新挑战）。
 `locked` 终态与 `from` CAS 约束不变：`locked` 永不作为 `from` 来源，也永不写回 `pending`/`awaiting_mfa`/`confirmed`/`executed`/`failed`；解锁（`circuit-breaker.ts#resetSession`）只清熔断与失败计数，不复活任何 `locked` 操作。
 
-`security/` 下的回归测试与局部 vitest 配置：`security/vitest.security-contract.config.ts`（`root` 固定为仓库根、`include: ['security/**/*.test.ts']`）配合 `security/mfa-lock-reason-authority.test.ts`（A–E 五条，DB 支撑），运行 `pnpm exec vitest run --config security/vitest.security-contract.config.ts`。
+根 `vitest.config.ts` 已收集 `security/**/*.{test,spec}.ts`。`security/mfa-lock-reason-authority.test.ts` 覆盖 A–E 的 5 条数据库契约，运行 `pnpm exec vitest run security/mfa-lock-reason-authority.test.ts`。
 
 ## 结构化失败契约
 

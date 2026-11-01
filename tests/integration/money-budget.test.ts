@@ -68,11 +68,18 @@ it('[integration] rejects both fractional-cent requests through natural-language
   const sessionId = (await getDemoSession(userId)).sessionId;
   for (const amount of ['999.995', '0.005']) {
     const response = await chat(`给张伟转${amount}元`, sessionId);
-    const failure = response.body.data.events.find((event: { type: string; toolEvent?: { toolName: string; status: string; errorCode?: string } }) =>
-      event.type === 'tool_end' && event.toolEvent?.toolName === 'transfer_money' && event.toolEvent.status === 'error');
-    expect(failure?.toolEvent.errorCode).toBe('VALIDATION');
+    expect(response.http).toBe(200);
+    expect(response.body.ok).toBe(true);
+    expect(response.body.data.events).toContainEqual(expect.objectContaining({
+      type: 'tool_end',
+      toolEvent: expect.objectContaining({ toolName: 'transfer_money', status: 'blocked', summary: 'chat.error.parametersNotSubmitted' }),
+    }));
+    expect(response.body.data.events.some((event: { type: string }) =>
+      event.type === 'confirmation_required' || event.type === 'mfa_required')).toBe(false);
   }
   expect(await p.pendingAction.count({ where: { sessionId } })).toBe(0);
+  expect(await p.executionReceipt.count()).toBe(0);
+  expect(await p.agentTask.count()).toBe(0);
   expect(await p.transaction.findMany({ where: { userId, channel: 'TRANSFER' } })).toEqual(before);
   expect(await balance()).toBe('2358000');
 });

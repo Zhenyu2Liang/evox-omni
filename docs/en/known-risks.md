@@ -47,15 +47,12 @@ Neither the demo seed nor the API and page flows produce these two branches, so 
 For the definitions, see [Card Management](card-management.md).
 
 The conclusions of live acceptance hold only for the scenarios that were run and the corresponding product tree.
-For the scope of historical security fixes, see [Security Fix Verification](../../tests/e2e/LIVE-ACCEPTANCE-REPORT.md#安全修复验证).
-The latest pass records for each scenario are aggregated from item-by-item fix retests, not a single full-suite acceptance of the final build.
-There were product changes after the full regression; the final changes had a separate targeted regression and specified live scenarios run.
-After the product code changes again, the affected test cases need to be rerun.
+See [Acceptance Evidence and Limitations](test-cases.md#acceptance-evidence-and-limitations) for recording requirements.
+After product code changes, rerun the affected test cases.
 
 Same-machine dual-server consumption races, duplicate requests, and restart recovery after commit have been verified.
 These results do not cover multi-host deployment, sustained load, or cross-process races for all financial instruments.
 Natural language expressions cannot be exhaustively enumerated, and real bank and real WeChat delivery remain unverified.
-Earlier grouped evidence applies only to the original product tree marked in the report.
 
 ## Meaning of Business Results
 

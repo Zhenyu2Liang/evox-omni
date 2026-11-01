@@ -14,7 +14,7 @@
  *     being reported as a retryable wrong code with `0` attempts left. Only a RENEWED challenge
  *     (`expired` / `command_changed`) legitimately returns to the "continue verifying" prompt state.
  *
- * RUN: `pnpm exec vitest run --config security/vitest.security-contract.config.ts`
+ * RUN: `pnpm exec vitest run security/mfa-lock-reason-authority.test.ts`
  */
 import { describe, expect, it, vi } from 'vitest';
 
