@@ -130,19 +130,7 @@ pnpm dev
 
 ## 模型配置
 
-在 `.env.local` 中配置服务商、精确模型标识和密钥，再重启银行服务。
-以项目已适配的 DeepSeek 配置为例：
-
-```dotenv
-DATABASE_URL=file:./dev.db
-LLM_MODE=live
-LLM_PROVIDER=deepseek
-LLM_MODEL=deepseek-flash
-DEEPSEEK_API_KEY=<your-api-key>
-```
-
-将 `<your-api-key>` 替换为实际密钥。
-`live` 模式需要网络连接，并可能产生模型服务费用。
+切换服务商时，在 `.env.local` 中更新服务商、精确模型标识和 API Key，再重启银行服务。
 其他服务商、兼容接口地址及调用预算见[模型与环境配置](docs/cn/development.md#模型与环境配置)。
 密钥仅保存在本地配置中，不提交到 Git，也不写入问题描述或运行日志。
 

@@ -131,19 +131,7 @@ Report analysis is generated only when requested. In `live` mode, it calls the c
 
 ## Model Configuration
 
-Set the provider, exact model identifier, and API key in `.env.local`, then restart the banking service.
-Example configuration for the supported DeepSeek integration:
-
-```dotenv
-DATABASE_URL=file:./dev.db
-LLM_MODE=live
-LLM_PROVIDER=deepseek
-LLM_MODEL=deepseek-flash
-DEEPSEEK_API_KEY=<your-api-key>
-```
-
-Replace `<your-api-key>` with your actual key.
-`live` mode requires network access and may incur model service charges.
+To switch providers, update the provider, exact model identifier, and API key in `.env.local`, then restart the banking service.
 See [model and environment configuration](docs/en/development.md#model-and-environment-configuration) for other providers, compatible endpoints, and request budgets.
 Keep keys in local configuration; never commit them or include them in issues or runtime logs.
 
