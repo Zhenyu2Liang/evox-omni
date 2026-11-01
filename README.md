@@ -255,8 +255,4 @@ When submitting a pull request:
 
 ## License
 
-Original project code is licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution.
-Third-party dependencies and files with separate license notices retain their own terms.
-
-- [STC writing rules and dictionaries](.agents/skills/stc/LICENSE) use CC BY 4.0; its code uses a separate [MIT license](.agents/skills/stc/LICENSE-CODE).
-- See [brand resources](public/brand/README.md) for artwork provenance. The project license grants no rights to third-party trademarks or brand artwork.
+Original project code is licensed under the [Apache License 2.0](LICENSE).
